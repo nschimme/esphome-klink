@@ -1,0 +1,18 @@
+# Default connectivity: Wi-Fi with a setup access point, Home Assistant API and OTA updates. It is a
+# separate package so you can swap it for your own (Ethernet, Thread, fixed credentials, an encrypted
+# API key and OTA password): in your config, leave out `common/network-wifi.yaml` and add your own
+# network, `api:` and `ota:`. Whatever network you use, the device needs one for the clock (time.sntp).
+#
+# With no Wi-Fi credentials the device opens a "<name> Setup" access point with a captive portal where
+# you pick your network. The API and OTA are not password protected here; set a key and password in
+# your own config if the device is on a network you do not trust.
+wifi:
+  ap:
+    ssid: "${name} Setup"
+
+captive_portal:
+
+api:
+
+ota:
+  - platform: esphome

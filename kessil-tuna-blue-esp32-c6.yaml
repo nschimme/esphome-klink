@@ -17,5 +17,6 @@ dashboard_import:
 
 packages:
   board: !include boards/esp32-c6.yaml
+  network: !include common/network-wifi.yaml
   base: !include common/base.yaml
   lamp: !include common/tuna-blue.yaml
