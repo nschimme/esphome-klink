@@ -1,0 +1,84 @@
+# One Tuna Blue K-Link group: a manual light, an 8-point daily program editable from Home
+# Assistant, and a point editor. This is the reusable template behind common/tuna-blue.yaml;
+# include it once per group instead of copying the package.
+#
+# Include it with package vars:
+#   id     the yaml/C++ id of the light, used for the light and as every `group:` reference
+#   name   the display name prefix of every entity, e.g. "Tuna Blue"
+#   gid    the K-Link group id (a number)
+#
+# Example (a second Tuna Blue group, "Reef 6", in K-Link group 6):
+#   packages:
+#     reef_6: !include
+#       file: common/group-tuna-blue.yaml
+#       vars: {id: reef_6, name: Reef 6, gid: "6"}
+#
+# Entity names and ids are built from `name` and `id`: renaming a group changes stored values
+# and Home Assistant entity ids, so keep them stable for an existing group.
+#
+# A group cannot mix lamp types, and custom groups use K-Link group ids 3-25 (1 and 2 are the
+# defaults of the Tuna Blue and Tuna Sun packages).
+# NOT TESTED on a real Tuna Blue: the channel layout (violet, red, green) is unconfirmed.
+
+light:
+  # Manual override for the whole group. Brightness drives intensity (INT). Touching the light switches
+  # the group to Manual; set Mode to Program to hand control back to the daily program.
+  - platform: klink
+    output_id: ${id}
+    klink_id: kl
+    name: "${name}"
+    gid: ${gid}
+    time_id: local_time
+    model: tuna_blue
+    slots: 8
+    web_server: { sorting_group_id: controls }
+    effects:
+      - klink_pulse:
+      - klink_color_sweep:
+      - klink_sunrise:
+      - klink_sunset:
+
+# The daily program: "HH:MM int=0-255 clr=0-255 ..." per point (any subset of channels, the rest 0), or
+# "off". The light moves linearly between points. These are starting values; edits made in Home
+# Assistant are kept in flash and take precedence.
+text:
+  - { platform: klink, group: "${id}", slot: 1, name: "${name} point 1", initial_value: "08:00 int=0 clr=0", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 2, name: "${name} point 2", initial_value: "09:00 int=40 clr=40", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 3, name: "${name} point 3", initial_value: "11:00 int=100 clr=100", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 4, name: "${name} point 4", initial_value: "14:00 int=130 clr=150", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 5, name: "${name} point 5", initial_value: "17:00 int=100 clr=100", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 6, name: "${name} point 6", initial_value: "19:00 int=40 clr=40", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 7, name: "${name} point 7", initial_value: "20:30 int=0 clr=0", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 8, name: "${name} point 8", initial_value: "off", web_server: { sorting_group_id: program } }
+
+# Program editor: pick a point, then edit its time and values, like the controller's Quick Set screen.
+# Edits apply to the running program at once and are saved to flash a couple of seconds after the last
+# change. Editing a point turns it on; use the switch to turn a point off.
+select:
+  - { platform: klink, group: "${id}", type: mode, name: "${name} mode", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", name: "${name} program point", web_server: { sorting_group_id: program } }
+
+text_sensor:
+  - { platform: klink, group: "${id}", type: status, name: "${name} status", web_server: { sorting_group_id: controls } }
+
+datetime:
+  - { platform: klink, group: "${id}", type: time, name: "${name} point time", web_server: { sorting_group_id: program } }
+
+number:
+  # Manual extra channels, outside the program. Setting one takes manual control of the group.
+  - { platform: klink, group: "${id}", channel: 2, name: "${name} color (raw 0-255)", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", channel: 3, name: "${name} violet", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", channel: 4, name: "${name} red", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", channel: 5, name: "${name} green", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", point_channel: 1, name: "${name} point INT (0-255)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", point_channel: 2, name: "${name} point CLR (0-255)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", point_channel: 3, name: "${name} point violet (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", point_channel: 4, name: "${name} point red (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", point_channel: 5, name: "${name} point green (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+
+switch:
+  - platform: klink            # the selected point on or off
+    type: point_enabled
+    group: "${id}"
+    name: "${name} point enabled"
+    web_server: { sorting_group_id: program }

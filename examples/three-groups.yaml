@@ -1,0 +1,50 @@
+# One ESP32-C6 controlling three lamp groups: two Tuna Sun groups and a Tuna Blue group.
+# The Tuna Sun package controls group 2 and the Tuna Blue package group 1 by default; change them
+# with tuna_sun_gid and tuna_blue_gid to match your own groups.
+#
+# The third group ("Reef 5", K-Link group 5) is a second Tuna Sun group. Each model has one
+# reusable template (common/group-tuna-sun.yaml / common/group-tuna-blue.yaml); include it once per
+# group with the vars id (yaml id of the light), name (entity name prefix) and gid. Custom groups
+# use K-Link group ids 3-25: ids 1 and 2 are the defaults of the Tuna Blue and Tuna Sun packages.
+# A group cannot mix lamp types, so a Tuna Sun group only contains Tuna Sun lamps.
+#
+# This file replaces the default network package (common/network-wifi.yaml) with its own wifi/api/ota,
+# because it pulls the shared files in itself rather than using a top-level kessil-*.yaml file.
+# The remote_package below downloads the files from GitHub's `main` branch, not from your checkout; to
+# work on a local copy, see the README's local-component instructions.
+substitutions:
+  name: kessil-tank
+  timezone: America/Chicago
+  tuna_sun_gid: "2"
+  tuna_blue_gid: "1"
+
+esphome:
+  name: ${name}
+
+packages:
+  remote_package:
+    url: https://github.com/nschimme/esphome-klink
+    ref: main
+    files:
+      - boards/esp32-c6.yaml
+      - common/base.yaml
+      - common/tuna-sun.yaml
+      - common/tuna-blue.yaml
+      # A second Tuna Sun group, included straight from the template with its vars:
+      - path: common/group-tuna-sun.yaml
+        vars:
+          id: reef_5
+          name: Reef 5
+          gid: "5"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
