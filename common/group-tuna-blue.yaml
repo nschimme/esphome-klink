@@ -33,6 +33,16 @@ light:
     slots: 8
     web_server: { sorting_group_id: controls }
     effects:
+      # The Dongle's six effects. Rainbow sweeps UI3-UI5 and the Moon effects hold UI3 (Moon Red) or
+      # UI4 (Moon Blue) at 200. On the Tuna Blue UI3-UI5 are the violet, red and green channels, so the
+      # Moon effects show violet (Moon Red) and red (Moon Blue), not red and blue. Storm, Cloud and
+      # Aurora use only UI1 (intensity) and UI2.
+      - klink_storm:
+      - klink_cloud:
+      - klink_aurora:
+      - klink_rainbow:
+      - klink_moon_red:
+      - klink_moon_blue:
       - klink_pulse:
       - klink_color_sweep:
       - klink_sunrise:

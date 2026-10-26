@@ -25,6 +25,7 @@
 #include "esphome/components/light/light_effect.h"
 
 #include "klink_bus.h"
+#include "klink_effects.h"
 #include "klink_guard.h"
 #include "klink_inventory.h"
 #include "klink_mode.h"
@@ -387,14 +388,15 @@ class KLinkPointTime : public datetime::TimeEntity, public Component {
 };
 #endif
 
-// Light effects, built on ten group writes a second. They follow the light's own brightness and color
-// temperature.
-enum class FxKind : uint8_t { PULSE, COLOR_SWEEP, SUNRISE, SUNSET };
+// Light effects, built on ten group writes a second. The first six are the Dongle's own (see
+// klink_effects.h); the rest follow the light's own brightness and color temperature.
+enum class FxKind : uint8_t { STORM, CLOUD, RAINBOW, AURORA, MOON_RED, MOON_BLUE, PULSE, COLOR_SWEEP, SUNRISE, SUNSET };
 
 class KLinkEffect : public light::LightEffect {
  public:
   explicit KLinkEffect(const char *name) : light::LightEffect(name) {}
   void set_kind(FxKind kind) { kind_ = kind; }
+  void set_speed(uint8_t variant) { variant_ = variant; }  // 0 fast, 1 moderate, 2 slow
   void set_duration(uint32_t ms) { duration_ms_ = ms; }    // 0 = until stopped
   void set_period(uint32_t ms) { period_ms_ = ms; }        // Pulse and Color sweep
   void set_min_brightness(float fraction) { min_fraction_ = fraction; }
@@ -406,11 +408,13 @@ class KLinkEffect : public light::LightEffect {
   void finish_(bool turn_off);
 
   FxKind kind_{FxKind::PULSE};
+  uint8_t variant_{0};
   uint32_t duration_ms_{120000};
   uint32_t period_ms_{6000};
   float min_fraction_{0.2f};
   uint32_t start_ms_{0};
   uint32_t last_tick_ms_{0};
+  kessil::klink::EffectEngine engine_{[]() { return random_uint32(); }};
 };
 
 // One schedule slot, edited as text: "HH:MM u1 u2 u3 u4 u5" or "off".

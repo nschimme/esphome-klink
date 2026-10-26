@@ -11,6 +11,7 @@ from esphome.const import (
     CONF_DURATION,
     CONF_EFFECTS,
     CONF_NAME,
+    CONF_SPEED,
     CONF_COLD_WHITE_COLOR_TEMPERATURE,
     CONF_WARM_WHITE_COLOR_TEMPERATURE,
     CONF_DEFAULT_TRANSITION_LENGTH,
@@ -45,17 +46,31 @@ CONF_PERIOD = "period"
 CONF_MIN_BRIGHTNESS = "min_brightness"
 
 # (YAML key, default name, kind, kind of timing it takes)
+#   "dongle": the Dongle's own effects (speed fast/moderate/slow, duration like the app)
 #   "period": a repeating wave on the light's own brightness/color; "ramp": one ramp over a duration
 EFFECTS = [
+    ("klink_storm", "Storm", FxKind.STORM, "dongle"),
+    ("klink_cloud", "Cloud", FxKind.CLOUD, "dongle"),
+    ("klink_aurora", "Aurora", FxKind.AURORA, "dongle"),
+    ("klink_rainbow", "Rainbow", FxKind.RAINBOW, "dongle"),  # drives UI3-UI5; UI3 is unused on a Tuna Sun
+    ("klink_moon_red", "Moon Red", FxKind.MOON_RED, "dongle"),  # drives UI3 (unused on a Tuna Sun)
+    ("klink_moon_blue", "Moon Blue", FxKind.MOON_BLUE, "dongle"),  # drives UI4 (red on a Tuna Sun)
     ("klink_pulse", "Pulse", FxKind.PULSE, "period"),
     ("klink_color_sweep", "Color sweep", FxKind.COLOR_SWEEP, "period"),
     ("klink_sunrise", "Sunrise", FxKind.SUNRISE, "ramp"),
     ("klink_sunset", "Sunset", FxKind.SUNSET, "ramp"),
 ]
+SPEEDS = {"fast": 0, "moderate": 1, "slow": 2}
 
 
 def _register_effect(key, default_name, kind, timing):
-    if timing == "period":
+    if timing == "dongle":
+        schema = {
+            cv.Optional(CONF_SPEED, default="fast"): cv.one_of(*SPEEDS, lower=True),
+            # How long it runs, like the app's Time slider (0.5 to 5 minutes); 0s runs until stopped.
+            cv.Optional(CONF_DURATION, default="2min"): cv.positive_time_period_milliseconds,
+        }
+    elif timing == "period":
         schema = {
             cv.Optional(CONF_PERIOD, default="6s" if kind == FxKind.PULSE else "20s"): cv.positive_time_period_milliseconds,
             cv.Optional(CONF_MIN_BRIGHTNESS, default="20%"): cv.percentage,
@@ -69,6 +84,8 @@ def _register_effect(key, default_name, kind, timing):
         var = cg.new_Pvariable(effect_id, config[CONF_NAME])
         cg.add(var.set_kind(kind))
         cg.add(var.set_duration(config[CONF_DURATION]))
+        if CONF_SPEED in config:
+            cg.add(var.set_speed(SPEEDS[config[CONF_SPEED]]))
         if CONF_PERIOD in config:
             cg.add(var.set_period(config[CONF_PERIOD]))
             cg.add(var.set_min_brightness(config[CONF_MIN_BRIGHTNESS]))

@@ -24,7 +24,7 @@ same daily program can also run on ordinary ESPHome lights, with no K-Link bus a
 | Item | Status |
 |---|---|
 | **Kessil A360X Tuna Sun** | **Tested.** Two fixtures in one group, controlled from an ESP32-C6: intensity, color, red, amber, finding lamps, the daily program. |
-| Program point editor, effects (Pulse, Color sweep, Sunrise, Sunset) | Built and flashed; **not yet verified end to end** against a lamp. |
+| Program point editor, effects (Storm, Cloud, Aurora, Rainbow, Moon Red, Moon Blue, Pulse, Color sweep, Sunrise, Sunset) | Built and flashed; **not yet verified end to end** against a lamp. |
 | Group **Mode** (Program / Manual / Off), status text and live preview | Compiles in CI; **new and not yet tested on lamps**. |
 | **Light programs** on ordinary ESPHome lights (no K-Link bus) | Compiles in CI; **new and not yet tested on hardware**. |
 | **esphome-klink web page** at `/klink` and the ESPHome device page | Compiles in CI; **new and not yet tested on a device or on lamps**. The page can also be run against a mock device, see [Contributing / development](#contributing--development). |
@@ -318,7 +318,11 @@ lamp chips or identification buttons because it has no lamps on the bus.
 For each lamp group (Tuna Sun and Tuna Blue):
 
 - a **light**: brightness is intensity; on the Tuna Sun the color temperature is the color control. The
-  effects Pulse, Color sweep, Sunrise and Sunset are included;
+  effects are the Dongle's own **Storm**, **Cloud** and **Aurora**, plus **Rainbow**, **Moon Red** and
+  **Moon Blue** on the Tuna Blue (the Tuna Sun omits the last three, which drive UI3-UI5, like the
+  Kessil app), followed by **Pulse**, **Color sweep**, **Sunrise** and **Sunset**. The Dongle effects
+  take a `speed` (`fast`, `moderate` or `slow`) and a `duration` (default `2min`; `0s` runs until
+  stopped) and write the group about ten times a second while they run, as the Dongle does;
 - a **Mode** select: **Program** runs the daily program, **Manual** holds what you set, **Off** turns
   the lamps off. Changing the light or a manual channel number switches the group to Manual
   automatically; choosing Program hands control back. The mode is remembered across restarts. Like

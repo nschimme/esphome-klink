@@ -37,6 +37,12 @@ light:
     warm_white_color_temperature: 6000 K
     invert_color: true
     effects:
+      # The Dongle's effects that make sense on a Tuna Sun: Storm, Cloud and Aurora use only UI1 and
+      # UI2. Rainbow and the Moon effects drive UI3-UI5 (UI3 is unused on a Tuna Sun), so the Kessil app
+      # greys them out; they are left off this list.
+      - klink_storm:
+      - klink_cloud:
+      - klink_aurora:
       - klink_pulse:
       - klink_color_sweep:
       - klink_sunrise:

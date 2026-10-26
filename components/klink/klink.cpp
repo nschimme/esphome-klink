@@ -857,13 +857,12 @@ void KLinkChannelNumber::dump_config() {
 
 // ---- Effects -----------------------------------------------------------------------------------
 
-// The effects write the group about ten times a second.
-static const uint32_t EFFECT_TICK_MS = 100;
-
 void KLinkEffect::start() {
   light::LightEffect::start();
   this->start_ms_ = millis();
-  this->last_tick_ms_ = this->start_ms_ - EFFECT_TICK_MS;  // first tick right away
+  this->last_tick_ms_ = this->start_ms_ - kk::EFFECT_TICK_MS;  // first tick right away
+  if (this->kind_ <= FxKind::MOON_BLUE)
+    this->engine_.start(static_cast<kk::EffectKind>(this->kind_), this->variant_);
 }
 
 void KLinkEffect::finish_(bool turn_off) {
@@ -877,7 +876,7 @@ void KLinkEffect::finish_(bool turn_off) {
 
 void KLinkEffect::apply() {
   uint32_t now = millis();
-  if (now - this->last_tick_ms_ < EFFECT_TICK_MS)
+  if (now - this->last_tick_ms_ < kk::EFFECT_TICK_MS)
     return;
   this->last_tick_ms_ = now;
   uint32_t elapsed = now - this->start_ms_;
@@ -892,7 +891,10 @@ void KLinkEffect::apply() {
   group->manual_levels(this->get_light_state(), level, color);
   uint8_t out[5] = {0, 0, 0, 0, 0};
 
-  {
+  if (this->kind_ <= FxKind::MOON_BLUE) {
+    // The Dongle's own effects; the engine drives UI1-UI5 itself.
+    this->engine_.step(elapsed, out);
+  } else {
     uint32_t period = this->period_ms_ == 0 ? 1 : this->period_ms_;
     // triangle 0..1..0 over one period
     float phase = static_cast<float>(elapsed % period) / static_cast<float>(period);
@@ -920,7 +922,8 @@ void KLinkEffect::apply() {
         break;
     }
   }
-  {
+  // The light-driven effects leave UI3-UI5 to the number entities; a Dongle effect owns them.
+  if (this->kind_ >= FxKind::PULSE) {
     out[2] = group->extra(3);
     out[3] = group->extra(4);
     out[4] = group->extra(5);
