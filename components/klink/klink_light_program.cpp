@@ -118,7 +118,12 @@ void KLinkLightProgram::output_(const uint8_t channels[5]) {
     light::LightState *light = this->lights_[i];
     if (light == nullptr)
       continue;
-    const kk::LightValues v = kk::to_light_values(this->model_, channels, this->ranges_[i]);
+    kk::LightValues v = kk::to_light_values(this->model_, channels, this->ranges_[i]);
+    // A point with brightness but no colour at all (r = g = b = 0, no white) would light the light
+    // black: treat it as off instead of sending an all-zero colour.
+    if ((this->model_ == kk::LightModel::RGB || this->model_ == kk::LightModel::RGBW) && v.r <= 0.0f &&
+        v.g <= 0.0f && v.b <= 0.0f && (this->model_ == kk::LightModel::RGB || v.w <= 0.0f))
+      v.on = false;
     this->expected_[i] = v;
 
     auto call = light->make_call();

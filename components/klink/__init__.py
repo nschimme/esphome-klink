@@ -58,7 +58,8 @@ KLinkWeb = klink_ns.class_("KLinkWeb", cg.Component)
 # lights). Declared here so both light.py and the hub schema can name it without a circular import.
 ProgramHost = klink_ns.class_("ProgramHost")
 KLinkLightProgram = klink_ns.class_("KLinkLightProgram", ProgramHost, cg.Component)
-LightModel = klink_ns.enum("LightModel", is_class=True)
+# LightModel lives in the host-testable kessil::klink namespace, not esphome::klink.
+LightModel = cg.global_ns.namespace("kessil").namespace("klink").enum("LightModel", is_class=True)
 
 # The entity shape is fixed at config time, so the model is explicit rather than derived from the
 # lights (a light may later lack one of the channels; that channel is then ignored for it).

@@ -129,6 +129,7 @@ jobs:
           - kessil-tuna-blue-esp32-s3.yaml
           - examples/two-groups.yaml
           - examples/three-groups.yaml
+          - examples/light-program.yaml
     steps:
       - uses: actions/checkout@v4
 
