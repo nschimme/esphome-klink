@@ -1,6 +1,7 @@
 #include "klink.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "esphome/core/log.h"
@@ -400,6 +401,15 @@ void KLinkHub::save_inventory_() {
 
 void KLinkGroup::setup() {
   this->hub_->register_group(this);
+  this->mode_pref_ =
+      global_preferences->make_preference<uint8_t>(fnv1_hash("klink_mode_" + std::to_string(this->gid_)));
+  uint8_t stored_mode = static_cast<uint8_t>(kk::Mode::PROGRAM);
+  if (this->mode_pref_.load(&stored_mode)) {
+    if (stored_mode > static_cast<uint8_t>(kk::Mode::OFF))
+      stored_mode = static_cast<uint8_t>(kk::Mode::PROGRAM);
+    // Restore silently: the next update() tick sends whatever this mode requires.
+    this->mode_.mode = static_cast<kk::Mode>(stored_mode);
+  }
   this->set_interval("schedule", 1000, [this]() { this->update(); });
 }
 
@@ -408,6 +418,7 @@ void KLinkGroup::dump_config() {
   ESP_LOGCONFIG(TAG, "K-Link group:");
   ESP_LOGCONFIG(TAG, "  GID: %u", this->gid_);
   ESP_LOGCONFIG(TAG, "  Slots: %u", static_cast<unsigned>(this->slots_.size()));
+  ESP_LOGCONFIG(TAG, "  Mode: %s", kk::mode_name(this->mode_.mode));
   ESP_LOGCONFIG(TAG, "  Manual color (UI2): %u", this->manual_color_);
 }
 
@@ -430,6 +441,27 @@ void KLinkGroup::send_(const uint8_t channels[5]) {
   this->have_sent_ = true;
 }
 
+void KLinkGroup::save_mode_() {
+  uint8_t mode = static_cast<uint8_t>(this->mode_.mode == kk::Mode::PREVIEW ? this->mode_.before_preview : this->mode_.mode);
+  this->mode_pref_.save(&mode);
+}
+
+void KLinkGroup::mode_changed_() {
+  this->save_mode_();
+  this->mode_cb_.call();
+}
+
+void KLinkGroup::on_user_command_() {
+  kk::Mode before = this->mode_.mode;
+  kk::Mode before_preview = this->mode_.before_preview;
+  kk::on_user_command(this->mode_);
+  if (this->mode_.mode != before) {
+    this->mode_changed_();
+  } else if (this->mode_.before_preview != before_preview) {
+    this->save_mode_();
+  }
+}
+
 void KLinkGroup::set_extra(uint8_t channel, uint8_t value) {
   if (channel == 2) {
     if (this->has_color_temperature())
@@ -442,10 +474,10 @@ void KLinkGroup::set_extra(uint8_t channel, uint8_t value) {
   }
   if (this->state_ == nullptr || this->state_->get_current_effect_index() != 0)
     return;  // no light state yet, or an effect owns the output
+  this->on_user_command_();
   uint8_t level, color;
   this->manual_levels(this->state_, level, color);
   uint8_t channels[5] = {level, color, this->extras_[0], this->extras_[1], this->extras_[2]};
-  this->manual_ = true;
   this->send_(channels);
 }
 
@@ -481,10 +513,10 @@ void KLinkGroup::write_state(light::LightState *state) {
   // the effect starts) would show up as a one-frame flash between two effect frames.
   if (state->get_current_effect_index() != 0)
     return;
+  this->on_user_command_();
   uint8_t level, color;
   this->manual_levels(state, level, color);
   uint8_t channels[5] = {level, color, this->extras_[0], this->extras_[1], this->extras_[2]};
-  this->manual_ = true;  // a user command overrides the schedule until resume
   this->send_(channels);
 }
 
@@ -508,6 +540,7 @@ void KLinkGroup::select_point(size_t index) {
     return;
   this->selected_ = index;
   this->editor_cb_.call();
+  this->preview_point(this->selected_);
 }
 
 void KLinkGroup::point_changed_() {
@@ -523,6 +556,7 @@ void KLinkGroup::edit_point_time(uint8_t hour, uint8_t minute) {
   p.minute = static_cast<uint16_t>(hour * 60 + minute);
   p.enabled = true;
   this->point_changed_();
+  this->preview_point(this->selected_);
 }
 
 void KLinkGroup::edit_point_channel(uint8_t index, uint8_t value) {
@@ -532,6 +566,7 @@ void KLinkGroup::edit_point_channel(uint8_t index, uint8_t value) {
   p.channels[index] = kk::clamp_channel(index, value);
   p.enabled = true;
   this->point_changed_();
+  this->preview_point(this->selected_);
 }
 
 void KLinkGroup::edit_point_enabled(bool enabled) {
@@ -539,17 +574,88 @@ void KLinkGroup::edit_point_enabled(bool enabled) {
     return;
   this->slots_[this->selected_].enabled = enabled;
   this->point_changed_();
+  this->preview_point(this->selected_);
 }
 
-void KLinkGroup::set_schedule_enabled(bool enabled) {
-  this->schedule_enabled_ = enabled;
-  if (enabled)
-    this->resume_schedule();
+void KLinkGroup::set_mode(kk::Mode mode) {
+  if (mode == kk::Mode::PREVIEW)
+    return;
+  kk::set_mode(this->mode_, mode);
+  this->have_sent_ = false;  // send the new mode's value on the next tick
+  this->mode_changed_();
 }
 
-void KLinkGroup::resume_schedule() {
-  this->manual_ = false;
-  this->have_sent_ = false;  // send the scheduled value on the next tick
+void KLinkGroup::end_preview() {
+  if (this->mode_.mode != kk::Mode::PREVIEW)
+    return;
+  kk::end_preview(this->mode_);
+  this->have_sent_ = false;  // send the restored mode's value on the next tick
+  this->mode_cb_.call();
+}
+
+void KLinkGroup::preview_point(size_t slot) {
+  if (slot >= this->slots_.size())
+    return;
+  const kk::SchedulePoint &p = this->slots_[slot];
+  if (!p.enabled)
+    return;
+  uint8_t channels[5];
+  std::memcpy(channels, p.channels, sizeof(channels));
+  this->send_(channels);
+  uint32_t now = millis();
+  kk::Mode before = this->mode_.mode;
+  if (before == kk::Mode::PREVIEW)
+    kk::refresh_preview(this->mode_, now, 60000);
+  else
+    kk::begin_preview(this->mode_, now, 60000);
+  if (this->mode_.mode != before)
+    this->mode_cb_.call();
+}
+
+void KLinkGroup::preview_minute(uint16_t minute_of_day) {
+  uint8_t channels[5];
+  if (!kk::schedule_compute(this->slots_, static_cast<uint32_t>(minute_of_day) * 60u, channels))
+    return;  // nothing enabled
+  this->send_(channels);
+  uint32_t now = millis();
+  kk::Mode before = this->mode_.mode;
+  if (before == kk::Mode::PREVIEW)
+    kk::refresh_preview(this->mode_, now, 60000);
+  else
+    kk::begin_preview(this->mode_, now, 60000);
+  if (this->mode_.mode != before)
+    this->mode_cb_.call();
+}
+
+std::string KLinkGroup::status_text() {
+  if (this->state_ != nullptr && this->state_->get_current_effect_index() != 0)
+    return "Effect: " + std::string(this->state_->get_effect_name());
+  switch (this->mode_.mode) {
+    case kk::Mode::PROGRAM: {
+      if (this->time_ == nullptr)
+        return "Program · waiting for clock";
+      ESPTime now = this->time_->now();
+      if (!now.is_valid())
+        return "Program · waiting for clock";
+      uint8_t channels[5];
+      uint32_t second_of_day = now.hour * 3600u + now.minute * 60u + now.second;
+      if (!kk::schedule_compute(this->slots_, second_of_day, channels))
+        return "Program · no points enabled";
+      char buf[64];
+      std::snprintf(buf, sizeof(buf), "Program · %02u:%02u · INT %u%% CLR %u%%",
+                    static_cast<unsigned>(now.hour), static_cast<unsigned>(now.minute),
+                    static_cast<unsigned>(std::lround(channels[0] * 100.0f / 255.0f)),
+                    static_cast<unsigned>(std::lround(channels[1] * 100.0f / 255.0f)));
+      return buf;
+    }
+    case kk::Mode::MANUAL:
+      return "Manual";
+    case kk::Mode::OFF:
+      return "Off";
+    case kk::Mode::PREVIEW:
+      return "Editing point " + std::to_string(this->selected_ + 1) + " (previewing)";
+  }
+  return "";
 }
 
 bool KLinkGroup::compute_now(uint8_t out[5]) {
@@ -562,18 +668,36 @@ bool KLinkGroup::compute_now(uint8_t out[5]) {
 }
 
 void KLinkGroup::update() {
-  if (!this->schedule_enabled_ || this->paused_ || this->manual_ || this->time_ == nullptr)
-    return;
-  ESPTime now = this->time_->now();
-  if (!now.is_valid())
-    return;  // no clock yet: hold whatever the lamps are doing
-  uint8_t channels[5];
-  uint32_t second_of_day = now.hour * 3600u + now.minute * 60u + now.second;
-  if (!kk::schedule_compute(this->slots_, second_of_day, channels))
-    return;  // nothing enabled
-  bool changed = !this->have_sent_ || std::memcmp(channels, this->last_sent_, 5) != 0;
-  if (changed || millis() - this->last_sent_ms_ >= this->refresh_ms_)
-    this->send_(channels);
+  switch (this->mode_.mode) {
+    case kk::Mode::PROGRAM: {
+      if (this->time_ == nullptr)
+        return;
+      ESPTime now = this->time_->now();
+      if (!now.is_valid())
+        return;  // no clock yet: hold whatever the lamps are doing
+      uint8_t channels[5];
+      uint32_t second_of_day = now.hour * 3600u + now.minute * 60u + now.second;
+      if (!kk::schedule_compute(this->slots_, second_of_day, channels))
+        return;  // nothing enabled
+      bool changed = !this->have_sent_ || std::memcmp(channels, this->last_sent_, 5) != 0;
+      if (changed || millis() - this->last_sent_ms_ >= this->refresh_ms_)
+        this->send_(channels);
+      return;
+    }
+    case kk::Mode::OFF: {
+      uint8_t channels[5] = {0, 0, 0, 0, 0};
+      bool changed = !this->have_sent_ || std::memcmp(channels, this->last_sent_, 5) != 0;
+      if (changed || millis() - this->last_sent_ms_ >= this->refresh_ms_)
+        this->send_(channels);
+      return;
+    }
+    case kk::Mode::MANUAL:
+      return;
+    case kk::Mode::PREVIEW:
+      if (kk::preview_expired(this->mode_, millis()))
+        this->end_preview();
+      return;
+  }
 }
 
 // ---- Slot text ------------------------------------------------------------------------------
@@ -710,10 +834,10 @@ void KLinkSwitch::write_state(bool state) {
 void KLinkSwitch::apply_(bool state) {
   switch (this->kind_) {
     case SwitchKind::SCHEDULE:
-      this->group_->set_schedule_enabled(state);
+      this->group_->set_mode(state ? kk::Mode::PROGRAM : kk::Mode::OFF);
       break;
     case SwitchKind::PAUSE:
-      this->group_->set_paused(state);
+      this->group_->set_mode(state ? kk::Mode::MANUAL : kk::Mode::PROGRAM);
       break;
     case SwitchKind::WRITES:
       this->hub_->set_writes_enabled(state);
@@ -865,7 +989,7 @@ void KLinkButton::press_action() {
       this->hub_->identify_next();
       break;
     case ButtonKind::RESUME_SCHEDULE:
-      this->group_->resume_schedule();
+      this->group_->set_mode(kk::Mode::PROGRAM);
       break;
   }
 }

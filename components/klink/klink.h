@@ -27,6 +27,7 @@
 #include "klink_bus.h"
 #include "klink_guard.h"
 #include "klink_inventory.h"
+#include "klink_mode.h"
 #include "klink_schedule.h"
 
 namespace esphome {
@@ -237,9 +238,14 @@ class KLinkGroup : public light::LightOutput, public Component {
   void add_on_editor_callback(std::function<void()> &&cb) { editor_cb_.add(std::move(cb)); }
   void register_slot_text(size_t index, KLinkSlotText *text);
   void set_slot(size_t index, const kessil::klink::SchedulePoint &point);
-  void set_schedule_enabled(bool enabled);
-  void set_paused(bool paused) { paused_ = paused; }
-  void resume_schedule();
+  kessil::klink::Mode mode() const { return this->mode_.mode; }
+  void set_mode(kessil::klink::Mode mode);
+  void add_on_mode_callback(std::function<void()> &&cb) { this->mode_cb_.add(std::move(cb)); }
+  void preview_point(size_t slot);
+  void preview_minute(uint16_t minute_of_day);
+  void end_preview();
+  // One line for the dashboard: what this group's schedule is doing right now.
+  std::string status_text();
   uint8_t gid() const { return gid_; }
   // UI2 (0-255, models without a color temperature) and UI3-UI5 (percent) from the number entities.
   // A change takes manual control, like the light.
@@ -255,7 +261,7 @@ class KLinkGroup : public light::LightOutput, public Component {
   void manual_levels(light::LightState *state, uint8_t &level, uint8_t &color);
   // One frame of an effect. Holds the schedule back, like a manual command.
   void send_effect_frame(const uint8_t channels[5]) {
-    this->manual_ = true;
+    this->on_user_command_();
     this->send_(channels);
   }
   // Our scheduled value right now. False when there is no clock or no enabled slot.
@@ -264,12 +270,18 @@ class KLinkGroup : public light::LightOutput, public Component {
  protected:
   void send_(const uint8_t channels[5]);
   void point_changed_();
+  // A user command takes manual control and notifies/persists when the mode changes.
+  void on_user_command_();
+  void mode_changed_();
+  void save_mode_();
 
   KLinkHub *hub_{nullptr};
   time::RealTimeClock *time_{nullptr};
   size_t selected_{0};
   std::vector<KLinkSlotText *> slot_texts_;
   CallbackManager<void()> editor_cb_;
+  CallbackManager<void()> mode_cb_;
+  ESPPreferenceObject mode_pref_;
   uint8_t gid_{0};
   uint8_t manual_color_{127};
   float cold_mireds_{153.0f};
@@ -280,9 +292,7 @@ class KLinkGroup : public light::LightOutput, public Component {
   light::LightState *state_{nullptr};  // the light, remembered from write_state
   uint32_t refresh_ms_{1000};
   std::vector<kessil::klink::SchedulePoint> slots_;
-  bool schedule_enabled_{true};
-  bool paused_{false};
-  bool manual_{false};
+  kessil::klink::ModeState mode_;
   bool ignored_initial_{false};
   bool have_sent_{false};
   uint8_t last_sent_[5]{0, 0, 0, 0, 0};
