@@ -24,9 +24,9 @@ Assistant or from the K-Link web page the board serves itself, which also works 
 |---|---|
 | **Kessil A360X Tuna Sun** | **Tested.** Two fixtures in one group, controlled from an ESP32-C6: intensity, color, red, amber, finding lamps, the daily program. |
 | Program point editor, effects (Pulse, Color sweep, Sunrise, Sunset) | Built and flashed; **not yet verified end to end** against a lamp. |
-| Group **Mode** (Program / Manual / Off), status text and live preview | Built and flashed; the mode behaviour is **new and not yet tested on lamps**. |
-| **K-Link web page** at `/klink` and the ESPHome device page | Built and flashed; **new and not yet tested on lamps**. The page can also be run against a mock device, see [Contributing / development](#contributing--development). |
-| **Kessil A360X Tuna Blue** | **Untested.** Included with Kessil's layout for the A360XE: Tuna Blue plus red, green and purple (violet + indigo). The channel order matches Kessil's controller screen (VI, R, G), but the mapping to the lamp's hardware has not been confirmed on a lamp. |
+| Group **Mode** (Program / Manual / Off), status text and live preview | Compiles in CI; **new and not yet tested on lamps**. |
+| **K-Link web page** at `/klink` and the ESPHome device page | Compiles in CI; **new and not yet tested on a device or on lamps**. The page can also be run against a mock device, see [Contributing / development](#contributing--development). |
+| **Kessil A360XE Tuna Blue** | **Untested.** Included with Kessil's layout for the A360XE: Tuna Blue plus red, green and purple (violet + indigo). The channel order matches Kessil's controller screen (VI, R, G), but the mapping to the lamp's hardware has not been confirmed on a lamp. |
 | ESP32-C6 (USB-C) | **Tested.** |
 | ESP32-S3, ESP32-C3, ESP32-S2 (USB-C) | **Compile only.** The configs build, but nobody has run them on a lamp. Reports welcome. |
 
