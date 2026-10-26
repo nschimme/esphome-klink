@@ -143,6 +143,127 @@ class LightProgramTests(unittest.TestCase):
             self.assertEqual(raised.exception.code, 400)
 
 
+class MockEffectTests(unittest.TestCase):
+    """POST /klink/effect and /klink/effect/stop: an overlay that never changes the mode."""
+
+    SUN = ["Storm", "Cloud", "Aurora", "Pulse", "Color sweep", "Sunrise", "Sunset"]
+    BLUE = [
+        "Storm",
+        "Cloud",
+        "Rainbow",
+        "Aurora",
+        "Moon Red",
+        "Moon Blue",
+        "Pulse",
+        "Color sweep",
+        "Sunrise",
+        "Sunset",
+    ]
+
+    def setUp(self):
+        self.saved = mock_server.GROUPS[:]
+        mock_server.GROUPS[:] = [
+            mock_server.make_group(2, "Tuna Sun", "tuna_sun", ["int", "clr", None, "r", "am"], []),
+            mock_server.make_group(1, "Tuna Blue", "tuna_blue", ["int", "clr", "vio", "r", "grn"], []),
+            mock_server.make_group(101, "Board LED", "light_rgb", ["int", None, "r", "g", "b"], [], kind="light"),
+        ]
+
+    def tearDown(self):
+        mock_server.GROUPS[:] = self.saved
+
+    def group(self, gid):
+        return [group for group in mock_server.state_json()["groups"] if group["gid"] == gid][0]
+
+    def start(self, **query):
+        mock_server.handle_effect({key: [value] for key, value in query.items()})
+
+    def test_effect_names_per_model(self):
+        self.assertEqual(self.group(2)["effects"], self.SUN)
+        self.assertEqual(self.group(1)["effects"], self.BLUE)
+        self.assertEqual(self.group(101)["effects"], [])
+
+    def test_idle_defaults(self):
+        for gid in (2, 1, 101):
+            group = self.group(gid)
+            self.assertIsNone(group["effect"])
+            self.assertEqual(group["effect_speed"], 0)
+            self.assertEqual(group["effect_minutes"], 2.0)
+
+    def test_start_keeps_mode_and_sets_state(self):
+        self.start(gid="2", name="Storm", speed="slow", minutes="1")
+        group = self.group(2)
+        self.assertEqual(group["mode"], "program")
+        self.assertEqual(group["effect"]["name"], "Storm")
+        self.assertGreaterEqual(group["effect"]["remaining"], 55)
+        self.assertLessEqual(group["effect"]["remaining"], 60)
+        self.assertEqual(group["effect_speed"], 2)
+        self.assertEqual(group["effect_minutes"], 1.0)
+        self.assertTrue(group["status"].startswith("Effect: Storm"))
+        self.assertIn("left", group["status"])
+
+    def test_until_stopped(self):
+        self.start(gid="2", name="Aurora", minutes="0")
+        group = self.group(2)
+        self.assertEqual(group["effect"]["remaining"], -1)
+        self.assertEqual(group["status"], "Effect: Aurora")
+
+    def test_options_default_to_the_group_settings(self):
+        self.start(gid="2", name="Storm")
+        group = self.group(2)
+        self.assertEqual(group["effect"], {"name": "Storm", "remaining": 120})
+        self.assertEqual([group["effect_speed"], group["effect_minutes"]], [0, 2.0])
+
+    def test_stop(self):
+        self.start(gid="1", name="Rainbow", minutes="5")
+        self.assertIsNotNone(self.group(1)["effect"])
+        mock_server.handle_effect_stop({"gid": ["1"]})
+        group = self.group(1)
+        self.assertIsNone(group["effect"])
+        self.assertEqual(group["mode"], "program")
+        self.assertNotIn("Effect:", group["status"])
+
+    def test_effect_expires_by_itself(self):
+        self.start(gid="2", name="Storm", minutes="0.5")
+        mock_server.GROUPS[0]["effect_end"] = mock_server.time.time() - 0.01
+        group = self.group(2)
+        self.assertIsNone(group["effect"])
+        self.assertEqual(group["mode"], "program")
+
+    def test_unknown_group_and_effect(self):
+        with self.assertRaises(mock_server.HttpError) as raised:
+            self.start(gid="9", name="Storm")
+        self.assertEqual((raised.exception.code, raised.exception.message), (404, "unknown group"))
+        with self.assertRaises(mock_server.HttpError) as raised:
+            self.start(gid="2", name="Disco")
+        self.assertEqual((raised.exception.code, raised.exception.message), (404, "unknown effect"))
+        # A light program has effects on the light, but none are offered here.
+        with self.assertRaises(mock_server.HttpError) as raised:
+            self.start(gid="101", name="Storm")
+        self.assertEqual(raised.exception.code, 404)
+
+    def test_bad_parameters(self):
+        with self.assertRaises(mock_server.HttpError) as raised:
+            self.start(gid="2")
+        self.assertEqual((raised.exception.code, raised.exception.message), (400, "missing parameter: name"))
+        for speed in ("warp", "", "Fast!"):
+            with self.assertRaises(mock_server.HttpError) as raised:
+                self.start(gid="2", name="Storm", speed=speed)
+            self.assertEqual((raised.exception.code, raised.exception.message), (400, "invalid parameter: speed"))
+        for minutes in ("6", "-1", "1.25", "abc", ""):
+            with self.assertRaises(mock_server.HttpError) as raised:
+                self.start(gid="2", name="Storm", minutes=minutes)
+            self.assertEqual((raised.exception.code, raised.exception.message), (400, "invalid parameter: minutes"))
+        for minutes in ("0", "0.5", "5"):
+            mock_server.handle_effect({"gid": ["2"], "name": ["Storm"], "minutes": [minutes]})
+            self.assertIsNotNone(self.group(2)["effect"])
+
+    def test_effect_routes_are_post_only(self):
+        for path in ("/klink/effect", "/klink/effect/stop"):
+            self.assertIn(path, mock_server.POST_ROUTES)
+            self.assertIn(path, mock_server.ROUTES)
+            self.assertNotIn(path, mock_server.GET_ROUTES)
+
+
 class MockManyTests(unittest.TestCase):
     """The --many laboratory, checked through the mock's /klink/state handler."""
 

@@ -330,9 +330,30 @@ function makeServer(opts) {
   var writes = opts.writes !== false;
   groups.forEach(function (g) {
     if (!g.defaults) g.defaults = cloneSlots(g.slots);
+    if (!g.effects) g.effects = [];
+    if (g.effect === undefined) g.effect = null;
+    if (g.effect_speed == null) g.effect_speed = 0;
+    if (g.effect_minutes == null) g.effect_minutes = 2;
   });
   var lamps = opts.lamps || [];
   var requests = [];
+  /* The page's fake clock drives effect expiry too, so a test can tick through a whole effect. */
+  var currentNow = opts.now || function () { return Date.now(); };
+
+  function findGroup(gid) {
+    for (var i = 0; i < groups.length; i++) if (groups[i].gid === gid) return groups[i];
+    return null;
+  }
+
+  function effectOf(g) {
+    if (!g.effect) return null;
+    var remaining = -1;
+    if (g.effect.seconds > 0) {
+      remaining = g.effect.seconds - Math.floor((currentNow() - g.effect.start) / 1000);
+      if (remaining <= 0) { g.effect = null; return null; }
+    }
+    return { name: g.effect.name, remaining: remaining };
+  }
 
   function stateJson() {
     return {
@@ -340,6 +361,8 @@ function makeServer(opts) {
         return {
           gid: g.gid, kind: g.kind || 'bus', name: g.name, model: g.model, mode: g.mode || 'program',
           status: 'Program', labels: g.labels.slice(), max: g.max.slice(),
+          effects: (g.effects || []).slice(), effect: effectOf(g),
+          effect_speed: g.effect_speed, effect_minutes: g.effect_minutes,
           slots: cloneSlots(g.slots), defaults: g.defaults ? cloneSlots(g.defaults) : undefined, lamps: lamps.filter(function (l) {
             return l.gid === g.gid;
           }).map(function (l) { return l.kid; }),
@@ -388,6 +411,43 @@ function makeServer(opts) {
     return { set: set, rgb: '403020', target: rgb, exact: false };
   }
 
+  function parseMinutes(text) {
+    if (text == null || text === '') return null;
+    var value = Number(text);
+    if (isNaN(value) || value < 0 || value > 5) return null;
+    if (Math.abs(value * 2 - Math.round(value * 2)) > 1e-6) return null;
+    return value;
+  }
+
+  var SPEED_NAMES = { fast: 0, moderate: 1, slow: 2 };
+
+  function handleEffect(q) {
+    var g = findGroup(parseUint(q.get('gid'), 164));
+    if (!g) throw new HttpError(404, 'unknown group');
+    if (!q.has('name')) throw new HttpError(400, 'missing parameter: name');
+    var name = q.get('name');
+    if ((g.effects || []).indexOf(name) < 0) throw new HttpError(404, 'unknown effect');
+    var speed = g.effect_speed;
+    if (q.has('speed')) {
+      speed = SPEED_NAMES[q.get('speed')];
+      if (speed === undefined) throw new HttpError(400, 'invalid parameter: speed');
+    }
+    var minutes = g.effect_minutes;
+    if (q.has('minutes')) {
+      minutes = parseMinutes(q.get('minutes'));
+      if (minutes === null) throw new HttpError(400, 'invalid parameter: minutes');
+    }
+    g.effect_speed = speed;
+    g.effect_minutes = minutes;
+    g.effect = { name: name, start: currentNow(), seconds: minutes === 0 ? 0 : Math.round(minutes * 60) };
+  }
+
+  function handleEffectStop(q) {
+    var g = findGroup(parseUint(q.get('gid'), 164));
+    if (!g) throw new HttpError(404, 'unknown group');
+    g.effect = null;
+  }
+
   function response(code, body) {
     var text = JSON.stringify(body);
     return {
@@ -414,6 +474,8 @@ function makeServer(opts) {
         return Promise.resolve(response(200, snapJson(rgb)));
       }
       if (u.pathname === '/klink/point') { handlePoint(u.searchParams); return Promise.resolve(response(200, { ok: true })); }
+      if (u.pathname === '/klink/effect') { handleEffect(u.searchParams); return Promise.resolve(response(200, { ok: true })); }
+      if (u.pathname === '/klink/effect/stop') { handleEffectStop(u.searchParams); return Promise.resolve(response(200, { ok: true })); }
       if (u.pathname === '/klink/preview/done') return Promise.resolve(response(200, { ok: true }));
       if (u.pathname === '/klink/preview') return Promise.resolve(response(200, { ok: true }));
       throw new HttpError(404, 'not found');
@@ -430,6 +492,16 @@ function makeServer(opts) {
     fetch: fetch,
     pointRequests: function () {
       return requests.filter(function (r) { return r.path === '/klink/point'; });
+    },
+    effectRequests: function () {
+      return requests.filter(function (r) { return r.path === '/klink/effect'; });
+    },
+    stopRequests: function () {
+      return requests.filter(function (r) { return r.path === '/klink/effect/stop'; });
+    },
+    now: function (fn) {
+      if (typeof fn === 'function') currentNow = fn;
+      return currentNow();
     },
     snapRequests: function () {
       return requests.filter(function (r) { return r.path === '/klink/snap'; });
@@ -454,6 +526,7 @@ async function settle(n) {
 
 function loadPage(server) {
   var clock = new Clock();
+  if (server.now) server.now(function () { return clock.t; });
   var doc = createDocument();
   var stored = {};
   var localStorage = {

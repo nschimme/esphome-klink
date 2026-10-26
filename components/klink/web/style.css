@@ -133,6 +133,17 @@ input[type=text],input[type=search]{flex:1 1 160px}
 .wlbl{font-size:.85rem;font-weight:600;color:var(--muted)}
 .outrow{display:flex;align-items:center;gap:8px;min-width:0}
 .dot{flex:0 0 14px;width:14px;height:14px;border-radius:50%;border:1px solid var(--line)}
+/* Effects: a row of buttons with the running one lit, plus speed, duration and stop. */
+.fx{margin-top:12px;min-width:0}
+.fx .section-label{margin-top:0}
+.fx-row{margin-top:6px}
+.fx-btn{min-height:44px}
+.fx-btn.on{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
+.fx-opts{display:flex;flex-wrap:wrap;gap:8px;align-items:center;min-width:0;margin-top:8px}
+.fx-opts .seg{flex:1 1 160px;min-width:0;margin:0}
+.fx-opts select{flex:1 1 130px}
+.fx-live{margin-top:8px}
+.fx-hint{margin-top:4px}
 .panel h3{font-size:1rem;margin:0 0 8px;overflow-wrap:anywhere}
 .chan{margin-top:10px}
 .chan-top{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:.9rem;font-weight:600}

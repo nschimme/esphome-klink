@@ -295,7 +295,9 @@ The device serves two pages. Both work offline, straight from the board.
 
 - **`http://<device>/klink`** is the esphome-klink page, with three tabs:
   - **Dashboard**: each group's mode and status; tap a group or a lamp to flash it so you can tell
-    which is which.
+    which is which. Each K-Link group also has an **Effects** row: run Storm, Cloud, Aurora and the
+    other built-in effects at Fast/Moderate/Slow for a few minutes or until stopped; the effect is a
+    temporary overlay, so the schedule carries on exactly where it left off when it ends.
   - **Program**: a visual day-curve editor. Drag points, watch the change preview on the lamps, use the
     "now" marker and scrub through the day, apply presets (Default, Daytime plateau, Always on and
     Moonlight), and copy a program to another group. **Done** ends the preview.

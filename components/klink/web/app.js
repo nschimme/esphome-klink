@@ -5,6 +5,9 @@ var API='/klink';
 var TABS=['dashboard','program','settings'];
 var state=null,offline=false,fetching=false,again=false;
 var busy={},lastMode={},cards={},ocards={},rows={},lampSecs={},lampQuery='',editing={},rowError={};
+/* Effect speed is a number in the API and a word on the wire. */
+var SPEEDS=['fast','moderate','slow'];
+var DURS=[['0','Until stopped'],['0.5','0.5 min'],['1','1 min'],['2','2 min'],['3','3 min'],['4','4 min'],['5','5 min']];
 
 function byId(id){return document.getElementById(id);}
 function qs(params){
@@ -215,10 +218,136 @@ function makeCard(g){
   var count=document.createElement('span');count.className='lamps';
   rowline.appendChild(find);rowline.appendChild(count);
   var chips=document.createElement('div');chips.className='chips';
-  card.appendChild(head);card.appendChild(status);card.appendChild(seg);
+  /* Effects are a temporary overlay: start one and the schedule resumes when it ends. */
+  var fx=document.createElement('div');fx.className='fx';fx.hidden=true;
+  var fxLabel=document.createElement('p');fxLabel.className='section-label';fxLabel.textContent='Effects';
+  var fxRow=document.createElement('div');fxRow.className='chips fx-row';
+  var fxOpts=document.createElement('div');fxOpts.className='fx-opts';
+  var fxSpeed=document.createElement('div');fxSpeed.className='seg fxseg';
+  fxSpeed.setAttribute('role','group');fxSpeed.setAttribute('aria-label','Effect speed');
+  var fxSpeedBtns=[];
+  ['Fast','Moderate','Slow'].forEach(function(label,idx){
+    var b=makeButton(label,'');
+    b.setAttribute('aria-pressed','false');
+    b.addEventListener('click',function(){setFxSpeed(c,idx);});
+    fxSpeed.appendChild(b);fxSpeedBtns.push(b);
+  });
+  var fxDur=document.createElement('select');
+  fxDur.setAttribute('aria-label','Effect duration');
+  DURS.forEach(function(d){
+    var o=document.createElement('option');o.value=d[0];o.textContent=d[1];fxDur.appendChild(o);
+  });
+  fxDur.addEventListener('change',function(){
+    c.fxOpt.minutes=parseFloat(fxDur.value)||0;
+    c.fxOpt.dirty=true;
+  });
+  var fxStop=makeButton('Stop','btn small danger');
+  fxStop.setAttribute('data-busy','fx-'+g.gid);
+  fxStop.addEventListener('click',function(){
+    act('fx-'+g.gid,API+'/effect/stop',{gid:g.gid},'Effect stopped',null);
+  });
+  fxOpts.appendChild(fxSpeed);fxOpts.appendChild(fxDur);fxOpts.appendChild(fxStop);
+  var fxLive=document.createElement('p');fxLive.className='out fx-live';
+  var fxHint=document.createElement('p');fxHint.className='hint fx-hint';
+  fxHint.textContent='Speed and duration apply to the next effect you start.';
+  fxHint.hidden=true;
+  fx.appendChild(fxLabel);fx.appendChild(fxRow);fx.appendChild(fxOpts);
+  fx.appendChild(fxLive);fx.appendChild(fxHint);
+  card.appendChild(head);card.appendChild(status);card.appendChild(seg);card.appendChild(fx);
   card.appendChild(outLabel);card.appendChild(outRow);card.appendChild(rowline);card.appendChild(chips);
   byId('groups').appendChild(card);
-  return {el:card,name:h2,badge:badge,tag:tag,status:status,segButtons:buttons,out:out,dot:dot,find:find,count:count,rowline:rowline,chips:chips,chipEls:{}};
+  var refs={el:card,name:h2,badge:badge,tag:tag,status:status,segButtons:buttons,out:out,dot:dot,find:find,count:count,rowline:rowline,chips:chips,chipEls:{},
+    fx:fx,fxRow:fxRow,fxSpeedBtns:fxSpeedBtns,fxDur:fxDur,fxStop:fxStop,fxLive:fxLive,fxHint:fxHint,
+    fxBtns:{},fxSig:'',fxOpt:{speed:0,minutes:2,dirty:false},fxName:'',fxRem:null,fxRun:false};
+  var c=refs;
+  return refs;
+}
+function setFxSpeed(c,idx){
+  c.fxOpt.speed=idx;c.fxOpt.dirty=true;
+  for(var i=0;i<c.fxSpeedBtns.length;i++){
+    var on=i===idx;
+    c.fxSpeedBtns[i].className=on?'on':'';
+    c.fxSpeedBtns[i].setAttribute('aria-pressed',on?'true':'false');
+  }
+}
+function fxLeft(s){return Math.floor(s/60)+':'+('0'+(s%60)).slice(-2);}
+/* Paint the running state from the card's own countdown: the server value is only the anchor. */
+function paintFx(c){
+  var run=c.fxRun&&!!c.fxName,i,name;
+  for(name in c.fxBtns){
+    if(!Object.prototype.hasOwnProperty.call(c.fxBtns,name))continue;
+    var b=c.fxBtns[name],on=run&&name===c.fxName;
+    b.className=on?'btn small fx-btn on':'btn small fx-btn';
+    b.setAttribute('aria-pressed',on?'true':'false');
+  }
+  c.fxStop.hidden=!run;
+  c.fxLive.hidden=!run;
+  c.fxHint.hidden=!run;
+  setText(c.fxLive,run?(c.fxName+' · '+(c.fxRem<0?'until stopped':fxLeft(c.fxRem)+' left')):'');
+}
+/* Effects change rarely, so buttons are built once and only their state is painted. */
+function syncFx(g,c){
+  var names=g.effects||[],i,sig=names.join('|');
+  c.fx.hidden=!names.length;
+  if(!names.length){
+    c.fxName='';c.fxRem=null;c.fxRun=false;paintFx(c);
+    return;
+  }
+  if(c.fxSig!==sig){
+    c.fxSig=sig;
+    c.fxRow.textContent='';
+    c.fxBtns={};
+    for(i=0;i<names.length;i++)(function(name){
+      var b=makeButton(name,'btn small fx-btn');
+      b.setAttribute('aria-label','Start '+name);
+      b.setAttribute('aria-pressed','false');
+      b.setAttribute('data-busy','fx-'+g.gid);
+      b.addEventListener('click',function(){
+        act('fx-'+g.gid,API+'/effect',{gid:g.gid,name:name,speed:SPEEDS[c.fxOpt.speed],minutes:c.fxOpt.minutes},name+' started',null);
+      });
+      c.fxRow.appendChild(b);
+      c.fxBtns[name]=b;
+    })(names[i]);
+  }
+  /* Options come from the server until the user changes them; never take them away mid-edit. */
+  if(!c.fxOpt.dirty){
+    if(typeof g.effect_speed==='number')c.fxOpt.speed=cl(g.effect_speed|0,0,2);
+    if(typeof g.effect_minutes==='number')c.fxOpt.minutes=g.effect_minutes;
+  }
+  for(i=0;i<c.fxSpeedBtns.length;i++){
+    var on=i===c.fxOpt.speed;
+    c.fxSpeedBtns[i].className=on?'on':'';
+    c.fxSpeedBtns[i].setAttribute('aria-pressed',on?'true':'false');
+  }
+  if(document.activeElement!==c.fxDur){
+    var v=String(c.fxOpt.minutes),have=false,j;
+    for(j=0;j<c.fxDur.children.length;j++)if(c.fxDur.children[j].value===v)have=true;
+    if(!have){
+      var o=document.createElement('option');
+      o.value=v;o.textContent=v+' min';
+      c.fxDur.appendChild(o);
+    }
+    if(c.fxDur.value!==v)c.fxDur.value=v;
+  }
+  var e=g.effect||null;
+  if(e){
+    c.fxName=e.name||'';
+    c.fxRem=typeof e.remaining==='number'?e.remaining:-1;
+    c.fxRun=c.fxRem!==0;
+  }else{
+    c.fxName='';c.fxRem=null;c.fxRun=false;
+  }
+  paintFx(c);
+}
+/* One local tick a second between the 2 s polls; never below zero. */
+function fxTick(){
+  for(var gid in cards){
+    var c=cards[gid];
+    if(!c.fxRun||!(c.fxRem>0))continue;
+    c.fxRem--;
+    if(c.fxRem<=0)c.fxRun=false;
+    paintFx(c);
+  }
 }
 function updateCard(g){
   var c=cards[g.gid];
@@ -235,7 +364,13 @@ function updateCard(g){
     b.className=on?'on':'';
     b.setAttribute('aria-pressed',on?'true':'false');
   });
-  if(g.mode==='program'){
+  syncFx(g,c);
+  if(g.effect){
+    /* An effect owns the lamps, so the schedule's numbers would be a lie. */
+    setText(c.out,'Effect running');
+    c.out.className='out';
+    c.dot.hidden=true;
+  }else if(g.mode==='program'){
     var t=outputText(g);
     setText(c.out,t);
     c.out.className='out';
@@ -244,7 +379,7 @@ function updateCard(g){
     c.out.className='out muted';
   }
   var dcol='';
-  if(g.mode==='program'||g.mode==='preview')dcol=swatchColor(g,computeOutput(g));
+  if(!g.effect&&(g.mode==='program'||g.mode==='preview'))dcol=swatchColor(g,computeOutput(g));
   c.dot.hidden=!dcol;
   if(dcol)c.dot.style.background=dcol;
   var finding=!!busy['find-'+g.gid];
@@ -2036,4 +2171,5 @@ document.addEventListener('visibilitychange',function(){if(!document.hidden) ref
 initTabs();
 refresh();
 setInterval(function(){if(!document.hidden) refresh();},2000);
+setInterval(fxTick,1000);
 })();

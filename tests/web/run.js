@@ -64,6 +64,27 @@ function makeGroup(gid, name, model, labels) {
   };
 }
 
+/* Dashboard card helpers: cards have no ids, so they are found by their heading text. */
+function dashCard(page, title) {
+  var cards = page.groupsEl().children.filter(function (el) { return el.className === 'card'; });
+  return cards.filter(function (el) { return cardText(el).indexOf(title) >= 0; })[0];
+}
+function fxRow(card) { return card ? card.querySelector('.fx') : null; }
+function fxButtons(card) { return fxRow(card).querySelectorAll('.fx-btn'); }
+function fxNamed(card, label) {
+  var found = null;
+  fxButtons(card).forEach(function (b) { if (!found && b.textContent.trim() === label) found = b; });
+  return found;
+}
+function fxSpeed(card, label) {
+  var found = null;
+  fxRow(card).querySelector('.fxseg').children.forEach(function (b) {
+    if (!found && b.textContent.trim() === label) found = b;
+  });
+  return found;
+}
+function fxDuration(card) { return fxRow(card).querySelector('select'); }
+
 function makeLight(gid, name, model, labels) {
   var g = makeGroup(gid, name, model, labels);
   g.kind = 'light';
@@ -771,6 +792,149 @@ async function scenarioLightColours() {
     trks.join(' | '));
 }
 
+async function scenarioEffectsRow() {
+  var name = 'effects row';
+  var sun = makeGroup(2, 'Tuna Sun', 'tuna_sun');
+  sun.effects = ['Storm', 'Cloud', 'Aurora'];
+  var light = makeLight(101, 'Board LED', 'light_rgb', ['int', null, 'r', 'g', 'b']);
+  var server = stub.makeServer({ group: sun, groups: [sun, light] });
+  var page = await newPage(server);
+  var card = dashCard(page, 'Tuna Sun'), lcard = dashCard(page, 'Board LED');
+  check(name + ': row shown for a Tuna group', !!card && fxRow(card).hidden === false);
+  eq(name + ': one button per effect', fxButtons(card).map(function (b) { return b.textContent.trim(); }),
+    ['Storm', 'Cloud', 'Aurora']);
+  check(name + ': start label is accessible', fxNamed(card, 'Storm').getAttribute('aria-label') === 'Start Storm');
+  check(name + ': light program has no row', !!lcard && fxRow(lcard).hidden === true);
+  check(name + ': light program has no buttons', fxButtons(lcard).length === 0);
+  check(name + ': speed group labelled', fxRow(card).querySelector('.fxseg').getAttribute('aria-label') === 'Effect speed');
+  check(name + ': duration labelled', fxDuration(card).getAttribute('aria-label') === 'Effect duration');
+  check(name + ': initial speed from the server', fxSpeed(card, 'Fast').getAttribute('aria-pressed') === 'true');
+  eq(name + ': duration choices', fxDuration(card).children.map(function (o) { return o.value; }),
+    ['0', '0.5', '1', '2', '3', '4', '5']);
+  check(name + ': initial duration from the server', fxDuration(card).value === '2', fxDuration(card).value);
+  check(name + ': stop hidden while idle', fxRow(card).querySelector('.danger').hidden === true);
+}
+
+async function scenarioEffectStart() {
+  var name = 'start effect';
+  var sun = makeGroup(2, 'Tuna Sun', 'tuna_sun');
+  sun.effects = ['Storm', 'Cloud', 'Aurora'];
+  var server = stub.makeServer({ group: sun, groups: [sun] });
+  var page = await newPage(server);
+  var card = dashCard(page, 'Tuna Sun');
+  server.resetRequests();
+  page.click(fxNamed(card, 'Storm'));
+  await stub.settle();
+  var reqs = server.effectRequests();
+  check(name + ': one effect request', reqs.length === 1, reqs.length);
+  if (reqs[0]) {
+    eq(name + ': request payload', {
+      gid: reqs[0].params.gid, name: reqs[0].params.name,
+      speed: reqs[0].params.speed, minutes: reqs[0].params.minutes
+    }, { gid: '2', name: 'Storm', speed: 'fast', minutes: '2' });
+  }
+  check(name + ': running button highlighted', fxNamed(card, 'Storm').getAttribute('aria-pressed') === 'true');
+  check(name + ': others not highlighted', fxNamed(card, 'Cloud').getAttribute('aria-pressed') === 'false');
+  check(name + ': live text', cardText(fxRow(card)).indexOf('Storm · 2:00 left') >= 0, cardText(fxRow(card)));
+  check(name + ': stop shown while running', fxRow(card).querySelector('.danger').hidden === false);
+  check(name + ': next-start hint shown', cardText(fxRow(card)).indexOf('apply to the next effect') >= 0);
+  check(name + ': live output says effect', cardText(card).indexOf('Effect running') >= 0);
+  check(name + ': mode unchanged', card.children[2].querySelector('button').getAttribute('aria-pressed') === 'true');
+  eq(name + ': server mode unchanged', server.group.mode, 'program');
+
+  /* Countdown runs locally between polls, without another request. */
+  server.resetRequests();
+  page.clock.tick(1000);
+  check(name + ': one second off', cardText(fxRow(card)).indexOf('Storm · 1:59 left') >= 0, cardText(fxRow(card)));
+  check(name + ': tick sends no request', server.requests.length === 0, server.requests.length);
+}
+
+async function scenarioEffectEnds() {
+  var name = 'effect countdown ends';
+  var sun = makeGroup(2, 'Tuna Sun', 'tuna_sun');
+  sun.effects = ['Storm'];
+  sun.effect_minutes = 0.5;
+  var server = stub.makeServer({ group: sun, groups: [sun] });
+  var page = await newPage(server);
+  var card = dashCard(page, 'Tuna Sun');
+  page.click(fxNamed(card, 'Storm'));
+  await stub.settle();
+  check(name + ': half a minute on the clock', cardText(fxRow(card)).indexOf('Storm · 0:30 left') >= 0,
+    cardText(fxRow(card)));
+  page.clock.tick(30000);
+  await stub.settle();
+  eq(name + ': server effect expired', server.group.effect, null);
+  check(name + ': live text cleared', cardText(fxRow(card)).indexOf('left') < 0, cardText(fxRow(card)));
+  check(name + ': nothing highlighted', fxNamed(card, 'Storm').getAttribute('aria-pressed') === 'false');
+  check(name + ': stop hidden again', fxRow(card).querySelector('.danger').hidden === true);
+  check(name + ': live output back to the schedule', cardText(card).indexOf('Effect running') < 0);
+  page.clock.tick(5000);
+  await stub.settle();
+  check(name + ': never shows a negative time', cardText(fxRow(card)).indexOf('-') < 0, cardText(fxRow(card)));
+  eq(name + ': mode still program', server.group.mode, 'program');
+}
+
+async function scenarioEffectStop() {
+  var name = 'stop effect';
+  var blue = makeGroup(1, 'Tuna Blue', 'tuna_blue', ['int', 'clr', 'vio', 'r', 'grn']);
+  blue.effects = ['Storm', 'Rainbow'];
+  var server = stub.makeServer({ group: blue, groups: [blue] });
+  var page = await newPage(server);
+  var card = dashCard(page, 'Tuna Blue');
+  page.click(fxNamed(card, 'Rainbow'));
+  await stub.settle();
+  server.resetRequests();
+  page.click(fxRow(card).querySelector('.danger'));
+  await stub.settle();
+  var stops = server.stopRequests();
+  check(name + ': one stop request', stops.length === 1, stops.length);
+  check(name + ': stop sends the group', !!stops[0] && stops[0].params.gid === '1', stops[0] && stops[0].params.gid);
+  eq(name + ': server effect stopped', server.group.effect, null);
+  check(name + ': no highlight after stop', fxNamed(card, 'Rainbow').getAttribute('aria-pressed') === 'false');
+  check(name + ': stop hidden after stop', fxRow(card).querySelector('.danger').hidden === true);
+  eq(name + ': mode untouched', server.group.mode, 'program');
+}
+
+async function scenarioEffectOptions() {
+  var name = 'effect options';
+  var sun = makeGroup(2, 'Tuna Sun', 'tuna_sun');
+  sun.effects = ['Storm', 'Cloud'];
+  var server = stub.makeServer({ group: sun, groups: [sun] });
+  var page = await newPage(server);
+  var card = dashCard(page, 'Tuna Sun');
+  var sel = fxDuration(card), storm = fxNamed(card, 'Storm');
+  page.click(fxSpeed(card, 'Slow'));
+  sel.value = '1';
+  sel.dispatch('change', {});
+  check(name + ': slow selected', fxSpeed(card, 'Slow').getAttribute('aria-pressed') === 'true');
+  check(name + ': fast cleared', fxSpeed(card, 'Fast').getAttribute('aria-pressed') === 'false');
+  /* A poll must not reset what the user is choosing. */
+  await page.refresh();
+  check(name + ': speed kept across a poll', fxSpeed(card, 'Slow').getAttribute('aria-pressed') === 'true');
+  check(name + ': duration kept across a poll', sel.value === '1', sel.value);
+  check(name + ': same select node', fxDuration(card) === sel);
+  check(name + ': same effect buttons', fxNamed(card, 'Storm') === storm);
+
+  /* Focus is never stolen by a poll. */
+  sel.focus();
+  await page.refresh();
+  check(name + ': focus kept', page.doc.activeElement === sel);
+  check(name + ': focused value untouched', sel.value === '1', sel.value);
+
+  server.resetRequests();
+  page.click(storm);
+  await stub.settle();
+  var reqs = server.effectRequests();
+  check(name + ': one start request', reqs.length === 1, reqs.length);
+  if (reqs[0]) {
+    eq(name + ': chosen options sent', {
+      name: reqs[0].params.name, speed: reqs[0].params.speed, minutes: reqs[0].params.minutes
+    }, { name: 'Storm', speed: 'slow', minutes: '1' });
+  }
+  eq(name + ': options persist with the group', [server.group.effect_speed, server.group.effect_minutes], [2, 1]);
+  check(name + ': running with the chosen speed', fxSpeed(card, 'Slow').getAttribute('aria-pressed') === 'true');
+}
+
 async function main() {
   await scenarioPlace();
   await scenarioRefused();
@@ -794,6 +958,11 @@ async function main() {
   await scenarioLightDirect();
   await scenarioLightCt();
   await scenarioLightColours();
+  await scenarioEffectsRow();
+  await scenarioEffectStart();
+  await scenarioEffectEnds();
+  await scenarioEffectStop();
+  await scenarioEffectOptions();
   console.log(failures ? failures + ' failure(s)' : 'all web tests passed');
   process.exit(failures ? 1 : 0);
 }

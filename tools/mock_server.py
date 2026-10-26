@@ -45,6 +45,26 @@ GET_ROUTES = ("/klink", "/klink/state", "/klink/snap")
 
 COLOUR_MODELS = ("tuna_sun", "tuna_blue")
 
+# The effects each model offers (the light's own effect list, without "None"). Light programs drive
+# ESPHome lights rather than the Dongle, so they have none.
+EFFECTS = {
+    "tuna_sun": ["Storm", "Cloud", "Aurora", "Pulse", "Color sweep", "Sunrise", "Sunset"],
+    "tuna_blue": [
+        "Storm",
+        "Cloud",
+        "Rainbow",
+        "Aurora",
+        "Moon Red",
+        "Moon Blue",
+        "Pulse",
+        "Color sweep",
+        "Sunrise",
+        "Sunset",
+    ],
+}
+
+EFFECT_SPEEDS = {"fast": 0, "moderate": 1, "slow": 2}
+
 POST_ROUTES = (
     "/klink/mode",
     "/klink/identify",
@@ -57,6 +77,8 @@ POST_ROUTES = (
     "/klink/retry",
     "/klink/scan",
     "/klink/writes",
+    "/klink/effect",
+    "/klink/effect/stop",
 )
 
 
@@ -84,6 +106,13 @@ def make_group(gid, name, model, labels, slots, kind="bus"):
         "slots": slots,
         # The shipped program, captured before any edit, for the page's "Default" preset.
         "defaults": copy_slots(slots),
+        # Effects: names this group offers, the one running (if any) and the runtime options. An
+        # effect is a temporary overlay on the schedule; the mode never changes when one runs.
+        "effects": list(EFFECTS.get(model, [])) if kind != "light" else [],
+        "effect_name": None,
+        "effect_end": 0.0,  # millis-like timestamp; 0.0 means "until stopped"
+        "effect_speed": 0,  # 0 fast, 1 moderate, 2 slow
+        "effect_minutes": 2.0,  # 0 = until stopped
     }
 
 
@@ -392,8 +421,35 @@ def now_minute():
     return local.tm_hour * 60 + local.tm_min
 
 
+def format_remaining(seconds):
+    if seconds < 0:
+        seconds = 0
+    return "%d:%02d" % (seconds // 60, seconds % 60)
+
+
+def effect_remaining(group):
+    """Seconds left, -1 while it runs until stopped, None when no effect runs.
+
+    Rounds up like the firmware: the page shows how long is left, not how much has elapsed.
+    """
+    if not group.get("effect_name"):
+        return None
+    end = group.get("effect_end") or 0.0
+    if end <= 0.0:
+        return -1
+    left = end - time.time()
+    if left <= 0.0:
+        return 0
+    return int(math.ceil(left))
+
+
 def status_text(group):
     mode = group["mode"]
+    remaining = effect_remaining(group)
+    if remaining is not None:
+        if remaining <= 0:
+            return "Effect: " + group["effect_name"]  # about to end
+        return "Effect: " + group["effect_name"] + " · " + format_remaining(remaining) + " left"
     if mode == "program":
         minute = now_minute()
         channels = compute_minute(group["slots"], minute)
@@ -440,6 +496,10 @@ def expire_state():
         if group["mode"] == "preview" and group["preview_until"] <= now:
             group["mode"] = group["before_preview"]
             group["preview_until"] = 0.0
+        # An effect that reaches its time ends by itself; whatever the mode was resumes unchanged.
+        if group.get("effect_name") and effect_remaining(group) == 0:
+            group["effect_name"] = None
+            group["effect_end"] = 0.0
 
 
 def begin_preview(group):
@@ -458,6 +518,10 @@ def state_json():
     groups = []
     for group in GROUPS:
         lamps = [lamp["kid"] for lamp in LAMPS if lamp["gid"] == group["gid"]]
+        remaining = effect_remaining(group)
+        effect = None
+        if remaining is not None:
+            effect = {"name": group["effect_name"], "remaining": remaining}
         groups.append(
             {
                 "gid": group["gid"],
@@ -466,6 +530,10 @@ def state_json():
                 "model": group["model"],
                 "mode": group["mode"],
                 "status": status_text(group),
+                "effects": group["effects"],
+                "effect": effect,
+                "effect_speed": group["effect_speed"],
+                "effect_minutes": group["effect_minutes"],
                 "labels": group["labels"],
                 "max": group["max"],
                 "slots": group["slots"],
@@ -502,6 +570,55 @@ def handle_mode(query):
     else:
         group["mode"] = mode
     group["preview_until"] = 0.0
+
+
+def handle_effect(query):
+    """Start an effect as a temporary overlay; the group's mode does not change."""
+    gid = require_program_gid(query, "gid")
+    group = require_group(gid)
+    if "name" not in query:
+        raise HttpError(400, "missing parameter: name")
+    name = query["name"][0]
+    if name not in group["effects"]:
+        raise HttpError(404, "unknown effect")
+    speed = group["effect_speed"]
+    if "speed" in query:
+        speed = EFFECT_SPEEDS.get(query["speed"][0])
+        if speed is None:
+            raise HttpError(400, "invalid parameter: speed")
+    minutes = group["effect_minutes"]
+    if "minutes" in query:
+        minutes = parse_effect_minutes(query["minutes"][0])
+        if minutes is None:
+            raise HttpError(400, "invalid parameter: minutes")
+    # Options persist with the group state, like the firmware's preference-backed settings.
+    group["effect_speed"] = speed
+    group["effect_minutes"] = minutes
+    group["effect_name"] = name
+    group["effect_end"] = 0.0 if minutes == 0 else time.time() + minutes * 60.0
+
+
+def handle_effect_stop(query):
+    gid = require_program_gid(query, "gid")
+    group = require_group(gid)
+    group["effect_name"] = None
+    group["effect_end"] = 0.0
+
+
+def parse_effect_minutes(text):
+    """0..5 in half-minute steps; 0 means "until stopped". None when invalid."""
+    if not text:
+        return None
+    try:
+        value = float(text)
+    except ValueError:
+        return None
+    if not 0.0 <= value <= 5.0:
+        return None
+    halves = value * 2.0
+    if abs(halves - round(halves)) > 1e-6:
+        return None
+    return value
 
 
 def handle_identify(query):
@@ -710,6 +827,8 @@ def handle_writes(query):
 ROUTES = {
     "/klink/writes": handle_writes,
     "/klink/mode": handle_mode,
+    "/klink/effect": handle_effect,
+    "/klink/effect/stop": handle_effect_stop,
     "/klink/identify": handle_identify,
     "/klink/point": handle_point,
     "/klink/preview": handle_preview,
