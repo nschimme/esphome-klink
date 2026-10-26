@@ -312,16 +312,18 @@ def status_text(group):
         channels = compute_minute(group["slots"], minute)
         if channels is None:
             return "Program · no points enabled"
-        return "Program · %02d:%02d · INT %d%% CLR %d%%" % (
-            minute // 60,
-            minute % 60,
-            percent(channels[0]),
-            percent(channels[1]),
-        )
+        parts = ""
+        for index, label in enumerate(group["labels"]):
+            if label is not None:
+                value = percent(channels[index]) if CHANNEL_MAX[index] == 255 else channels[index]
+                parts += " · %s %d%%" % (label.upper(), value)
+        return "Program · %02d:%02d%s" % (minute // 60, minute % 60, parts)
     if mode == "manual":
         return "Manual"
     if mode == "off":
         return "Off"
+    if group.get("preview_minute") is not None:
+        return "Previewing %02d:%02d" % (group["preview_minute"] // 60, group["preview_minute"] % 60)
     return "Editing point %d (previewing)" % (group["selected"] + 1)
 
 
@@ -519,6 +521,7 @@ def handle_preview(query):
         # The firmware only sends the point; selecting it is the editor's job. The mock tracks it
         # so the status line names the point a developer just asked to preview.
         group["selected"] = index
+        group["preview_minute"] = None
         begin_preview(group)
     else:
         minute = parse_uint(query["minute"][0], 1439)
@@ -526,6 +529,7 @@ def handle_preview(query):
             raise HttpError(400, "invalid parameter: minute")
         if compute_minute(group["slots"], minute) is None:
             return  # nothing enabled
+        group["preview_minute"] = minute
         begin_preview(group)
 
 
