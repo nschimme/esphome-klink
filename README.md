@@ -139,6 +139,50 @@ ota:
     password: !secret ota_password
 ```
 
+#### Several groups on one board
+
+Each lamp model has a reusable template: `common/group-tuna-sun.yaml` and
+`common/group-tuna-blue.yaml`. `common/tuna-sun.yaml` and `common/tuna-blue.yaml` are thin wrappers
+around them that keep the group existing installations already use. To add another group, include
+the template once per group with three package vars:
+
+- `id` — the yaml/C++ id of the light, also used as every `group:` reference (for example `reef_5`);
+- `name` — the display-name prefix of the entities (for example `Reef 5`);
+- `gid` — the K-Link group id.
+
+```yaml
+packages:
+  remote_package:
+    url: https://github.com/nschimme/esphome-klink
+    ref: main
+    files:
+      - boards/esp32-c6.yaml
+      - common/base.yaml
+      - common/tuna-sun.yaml
+      - common/tuna-blue.yaml
+      # A second Tuna Sun group, "Reef 5", in K-Link group 5:
+      - path: common/group-tuna-sun.yaml
+        vars: {id: reef_5, name: Reef 5, gid: "5"}
+```
+
+With a local checkout the same thing is a plain include:
+
+```yaml
+packages:
+  reef_5: !include
+    file: common/group-tuna-sun.yaml
+    vars: {id: reef_5, name: Reef 5, gid: "5"}
+```
+
+Custom groups use K-Link group ids **3 to 25**; ids 1 and 2 are the defaults of the Tuna Blue and
+Tuna Sun packages (change those with `tuna_blue_gid` / `tuna_sun_gid`). A group cannot mix lamp
+types: a Tuna Sun group only contains Tuna Sun lamps, a Tuna Blue group only Tuna Blue lamps. See
+[examples/two-groups.yaml](examples/two-groups.yaml) and
+[examples/three-groups.yaml](examples/three-groups.yaml).
+
+Keep `id` and `name` stable once a group is in use: the entity names and ids are built from them,
+so renaming a group changes Home Assistant entities and loses the values stored for the old ones.
+
 ### 3. Clone the repo
 
 ```sh
@@ -176,6 +220,41 @@ developing, change the `external_components:` source in `common/base.yaml` from 
 With `auto_writes: "true"` the component listens for 15 seconds and only takes over by itself after the
 bus has been quiet; if another controller appears later, it stops and reports a conflict in
 **Bus state**.
+
+## Upgrading from 0.1.0
+
+Version 0.2.0 reshapes the controls and the way the config is assembled. The Home Assistant
+integration will need a little cleanup after you flash the new firmware.
+
+**Renamed and removed entities.** Take a look at the device's **Entities** page in Home Assistant
+after the upgrade:
+
+- **Bus writes** is now **Send to lights**.
+- The per-group schedule switch, the pause switch and the **Resume schedule** button are gone. The
+  **Mode** select (**Program** / **Manual** / **Off**) and the **Status** text sensor replace them.
+- **Commissioning mode**, **Find lamps** and **Identify next lamp** are no longer in the default
+  config. Setup is automatic now, and **Retry** clears a bus conflict; the power-user actions
+  `klink.scan`, `klink.identify`, `klink.stage_assignment` and `klink.confirm_assignment` still
+  exist for scripting.
+
+Home Assistant keeps the old entities as unavailable/orphaned entries and adds the new ones next to
+them. Remove the old entries from the device's **Entities** page; do not delete the new **Mode** and
+**Status** entities, they are the replacements.
+
+**Send to lights is off after the upgrade** because its entity name changed and the new switch
+starts in the off position. Frames are only logged (dry run) until you turn **Send to lights** on
+again.
+
+**Stored point values and modes are kept.** The per-group package keeps exactly the same entity
+names and ids for the light, the eight point texts, the point editor and the manual channels, so
+the values in flash (the daily program and the chosen mode) still belong to the same entities. Only
+the entities listed above changed name.
+
+**Connectivity moved to `common/network-wifi.yaml`.** The device now serves its own web pages and
+the top-level files get Wi-Fi (with a setup access point), the API and OTA from
+`common/network-wifi.yaml`. It is **unsecured by default**: no API encryption key and no OTA
+password. If the device is on a network you do not trust, add your own key and password (see
+[Network](#network-wifi-api-and-ota)).
 
 ## Network: Wi-Fi, API and OTA
 
@@ -260,6 +339,12 @@ Substitutions you can set in your own config:
 | `tuna_sun_gid` | `"2"` | the K-Link group the Tuna Sun package controls |
 | `tuna_blue_gid` | `"1"` | the K-Link group the Tuna Blue package controls |
 | `auto_writes` | `"false"` | `"true"` = listen first and take over the bus when quiet |
+
+The model packages `common/tuna-sun.yaml` and `common/tuna-blue.yaml` are thin wrappers around the
+templates `common/group-tuna-sun.yaml` and `common/group-tuna-blue.yaml`. Include a template directly
+with the package vars `id`, `name` and `gid` to add another group (see
+[Several groups on one board](#several-groups-on-one-board)); custom groups use K-Link group ids
+3-25 and a group cannot mix lamp types.
 
 Options under `klink:`:
 

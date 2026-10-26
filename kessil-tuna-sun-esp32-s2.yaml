@@ -9,7 +9,7 @@ esphome:
   friendly_name: ${friendly_name}
   project:
     name: nschimme.esphome-klink
-    version: "0.1.0"
+    version: "0.2.0"
 
 dashboard_import:
   package_import_url: github://nschimme/esphome-klink/kessil-tuna-sun-esp32-s2.yaml@main
