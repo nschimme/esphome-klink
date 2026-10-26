@@ -280,12 +280,24 @@ void ProgramBase::update() {
       return;
     }
     case kk::Mode::MANUAL:
+      this->repeat_held_value_if_due_();
       return;
     case kk::Mode::PREVIEW:
-      if (kk::preview_expired(this->mode_, millis()))
+      if (kk::preview_expired(this->mode_, millis())) {
         this->end_preview();
+        return;
+      }
+      this->repeat_held_value_if_due_();
       return;
   }
+}
+
+void ProgramBase::repeat_held_value_if_due_() {
+  if (!this->repeat_held_value_() || !this->have_sent_ || millis() - this->last_sent_ms_ < this->refresh_ms_)
+    return;
+  uint8_t channels[5];
+  std::memcpy(channels, this->last_sent_, sizeof(channels));
+  this->send_(channels);
 }
 
 }  // namespace klink

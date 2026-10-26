@@ -292,6 +292,7 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
 
  protected:
   void output_(const uint8_t channels[5]) override { this->hub_->write_group(this->gid_, channels); }
+  bool repeat_held_value_() const override { return true; }
   bool effect_active() const override { return this->state_ != nullptr && this->state_->get_current_effect_index() != 0; }
   std::string effect_name() const override { return std::string(this->state_->get_effect_name()); }
   uint32_t preference_key() const override {

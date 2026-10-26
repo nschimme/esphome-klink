@@ -307,7 +307,9 @@ For each lamp group (Tuna Sun and Tuna Blue):
   effects Pulse, Color sweep, Sunrise and Sunset are included;
 - a **Mode** select: **Program** runs the daily program, **Manual** holds what you set, **Off** turns
   the lamps off. Changing the light or a manual channel number switches the group to Manual
-  automatically; choosing Program hands control back. The mode is remembered across restarts;
+  automatically; choosing Program hands control back. The mode is remembered across restarts. Like
+  Kessil's WiFi dongle, a held value (Manual, or a point preview) is repeated about once a second, since
+  it is not known whether the lamps keep a level without repeats;
 - a **Status** text sensor saying what the group is doing right now, for example
   `Program · 14:02 · INT 42% CLR 60%`, `Manual`, `Off`, `Editing point 3 (previewing)` or
   `Effect: Sunrise`;

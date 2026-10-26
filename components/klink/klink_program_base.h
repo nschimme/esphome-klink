@@ -61,6 +61,10 @@ class ProgramBase : public ProgramHost {
  protected:
   // What send_() does with the channels besides remembering them (the bus group writes its group).
   virtual void output_(const uint8_t channels[5]) = 0;
+  // Whether a held value (Manual mode, a point preview) must be repeated about once a second. The
+  // Kessil WiFi dongle repeats group writes once a second, and whether lamps hold a level without
+  // repeats is untested, so the bus group repeats; programs for ordinary lights do not.
+  virtual bool repeat_held_value_() const { return false; }
   virtual bool effect_active() const = 0;
   virtual std::string effect_name() const = 0;
   // The preference key used for the operating mode.
@@ -69,6 +73,7 @@ class ProgramBase : public ProgramHost {
   void setup_program_();
 
   void send_(const uint8_t channels[5]);
+  void repeat_held_value_if_due_();
   void point_changed_();
   // Persist one specific slot through its text entity (unlike point_changed_, which stores the
   // selected point). Used by the web API's per-slot editor.
