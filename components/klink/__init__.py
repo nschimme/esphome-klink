@@ -1,15 +1,25 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import automation
-from esphome.components import uart
+from esphome.components import uart, web_server_base
+from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
 from esphome.const import CONF_ID, CONF_TRIGGER_ID
 
 CODEOWNERS = []
 DEPENDENCIES = ["uart"]
-# The C++ classes for the platforms live in the hub, so their base components must be compiled in.
-AUTO_LOAD = ["light", "text", "switch", "button", "sensor", "text_sensor", "number", "time", "select", "datetime"]
+
+
+def AUTO_LOAD(config):
+    # The C++ classes for the platforms live in the hub, so their base components must be compiled in.
+    loads = ["light", "text", "switch", "button", "sensor", "text_sensor", "number", "time", "select", "datetime"]
+    # The web page and JSON API share the web_server_base HTTP server; only pull it in when asked.
+    if config[CONF_WEB]:
+        loads.append("web_server_base")
+    return loads
+
 
 CONF_KLINK_ID = "klink_id"
+CONF_KLINK_WEB_ID = "klink_web_id"
 CONF_WRITES_ENABLED = "writes_enabled"
 CONF_MONITOR = "monitor"
 CONF_AUTO_WRITES = "auto_writes"
@@ -21,9 +31,11 @@ CONF_ON_LAMP_FOUND = "on_lamp_found"
 CONF_ON_SCAN_DONE = "on_scan_done"
 CONF_KID = "kid"
 CONF_GID = "gid"
+CONF_WEB = "web"
 
 klink_ns = cg.esphome_ns.namespace("klink")
 KLinkHub = klink_ns.class_("KLinkHub", cg.Component, uart.UARTDevice)
+KLinkWeb = klink_ns.class_("KLinkWeb", cg.Component)
 
 LampFoundTrigger = klink_ns.class_(
     "LampFoundTrigger", automation.Trigger.template(cg.uint32, cg.uint8, cg.uint8)
@@ -36,10 +48,25 @@ IdentifyAction = klink_ns.class_("IdentifyAction", automation.Action)
 StageAssignmentAction = klink_ns.class_("StageAssignmentAction", automation.Action)
 ConfirmAssignmentAction = klink_ns.class_("ConfirmAssignmentAction", automation.Action)
 
-CONFIG_SCHEMA = (
+
+def _add_web_objects(config):
+    if not config[CONF_WEB]:
+        return config
+    # Only ask for these IDs when the web API is on, so a build without it needs no web server at
+    # all. Both are auto-IDs: the K-Link web handler is declared here, and the web server base
+    # instance is resolved to the single one web_server_base declares.
+    config = dict(config)
+    config[CONF_KLINK_WEB_ID] = cv.declare_id(KLinkWeb)(None)
+    config[CONF_WEB_SERVER_BASE_ID] = cv.use_id(web_server_base.WebServerBase)(None)
+    return config
+
+
+CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(KLinkHub),
+            # Serve the K-Link page and JSON API at /klink on the shared HTTP server.
+            cv.Optional(CONF_WEB, default=False): cv.boolean,
             # Dry run by default: frames are logged, nothing is transmitted.
             cv.Optional(CONF_WRITES_ENABLED, default=False): cv.boolean,
             # Listen for and log every frame on the bus (other controllers' traffic, lamp replies).
@@ -70,7 +97,8 @@ CONFIG_SCHEMA = (
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
-    .extend(uart.UART_DEVICE_SCHEMA)
+    .extend(uart.UART_DEVICE_SCHEMA),
+    _add_web_objects,
 )
 
 
@@ -95,6 +123,13 @@ async def to_code(config):
     if CONF_DIRECT_DRIVE in config:
         dd = config[CONF_DIRECT_DRIVE]
         cg.add(var.set_direct_drive(dd[CONF_POSITIVE_PIN], dd[CONF_NEGATIVE_PIN]))
+
+    if config[CONF_WEB]:
+        cg.add_define("USE_KLINK_WEB")
+        base = await cg.get_variable(config[CONF_WEB_SERVER_BASE_ID])
+        web = cg.new_Pvariable(config[CONF_KLINK_WEB_ID], base)
+        await cg.register_component(web, config)
+        cg.add(web.set_hub(var))
 
     for conf in config.get(CONF_ON_LAMP_FOUND, []):
         trigger = cg.new_Pvariable(conf[CONF_TRIGGER_ID], var)

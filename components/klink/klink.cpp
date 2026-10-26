@@ -82,6 +82,13 @@ void KLinkHub::setup() {
     if (!this->inventory_.deserialize(blob))
       ESP_LOGW(TAG, "Stored lamp inventory is invalid or from another version; starting empty");
   }
+  this->names_pref_ = global_preferences->make_preference<StoredNames>(fnv1_hash("klink_names"));
+  StoredNames stored_names;
+  if (this->names_pref_.load(&stored_names) && stored_names.length <= sizeof(stored_names.data)) {
+    std::vector<uint8_t> blob(stored_names.data, stored_names.data + stored_names.length);
+    if (!this->names_.deserialize(blob))
+      ESP_LOGW(TAG, "Stored lamp names are invalid or from another version; starting empty");
+  }
 }
 
 void KLinkHub::loop() {
@@ -441,6 +448,43 @@ void KLinkHub::save_inventory_() {
   this->pref_.save(&stored);
 }
 
+void KLinkHub::save_names_() {
+  std::vector<uint8_t> blob = this->names_.serialize();
+  StoredNames stored;
+  std::memset(&stored, 0, sizeof(stored));
+  if (blob.size() > sizeof(stored.data))
+    return;
+  stored.length = static_cast<uint16_t>(blob.size());
+  std::memcpy(stored.data, blob.data(), blob.size());
+  this->names_pref_.save(&stored);
+}
+
+bool KLinkHub::set_name(uint32_t kid, const std::string &name, std::string &error) {
+  error.clear();
+  if (this->names_.set(kid, name)) {
+    this->save_names_();
+    return true;
+  }
+  if (name.size() > kk::NAME_MAX_LEN)
+    error = "name is too long (24 bytes max)";
+  else if (!this->names_.contains(kid) && this->names_.size() >= kk::MAX_NAMES)
+    error = "no room for another name";
+  else
+    error = "name is not valid UTF-8";
+  return false;
+}
+
+bool KLinkHub::identify_gid(uint8_t gid) {
+  bool any = false;
+  for (const auto &lamp : this->inventory_.lamps()) {
+    if (lamp.gid == gid) {
+      this->identify(lamp.kid);
+      any = true;
+    }
+  }
+  return any;
+}
+
 // ---- Group ----------------------------------------------------------------------------------
 
 void KLinkGroup::setup() {
@@ -591,6 +635,36 @@ void KLinkGroup::point_changed_() {
   if (this->selected_ < this->slot_texts_.size() && this->slot_texts_[this->selected_] != nullptr)
     this->slot_texts_[this->selected_]->store(this->slots_[this->selected_]);
   this->editor_cb_.call();
+}
+
+void KLinkGroup::slot_changed_(size_t index) {
+  if (index < this->slot_texts_.size() && this->slot_texts_[index] != nullptr)
+    this->slot_texts_[index]->store(this->slots_[index]);
+  this->editor_cb_.call();
+}
+
+bool KLinkGroup::set_slot_from_values(size_t index, uint16_t minute,
+                                      const uint8_t channels[kk::NUM_CHANNELS], bool enabled) {
+  if (index >= this->slots_.size())
+    return false;
+  kk::SchedulePoint &p = this->slots_[index];
+  p.minute = minute;
+  for (size_t c = 0; c < kk::NUM_CHANNELS; c++)
+    p.channels[c] = channels[c];
+  p.enabled = enabled;
+  this->slot_changed_(index);
+  this->preview_point(index);
+  return true;
+}
+
+bool KLinkGroup::copy_program_from(const KLinkGroup &other) {
+  if (this->model_ != other.model_ || this->slots_.size() != other.slots_.size())
+    return false;
+  for (size_t i = 0; i < this->slots_.size(); i++) {
+    this->slots_[i] = other.slots_[i];
+    this->slot_changed_(i);
+  }
+  return true;
 }
 
 void KLinkGroup::edit_point_time(uint8_t hour, uint8_t minute) {

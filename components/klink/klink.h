@@ -28,6 +28,7 @@
 #include "klink_guard.h"
 #include "klink_inventory.h"
 #include "klink_mode.h"
+#include "klink_names.h"
 #include "klink_schedule.h"
 
 namespace esphome {
@@ -102,6 +103,14 @@ class KLinkHub : public Component, public uart::UARTDevice {
   bool assign(uint32_t kid, uint8_t gid, std::string &error);
 
   size_t lamp_count() const { return inventory_.lamps().size(); }
+  // Views for the web API.
+  const std::vector<KLinkGroup *> &groups() const { return groups_; }
+  const std::vector<kessil::klink::LampRecord> &lamps() const { return inventory_.lamps(); }
+  const kessil::klink::NameTable &names() const { return names_; }
+  // Set or clear a lamp nickname (empty clears); false and `error` filled on invalid input.
+  bool set_name(uint32_t kid, const std::string &name, std::string &error);
+  // Identify every known lamp in `gid`. Returns false when the group has no lamps.
+  bool identify_gid(uint8_t gid);
   uint32_t bus_timeouts() const { return bus_.timeouts(); }
   uint32_t frames_seen() const { return bus_.monitor().frames(); }
   uint32_t bad_frames() const { return bus_.monitor().bad_frames(); }
@@ -130,11 +139,16 @@ class KLinkHub : public Component, public uart::UARTDevice {
     uint8_t length;
     uint8_t data[4 + 6 * kessil::klink::MAX_LAMPS];
   };
+  struct StoredNames {
+    uint16_t length;
+    uint8_t data[kessil::klink::NAME_BLOB_MAX];
+  };
 
   void direct_setup_();
   void direct_drive_(bool on);
   void observe_(const std::vector<uint8_t> &frame);
   void save_inventory_();
+  void save_names_();
   void read_next_identity_();
 
   UartIo io_;
@@ -142,6 +156,8 @@ class KLinkHub : public Component, public uart::UARTDevice {
   kessil::klink::Scanner scanner_;
   kessil::klink::Inventory inventory_;
   ESPPreferenceObject pref_;
+  kessil::klink::NameTable names_;
+  ESPPreferenceObject names_pref_;
   std::vector<KLinkGroup *> groups_;
 
   bool monitor_{false};
@@ -242,6 +258,41 @@ class KLinkGroup : public light::LightOutput, public Component {
   void add_on_editor_callback(std::function<void()> &&cb) { editor_cb_.add(std::move(cb)); }
   void register_slot_text(size_t index, KLinkSlotText *text);
   void set_slot(size_t index, const kessil::klink::SchedulePoint &point);
+  // Web API: edit one slot (1-based in the API is passed as a 0-based index here), persist it
+  // through its slot text and preview it. False when the index is out of range.
+  bool set_slot_from_values(size_t index, uint16_t minute,
+                            const uint8_t channels[kessil::klink::NUM_CHANNELS], bool enabled);
+  // Web API: copy another group's whole program. Groups must have the same model and slot count.
+  bool copy_program_from(const KLinkGroup &other);
+  // Web API: the light's name, or "Group <gid>" before the light has reported one.
+  std::string name() const {
+    if (this->state_ != nullptr) {
+      std::string n = this->state_->get_name().str();
+      if (!n.empty())
+        return n;
+    }
+    return "Group " + std::to_string(this->gid_);
+  }
+  // Web API: the model key used in YAML ("tuna_sun", "tuna_blue", "generic").
+  std::string model_name() const {
+    switch (this->model_) {
+      case GroupModel::TUNA_SUN:
+        return "tuna_sun";
+      case GroupModel::TUNA_BLUE:
+        return "tuna_blue";
+      default:
+        return "generic";
+    }
+  }
+  // Web API: the current minute of day (0-1439) or -1 without a valid clock.
+  int now_minute() const {
+    if (this->time_ == nullptr)
+      return -1;
+    ESPTime now = this->time_->now();
+    if (!now.is_valid())
+      return -1;
+    return static_cast<int>(now.hour) * 60 + static_cast<int>(now.minute);
+  }
   kessil::klink::Mode mode() const { return this->mode_.mode; }
   void set_mode(kessil::klink::Mode mode);
   void add_on_mode_callback(std::function<void()> &&cb) { this->mode_cb_.add(std::move(cb)); }
@@ -274,6 +325,9 @@ class KLinkGroup : public light::LightOutput, public Component {
  protected:
   void send_(const uint8_t channels[5]);
   void point_changed_();
+  // Persist one specific slot through its text entity (unlike point_changed_, which stores the
+  // selected point). Used by the web API's per-slot editor.
+  void slot_changed_(size_t index);
   // A user command takes manual control and notifies/persists when the mode changes.
   void on_user_command_();
   void mode_changed_();
