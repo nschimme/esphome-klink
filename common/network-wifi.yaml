@@ -5,7 +5,10 @@
 #
 # With no Wi-Fi credentials the device opens a "<name> Setup" access point with a captive portal where
 # you pick your network. The API and OTA are not password protected here; set a key and password in
-# your own config if the device is on a network you do not trust.
+# your own config if the device is on a network you do not trust. Note: `captive_portal:` also adds
+# ESPHome's web update page (/update, the `web_server` OTA platform), which the OTA password does NOT
+# cover; it is only protected by `web_server: auth: {username, password}` in your own config. Without
+# captive_portal the device cannot be set up from its access point.
 wifi:
   ap:
     ssid: "${name} Setup"

@@ -5,15 +5,18 @@
 #   timezone     the schedule runs on local time, so set your own, e.g. Europe/Berlin
 #   auto_writes  "true" = listen first and take over the bus by itself once it has been quiet;
 #                "false" = never transmit until you turn the "Send to lights" switch on
+#   klink_ref    the git branch, tag or commit of this repository to take the component from
+#                (default main); set it to test a branch, e.g. klink_ref: ux-redesign
 substitutions:
   timezone: Etc/UTC
   auto_writes: "false"
+  klink_ref: main
 
 external_components:
   - source:
       type: git
       url: https://github.com/nschimme/esphome-klink
-      ref: main
+      ref: ${klink_ref}
     components: [klink]
 
 # ESPHome's own device page (Home Assistant-style, version 3) for every entity. The esphome-klink page at /klink
