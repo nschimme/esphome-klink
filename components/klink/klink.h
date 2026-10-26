@@ -328,6 +328,8 @@ class KLinkModeSelect : public select::Select, public Component {
   void set_group(KLinkGroup *group) { group_ = group; }
   void setup() override;
   void dump_config() override;
+  // After the group, so the mode it restored from flash is what the select first shows.
+  float get_setup_priority() const override { return setup_priority::DATA - 1.0f; }
 
  protected:
   void control(size_t index) override { this->group_->set_mode(static_cast<kessil::klink::Mode>(index)); }
