@@ -8,7 +8,7 @@
 #   name             the display name prefix of every entity, e.g. "Ceiling"
 #   lights           a YAML LIST of the ESPHome light ids this program drives, e.g. [ceiling].
 #                    Keep it unquoted: a quoted "[ceiling]" would be a string, not a list.
-#   update_interval  optional, how often an unchanged value is re-asserted (same default as the
+#   program_update_interval  optional, how often an unchanged value is re-asserted (same default as the
 #                    schema, 5s)
 #
 # Example (any light with brightness and colour temperature, here `ceiling`):
@@ -28,7 +28,7 @@
 # No K-Link bus is needed for the program itself, but this file still expects the `klink:` hub from
 # common/base.yaml (the entities attach to it) and the `local_time` clock that file defines.
 substitutions:
-  update_interval: 5s
+  program_update_interval: 5s
 
 klink:
   programs:
@@ -37,7 +37,7 @@ klink:
       model: ct
       lights: ${lights}
       time_id: local_time
-      update_interval: ${update_interval}
+      update_interval: ${program_update_interval}
 
 # The daily program: "HH:MM int=0-255 ct=0-255" per point (int may be left out, ct then 0), or
 # "off". CT 0 is the warm end, 255 the cold end. A gentle day: warm and dim in the morning, cooler

@@ -400,7 +400,7 @@ editor, mode select and status sensor. The package vars are:
 | `id` | the yaml/C++ id of the program, also used in every entity id |
 | `name` | the display name prefix of every entity, e.g. `"Desk light"` |
 | `lights` | a **YAML list** of the ESPHome light ids, e.g. `[desk_light]`. Keep it unquoted: a quoted `"[desk_light]"` is a string, not a list. |
-| `update_interval` | optional, the refresh interval (default `5s`). A substitution of this name in your own config overrides it, so pass this var explicitly if you already use `update_interval`. |
+| `program_update_interval` | optional, how often an unchanged value is re-asserted (default `5s`). Package vars share a global namespace with substitutions, so the name is specific on purpose. |
 
 | Template | Model |
 |---|---|

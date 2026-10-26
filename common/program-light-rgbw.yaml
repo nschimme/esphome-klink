@@ -8,7 +8,7 @@
 #   name             the display name prefix of every entity, e.g. "Desk strip"
 #   lights           a YAML LIST of the ESPHome light ids this program drives, e.g. [desk_strip].
 #                    Keep it unquoted: a quoted "[desk_strip]" would be a string, not a list.
-#   update_interval  optional, how often an unchanged value is re-asserted (same default as the
+#   program_update_interval  optional, how often an unchanged value is re-asserted (same default as the
 #                    schema, 5s)
 #
 # Example (any RGBW light in your config, here `desk_strip`):
@@ -28,7 +28,7 @@
 # No K-Link bus is needed for the program itself, but this file still expects the `klink:` hub from
 # common/base.yaml (the entities attach to it) and the `local_time` clock that file defines.
 substitutions:
-  update_interval: 5s
+  program_update_interval: 5s
 
 klink:
   programs:
@@ -37,7 +37,7 @@ klink:
       model: rgbw
       lights: ${lights}
       time_id: local_time
-      update_interval: ${update_interval}
+      update_interval: ${program_update_interval}
 
 # The daily program: "HH:MM int=0-255 w=0-255 r=0-100 g=0-100 b=0-100" per point (any subset of
 # channels, the rest 0), or "off". A gentle day: dim warm mornings, a little daylight, a soft
