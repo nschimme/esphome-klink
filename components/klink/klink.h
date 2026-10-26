@@ -295,7 +295,7 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   }
 
  protected:
-  void output_(const uint8_t channels[5]) override { this->hub_->write_group(this->gid_, channels); }
+  void output_(const uint8_t channels[5]) override;
   bool repeat_held_value_() const override { return true; }
   bool effect_active() const override { return this->state_ != nullptr && this->state_->get_current_effect_index() != 0; }
   std::string effect_name() const override { return std::string(this->state_->get_effect_name()); }
@@ -313,6 +313,14 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   GroupModel model_{GroupModel::TUNA_SUN};
   light::LightState *state_{nullptr};  // the light, remembered from write_state
   bool ignored_initial_{false};
+  // Program/Off output shown on the light entity, so Home Assistant sees the group as on and at the
+  // level the schedule sets (an off-looking light hides its controls and effects in Home Assistant).
+  void publish_to_light_(const uint8_t channels[5]);
+  bool is_own_publish_(light::LightState *state) const;
+  bool have_published_{false};
+  bool published_on_{false};
+  float published_brightness_{0.0f};
+  float published_mireds_{0.0f};
 };
 
 // A 0-100% control for UI3, UI4 or UI5 of one group.

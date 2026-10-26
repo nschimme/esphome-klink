@@ -582,6 +582,60 @@ void KLinkGroup::manual_levels(light::LightState *state, uint8_t &level, uint8_t
   color = static_cast<uint8_t>(std::lround(t * 255.0f));
 }
 
+void KLinkGroup::output_(const uint8_t channels[5]) {
+  this->hub_->write_group(this->gid_, channels);
+  // Only what the schedule or Off mode sends is mirrored onto the light entity: a held manual value
+  // is already what the light says, and previews and effects are transient.
+  if (this->mode_.mode == kk::Mode::PROGRAM || this->mode_.mode == kk::Mode::OFF)
+    this->publish_to_light_(channels);
+}
+
+void KLinkGroup::publish_to_light_(const uint8_t channels[5]) {
+  if (this->state_ == nullptr || this->effect_active())
+    return;
+  const bool on = channels[0] > 0;
+  const float brightness = channels[0] / 255.0f;
+  float mireds = this->published_mireds_;
+  if (on && this->has_color_temperature()) {
+    // The inverse of manual_levels(): UI2 = 0 is the warm end when invert_color_ is set.
+    float t = channels[1] / 255.0f;
+    if (this->invert_color_)
+      t = 1.0f - t;
+    mireds = this->cold_mireds_ + t * (this->warm_mireds_ - this->cold_mireds_);
+  }
+  if (this->have_published_ && on == this->published_on_ && std::fabs(brightness - this->published_brightness_) < 0.002f &&
+      (!on || !this->has_color_temperature() || std::fabs(mireds - this->published_mireds_) < 0.2f))
+    return;
+  this->have_published_ = true;
+  this->published_on_ = on;
+  this->published_brightness_ = brightness;
+  this->published_mireds_ = mireds;
+  auto call = this->state_->make_call();
+  call.set_state(on);
+  if (on) {
+    call.set_brightness(brightness);
+    if (this->has_color_temperature())
+      call.set_color_temperature(mireds);
+  }
+  call.set_transition_length(0);
+  call.set_save(false);
+  call.perform();  // write_state() runs from the light's loop and recognises this as our own value
+}
+
+// True when the light's values are the ones publish_to_light_() just set, within rounding.
+bool KLinkGroup::is_own_publish_(light::LightState *state) const {
+  if (!this->have_published_)
+    return false;
+  const auto &values = state->remote_values;
+  if (values.is_on() != this->published_on_)
+    return false;
+  if (!this->published_on_)
+    return true;
+  if (std::fabs(values.get_brightness() - this->published_brightness_) > 0.01f)
+    return false;
+  return !this->has_color_temperature() || std::fabs(values.get_color_temperature() - this->published_mireds_) <= 1.0f;
+}
+
 void KLinkGroup::write_state(light::LightState *state) {
   this->state_ = state;
   // The first call is the state restored at boot, not a user command: never let it override the
@@ -594,7 +648,13 @@ void KLinkGroup::write_state(light::LightState *state) {
   // the effect starts) would show up as a one-frame flash between two effect frames.
   if (state->get_current_effect_index() != 0)
     return;
+  // The schedule's own value shown on the light is not a user command.
+  if (this->mode_.mode != kk::Mode::MANUAL && this->is_own_publish_(state))
+    return;
   this->on_user_command_();
+  // The light now shows the user's value, so the schedule's next value must be shown again even if it
+  // equals the one published before.
+  this->have_published_ = false;
   uint8_t level, color;
   this->manual_levels(state, level, color);
   uint8_t channels[5] = {level, color, this->extras_[0], this->extras_[1], this->extras_[2]};

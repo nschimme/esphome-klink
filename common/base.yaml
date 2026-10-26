@@ -73,6 +73,31 @@ button:
 
 text_sensor:
   - { platform: klink, name: "Bus state", web_server: { sorting_group_id: bus } }
+  # Where to find the esphome-klink page: shown in Home Assistant (device page, diagnostics) and on the
+  # ESPHome page. The device also advertises it over mDNS as an _http service with path /klink.
+  - platform: template
+    name: "Open esphome-klink"
+    icon: mdi:calendar-edit
+    entity_category: diagnostic
+    update_interval: 60s
+    web_server: { sorting_group_id: bus }
+    lambda: |-
+      char buf[network::IP_ADDRESS_BUFFER_SIZE];
+      for (auto &address : network::get_ip_addresses()) {
+        if (address.is_set())
+          return std::string("http://") + address.str_to(buf) + "/klink";
+      }
+      return std::string();
+
+# Advertise the programming page to network browsers (Bonjour / mDNS service discovery).
+mdns:
+  services:
+    - service: _http
+      protocol: _tcp
+      port: 80
+      txt:
+        path: /klink
+        project: esphome-klink
 
 sensor:
   - { platform: klink, type: lamps, name: "Known lamps", web_server: { sorting_group_id: bus } }
