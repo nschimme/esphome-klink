@@ -1,11 +1,11 @@
 # CI for the esphome-klink external component.
 #
 # The shipped device configs pull the component from GitHub
-# (`external_components` in common/base.yaml, remote packages in examples/two-groups.yaml),
+# (`external_components` in common/base.yaml, remote packages in the examples),
 # which would test "main" instead of the commit under test. The jobs below therefore work on a
 # temporary copy of the tree (`ci-work/`) in which
 #   * common/base.yaml points external_components at this checkout, and
-#   * examples/two-groups.yaml includes the same files locally instead of downloading them.
+#   * the examples include the same files locally instead of downloading them (tools/ci_prepare.py).
 #
 # Why rewrite the block instead of adding an overlay config that packages the original?
 # ESPHome *appends* `external_components` lists coming from packages, it does not replace them,
@@ -115,6 +115,7 @@ jobs:
           - kessil-tuna-blue-esp32-s2.yaml
           - kessil-tuna-blue-esp32-s3.yaml
           - examples/two-groups.yaml
+          - examples/three-groups.yaml
     steps:
       - uses: actions/checkout@v4
 
@@ -133,76 +134,8 @@ jobs:
       - name: Prepare local-component workspace (ci-work/)
         run: |
           set -euo pipefail
-          rm -rf ci-work
-          mkdir -p ci-work
-          cp -R boards common components examples kessil-tuna-*.yaml ci-work/
-          python3 - <<'PY'
-          import base64
-          import pathlib
-          import re
-
-          work = pathlib.Path("ci-work")
-          components = (work / "components").resolve()
-          if not components.is_dir():
-              raise SystemExit(f"ci: missing component directory {components}")
-
-          # 1) Point common/base.yaml at the checked-out component instead of the git source.
-          #    (ESPHome appends external_components lists from packages, so an overlay config
-          #    would leave the git source active and load `klink` twice.)
-          base = work / "common" / "base.yaml"
-          text = base.read_text()
-          override = (
-              "# CI override (see .github/workflows/ci.yml): use the checked-out component.\n"
-              "external_components:\n"
-              "  - source:\n"
-              "      type: local\n"
-              f"      path: {components}\n"
-              "    components: [klink]\n"
-          )
-          text, count = re.subn(
-              r"(?m)^external_components:[ \t]*\n(?:[ \t]+\S.*\n)*", override, text
-          )
-          if count != 1:
-              raise SystemExit(
-                  "ci: expected exactly one external_components block in common/base.yaml"
-              )
-          base.write_text(text)
-
-          # 2) Rewrite the example's remote_package (url/files from GitHub) into local includes
-          #    of the same files, and put it at the root of the copy: ESPHome's !include may not
-          #    escape the config directory, so boards/ and common/ must be next to it.
-          example = work / "examples" / "two-groups.yaml"
-          text = example.read_text()
-          packages = (
-              "packages:\n"
-              "  board: !include boards/esp32-c6.yaml\n"
-              "  base: !include common/base.yaml\n"
-              "  tuna_sun: !include common/tuna-sun.yaml\n"
-              "  tuna_blue: !include common/tuna-blue.yaml\n"
-          )
-          text, count = re.subn(r"(?m)^packages:[ \t]*\n(?:[ \t]+\S.*\n)*", packages, text)
-          if count != 1:
-              raise SystemExit("ci: expected exactly one packages block in examples/two-groups.yaml")
-          (work / "two-groups.yaml").write_text(text)
-          example.unlink()
-
-
-          # 3) Dummy secrets for every !secret reference in the copies (secrets.yaml is
-          #    gitignored). Nothing is flashed from CI, so bogus values are fine; 32-byte
-          #    base64 is used for anything that looks like a key.
-          names = set()
-          for path in work.rglob("*.yaml"):
-              names.update(re.findall(r"!secret\s+([A-Za-z0-9_]+)", path.read_text()))
-          lines = []
-          for name in sorted(names):
-              if "key" in name:
-                  value = base64.b64encode(b"0123456789abcdef0123456789abcdef").decode()
-              else:
-                  value = "ci-dummy-value"
-              lines.append(f'{name}: "{value}"')
-          (work / "secrets.yaml").write_text("".join(line + "\n" for line in lines))
-          print(f"ci: prepared ci-work/ with {len(names)} dummy secret(s)")
-          PY
+          python -m pip install pyyaml
+          python3 tools/ci_prepare.py
 
       - name: esphome config
         working-directory: ci-work
@@ -231,6 +164,7 @@ jobs:
           - config: kessil-tuna-sun-esp32-s2.yaml
           - config: kessil-tuna-blue-esp32-c6.yaml
           - config: kessil-tuna-blue-esp32-s3.yaml
+          - config: examples/three-groups.yaml
     steps:
       - uses: actions/checkout@v4
 
@@ -249,76 +183,8 @@ jobs:
       - name: Prepare local-component workspace (ci-work/)
         run: |
           set -euo pipefail
-          rm -rf ci-work
-          mkdir -p ci-work
-          cp -R boards common components examples kessil-tuna-*.yaml ci-work/
-          python3 - <<'PY'
-          import base64
-          import pathlib
-          import re
-
-          work = pathlib.Path("ci-work")
-          components = (work / "components").resolve()
-          if not components.is_dir():
-              raise SystemExit(f"ci: missing component directory {components}")
-
-          # 1) Point common/base.yaml at the checked-out component instead of the git source.
-          #    (ESPHome appends external_components lists from packages, so an overlay config
-          #    would leave the git source active and load `klink` twice.)
-          base = work / "common" / "base.yaml"
-          text = base.read_text()
-          override = (
-              "# CI override (see .github/workflows/ci.yml): use the checked-out component.\n"
-              "external_components:\n"
-              "  - source:\n"
-              "      type: local\n"
-              f"      path: {components}\n"
-              "    components: [klink]\n"
-          )
-          text, count = re.subn(
-              r"(?m)^external_components:[ \t]*\n(?:[ \t]+\S.*\n)*", override, text
-          )
-          if count != 1:
-              raise SystemExit(
-                  "ci: expected exactly one external_components block in common/base.yaml"
-              )
-          base.write_text(text)
-
-          # 2) Rewrite the example's remote_package (url/files from GitHub) into local includes
-          #    of the same files, and put it at the root of the copy: ESPHome's !include may not
-          #    escape the config directory, so boards/ and common/ must be next to it.
-          example = work / "examples" / "two-groups.yaml"
-          text = example.read_text()
-          packages = (
-              "packages:\n"
-              "  board: !include boards/esp32-c6.yaml\n"
-              "  base: !include common/base.yaml\n"
-              "  tuna_sun: !include common/tuna-sun.yaml\n"
-              "  tuna_blue: !include common/tuna-blue.yaml\n"
-          )
-          text, count = re.subn(r"(?m)^packages:[ \t]*\n(?:[ \t]+\S.*\n)*", packages, text)
-          if count != 1:
-              raise SystemExit("ci: expected exactly one packages block in examples/two-groups.yaml")
-          (work / "two-groups.yaml").write_text(text)
-          example.unlink()
-
-
-          # 3) Dummy secrets for every !secret reference in the copies (secrets.yaml is
-          #    gitignored). Nothing is flashed from CI, so bogus values are fine; 32-byte
-          #    base64 is used for anything that looks like a key.
-          names = set()
-          for path in work.rglob("*.yaml"):
-              names.update(re.findall(r"!secret\s+([A-Za-z0-9_]+)", path.read_text()))
-          lines = []
-          for name in sorted(names):
-              if "key" in name:
-                  value = base64.b64encode(b"0123456789abcdef0123456789abcdef").decode()
-              else:
-                  value = "ci-dummy-value"
-              lines.append(f'{name}: "{value}"')
-          (work / "secrets.yaml").write_text("".join(line + "\n" for line in lines))
-          print(f"ci: prepared ci-work/ with {len(names)} dummy secret(s)")
-          PY
+          python -m pip install pyyaml
+          python3 tools/ci_prepare.py
 
       - name: Cache slug for the config path
         id: slug
