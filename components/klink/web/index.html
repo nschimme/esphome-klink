@@ -241,7 +241,7 @@ function act(key,path,params,okMsg,after){
   });
 }
 function setWrites(on){
-  act('writes','/switch/send_to_lights/'+(on?'turn_on':'turn_off'),{},on?'Now sending to lights':'Stopped sending to lights',null);
+  act('writes',API+'/writes',{on:on?1:0},on?'Now sending to lights':'Stopped sending to lights',null);
 }
 function refresh(){
   if(fetching){again=true;return;}

@@ -38,6 +38,7 @@ class KLinkWeb : public AsyncWebHandler, public Component {
   void handle_name(AsyncWebServerRequest *request);
   void handle_copy(AsyncWebServerRequest *request);
   void handle_retry(AsyncWebServerRequest *request);
+  void handle_writes(AsyncWebServerRequest *request);
   void handle_scan(AsyncWebServerRequest *request);
 
   KLinkGroup *find_group(uint32_t gid);

@@ -66,6 +66,13 @@ class KLinkHub : public Component, public uart::UARTDevice {
   // refused enable request stays pending and is retried from loop() until the bus has been quiet.
   bool set_writes_enabled(bool enabled);
   bool writes_enabled() const { return writes_enabled_; }
+  // For the web page: same as the Send to lights switch, and keeps the switch entity in step. Returns
+  // false when enabling is still waiting for a quiet bus (the request stays pending).
+  bool set_writes_from_ui(bool enabled) {
+    bool ok = this->set_writes_enabled(enabled);
+    this->writes_cb_.call(this->writes_enabled_);
+    return ok;
+  }
   // Auto mode: ask for writes at boot and let the bus guard decide. While another controller (for
   // example the WiFi dongle) is heard the hub only shadows it; once the bus has been quiet it takes over by itself,
   // and a controller that shows up later stops it. Turning the Send to lights switch off ends auto

@@ -47,7 +47,7 @@ static bool is_post_route(const char *path) {
          std::strcmp(path, "/klink/point") == 0 || std::strcmp(path, "/klink/preview") == 0 ||
          std::strcmp(path, "/klink/preview/done") == 0 || std::strcmp(path, "/klink/assign") == 0 ||
          std::strcmp(path, "/klink/name") == 0 || std::strcmp(path, "/klink/copy") == 0 ||
-         std::strcmp(path, "/klink/retry") == 0 || std::strcmp(path, "/klink/scan") == 0;
+         std::strcmp(path, "/klink/retry") == 0 || std::strcmp(path, "/klink/writes") == 0 || std::strcmp(path, "/klink/scan") == 0;
 }
 
 // `request->arg()` returns std::string on the IDF server and an Arduino String on the Arduino one;
@@ -179,6 +179,10 @@ void KLinkWeb::handleRequest(AsyncWebServerRequest *request) {
     }
     if (std::strcmp(path, "/klink/retry") == 0) {
       this->handle_retry(request);
+      return;
+    }
+    if (std::strcmp(path, "/klink/writes") == 0) {
+      this->handle_writes(request);
       return;
     }
     if (std::strcmp(path, "/klink/scan") == 0) {
@@ -592,6 +596,15 @@ void KLinkWeb::handle_copy(AsyncWebServerRequest *request) {
     return;
   }
   this->send_ok(request);
+}
+
+// Send to lights on or off, like the switch entity (which exists even without the web_server component).
+void KLinkWeb::handle_writes(AsyncWebServerRequest *request) {
+  bool on;
+  if (!this->read_bool_arg(request, "on", on))
+    return;
+  bool ok = this->hub_->set_writes_from_ui(on);
+  send_json(request, 200, ok ? "{\"ok\":true}" : "{\"ok\":true,\"pending\":true}");
 }
 
 void KLinkWeb::handle_retry(AsyncWebServerRequest *request) {

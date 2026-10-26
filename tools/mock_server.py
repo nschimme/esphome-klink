@@ -10,7 +10,6 @@ components/klink/klink_web.cpp with fixed state. Stdlib only:
 
 Mock-only helpers (not part of the firmware API):
     POST /klink/_mock/writes?on=0|1         toggle "Send to lights" for the API
-    POST /switch/send_to_lights/turn_on|turn_off   ESPHome switch endpoints the page also uses
 """
 
 import argparse
@@ -47,6 +46,7 @@ POST_ROUTES = (
     "/klink/copy",
     "/klink/retry",
     "/klink/scan",
+    "/klink/writes",
 )
 
 
@@ -492,7 +492,16 @@ def handle_mock_writes(query):
     BUS["scan_note"] = ""
 
 
+def handle_writes(query):
+    value = query.get("on", [None])[0]
+    if value not in ("0", "1", "true", "false"):
+        raise HttpError(400, "invalid parameter: on")
+    BUS["writes"] = value in ("1", "true")
+    BUS["scan_note"] = ""
+
+
 ROUTES = {
+    "/klink/writes": handle_writes,
     "/klink/mode": handle_mode,
     "/klink/identify": handle_identify,
     "/klink/point": handle_point,
