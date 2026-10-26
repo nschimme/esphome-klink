@@ -83,6 +83,13 @@ jobs:
       - name: Page assembler tests
         run: python3 tests/test_web_build.py
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Program editor tests
+        run: node tests/web/run.js
+
       - name: Page size budget
         run: python3 components/klink/web_build.py --check
 

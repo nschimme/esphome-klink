@@ -25,13 +25,23 @@ function req(path,params,method){
       });
     });
 }
-function toast(msg,kind){
+function toast(msg,kind,actionLabel,actionFn){
   var wrap=byId('toasts');
   var t=document.createElement('div');
   t.className=kind==='err'?'toast err':'toast';
-  t.textContent=msg;
+  if(actionLabel&&actionFn){
+    var tx=document.createElement('span');tx.textContent=msg;t.appendChild(tx);
+    var b=makeButton(actionLabel,'toast-act');
+    b.addEventListener('click',function(){
+      if(t.parentNode)t.parentNode.removeChild(t);
+      actionFn();
+    });
+    t.appendChild(b);
+  }else{
+    t.textContent=msg;
+  }
   wrap.appendChild(t);
-  setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t);},kind==='err'?6000:3500);
+  setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t);},(kind==='err'||actionLabel)?6000:3500);
 }
 function setText(el,text){if(el.textContent!==text)el.textContent=text;}
 function updateBusy(){
@@ -418,6 +428,7 @@ function render(){
 }
 function showTab(name){
   if(TABS.indexOf(name)<0) name='dashboard';
+  var prev=document.body.getAttribute('data-tab');
   for(var i=0;i<TABS.length;i++){
     var t=TABS[i],on=t===name;
     var b=byId('tab-'+t+'-btn'),p=byId('tab-'+t);
@@ -426,6 +437,7 @@ function showTab(name){
     p.hidden=!on;
   }
   document.body.setAttribute('data-tab',name);
+  if(name==='program'&&prev!=='program'&&state)setBases(state);
 }
 function tabFromHash(){
   var h=location.hash.replace(/^#/,'');
@@ -466,7 +478,8 @@ var PRESETS=[
   ['Always on',[[0,100,90]]],
   ['Moonlight',[[0,20,0]]]
 ];
-var P={gid:loadGid(),slots:[],sel:0,ch:0,scrub:-1,drag:false,dirty:0};
+var P={gid:loadGid(),slots:[],sel:0,ch:0,scrub:-1,drag:false,dirty:0,
+  dev:{},hist:{},arm:false,guide:null,basesInit:false};
 var pg=null,dragPid=null;
 var pvT=0,pvBusy=false,pvPend=null;
 function mk(tag,cls,parent,text){
@@ -510,6 +523,102 @@ function cv(g,c,v){var mx=g.max&&typeof g.max[c]==='number'?g.max[c]:255;return 
 function vc(g,c,p){var mx=g.max&&typeof g.max[c]==='number'?g.max[c]:255;return mx===255?Math.round(p*255/100):Math.round(p);}
 function cloneSlots(a){var o=[],i;for(i=0;i<a.length;i++)o.push({minute:a[i].minute,ch:a[i].ch.slice(),enabled:!!a[i].enabled});return o;}
 function lerp(a,b,e,s){var d=(b-a)*e;return a+(d>=0?Math.floor(d/s):-Math.floor((-d+s-1)/s));}
+/* ---- history, device mirror and writes ---- */
+function hist(gid){
+  gid=gid==null?P.gid:gid;
+  var h=P.hist[gid];
+  if(!h)h=P.hist[gid]={undo:[],redo:[],base:null,last:null};
+  return h;
+}
+function slotDiff(a,b,g){
+  if(!a||!b)return true;
+  if(a.minute!==b.minute||!!a.enabled!==!!b.enabled)return true;
+  for(var c=0;c<5;c++)if(hasCh(g,c)&&a.ch[c]!==b.ch[c])return true;
+  return false;
+}
+function slotsEqual(a,b,g){
+  if(!a||!b||a.length!==b.length)return false;
+  for(var i=0;i<a.length;i++)if(slotDiff(a[i],b[i],g))return false;
+  return true;
+}
+function setBases(s){
+  if(!s||!s.groups)return;
+  for(var i=0;i<s.groups.length;i++)hist(s.groups[i].gid).base=cloneSlots(s.groups[i].slots);
+}
+/* Remember what the device holds, from a state poll or from a write that succeeded. */
+function applyDev(gid,slot,params){
+  var d=P.dev[gid];
+  if(!d||!d[slot])return;
+  if(params.minute!=null)d[slot].minute=params.minute;
+  if(params.enabled!=null)d[slot].enabled=!!params.enabled;
+  for(var c=0;c<5;c++){
+    var k='c'+(c+1);
+    if(params[k]!=null)d[slot].ch[c]=params[k];
+  }
+}
+function pushUndo(kind,slot){
+  var h=hist(),now=Date.now();
+  if(kind&&h.last&&h.last.kind===kind&&h.last.slot===slot&&now-h.last.t<1000){
+    h.last.t=now;return;
+  }
+  h.undo.push(cloneSlots(P.slots));
+  if(h.undo.length>50)h.undo.shift();
+  h.redo=[];
+  h.last=kind?{kind:kind,slot:slot,t:now}:null;
+  syncToolbar();
+}
+function undo(){
+  var h=hist();
+  if(!pg||!pg.g||!h.undo.length)return;
+  h.redo.push(cloneSlots(P.slots));
+  if(h.redo.length>50)h.redo.shift();
+  var snap=h.undo.pop();
+  h.last=null;
+  writeSlots(snap);
+}
+function redo(){
+  var h=hist();
+  if(!pg||!pg.g||!h.redo.length)return;
+  h.undo.push(cloneSlots(P.slots));
+  if(h.undo.length>50)h.undo.shift();
+  var snap=h.redo.pop();
+  h.last=null;
+  writeSlots(snap);
+}
+/* POST only the slots that differ from what the device holds, one after another. */
+function writeSlots(target){
+  var g=pg&&pg.g;
+  if(!g)return Promise.resolve(false);
+  var gid=g.gid,i,c;
+  if(!P.dev[gid])P.dev[gid]=cloneSlots(P.slots);
+  var dev=P.dev[gid];
+  P.slots=cloneSlots(target);
+  P.dirty=Date.now();
+  if(P.sel<0||P.sel>=P.slots.length)P.sel=0;
+  pg.drawn='';
+  draw();updatePanel(g);syncToolbar();
+  var chain=Promise.resolve();
+  for(i=0;i<P.slots.length;i++)(function(i){
+    chain=chain.then(function(){
+      if(!dev[i])dev[i]={minute:0,ch:[0,0,0,0,0],enabled:false};
+      var t=P.slots[i];
+      if(!slotDiff(t,dev[i],g))return;
+      var params={gid:gid,slot:i+1,minute:t.minute,enabled:t.enabled?1:0};
+      for(c=0;c<5;c++)if(hasCh(g,c))params['c'+(c+1)]=t.ch[c];
+      return req(API+'/point',params).then(function(){applyDev(gid,i,params);});
+    });
+  })(i);
+  return chain.then(function(){
+    P.dirty=Date.now();
+    pg.drawn='';
+    draw();updatePanel(g);syncToolbar();
+    return true;
+  },function(e){
+    toast(e.message||'Could not update the program','err');
+    refresh();
+    return false;
+  });
+}
 function loadGid(){try{return parseInt(localStorage.getItem('klink.prog.gid'),10)||0;}catch(e){return 0;}}
 function saveGid(v){try{localStorage.setItem('klink.prog.gid',String(v));}catch(e){}}
 function onList(){
@@ -548,8 +657,11 @@ function pvDone(){
   if(pvPend&&!pvT)pvT=setTimeout(function(){pvT=0;pvRun();},120);
 }
 function pvPoint(slot,params,now){
-  params.gid=P.gid;params.slot=slot+1;
-  pvSend(function(){return req(API+'/point',params);},now);
+  var gid=P.gid;
+  params.gid=gid;params.slot=slot+1;
+  pvSend(function(){
+    return req(API+'/point',params).then(function(r){applyDev(gid,slot,params);return r;});
+  },now);
 }
 function plotPt(ev){
   var r=pg.svg.getBoundingClientRect();
@@ -565,53 +677,108 @@ function px(q,m){return q.l+m/1440*q.pw;}
 function py(q,p){return q.t+(100-p)/100*q.ph;}
 function chooseGroup(gid){
   if(gid===P.gid)return;
-  P.gid=gid;saveGid(gid);P.sel=0;P.scrub=-1;P.dirty=0;P.drag=false;
-  if(pg){pg.lsig='';pg.drawn='';}
+  P.gid=gid;saveGid(gid);P.sel=0;P.scrub=-1;P.dirty=0;P.drag=false;P.guide=null;
+  hist().last=null;
+  if(pg){pg.lsig='';pg.drawn='';setArm(false);}
   if(state)renderProgram(state);
 }
 function setTime(v){
   var m=/^(\d{1,2}):(\d{1,2})/.exec(v||''),s=P.slots[P.sel];
   if(!m||!s)return;
-  s.minute=cl(parseInt(m[1],10)*60+parseInt(m[2],10),0,1439);
+  var nm=cl(parseInt(m[1],10)*60+parseInt(m[2],10),0,1439);
+  if(nm===s.minute)return;
+  pushUndo('time',P.sel);
+  s.minute=nm;
   P.dirty=Date.now();
   pvPoint(P.sel,{minute:s.minute});
-  pg.drawn='';draw();updatePanel(pg.g);
+  pg.drawn='';draw();updatePanel(pg.g);syncToolbar();
 }
 function setChan(c,pct){
   var g=pg.g,s=P.slots[P.sel];
   if(!g||!s)return;
   pct=cl(isNaN(pct)?0:pct,0,100);
-  s.ch[c]=vc(g,c,pct);
+  var val=vc(g,c,pct);
+  if(val===s.ch[c])return;
+  pushUndo('ch'+c,P.sel);
+  s.ch[c]=val;
   P.dirty=Date.now();
   var params={minute:s.minute};
   params['c'+(c+1)]=s.ch[c];
   pvPoint(P.sel,params);
-  pg.drawn='';draw();updatePanel(g);
+  pg.drawn='';draw();updatePanel(g);syncToolbar();
 }
-function addPoint(i){
-  var g=pg.g,s=P.slots[i];
-  if(!g||!s)return;
-  var m=g.now_minute>=0?g.now_minute:(s.minute||720);
+function freeSlot(){
+  for(var i=0;i<P.slots.length;i++)if(!P.slots[i].enabled)return i;
+  return -1;
+}
+function minuteAtX(t){
+  return cl(Math.round((t.x-t.q.l)/t.q.pw*1440/5)*5,0,1439);
+}
+function setArm(on){
+  P.arm=!!on;
+  if(P.arm&&P.guide==null){
+    var gm=(pg.g&&pg.g.now_minute>=0)?pg.g.now_minute:720;
+    P.guide=cl(Math.round(gm/5)*5,0,1439);
+  }
+  if(pg){
+    pg.chart.className=P.arm?'placing':'';
+    pg.armRow.hidden=!P.arm;
+    setText(pg.addBtn,P.arm?'Tap the chart where the point should go':'+ Add point');
+    syncToolbar();
+  }
+  if(P.arm){
+    pg.drawn='';draw();
+    try{pg.chart.focus();}catch(e){}
+    announceGuide();
+  }else{
+    pg.drawn='';draw();
+  }
+}
+function announceGuide(){
+  if(pg&&pg.live&&P.guide!=null)setText(pg.live,'Guide at '+hhmm(P.guide));
+}
+function setGuide(m){
+  m=cl(m,0,1439);
+  if(P.guide===m)return;
+  P.guide=m;
+  announceGuide();
+  pg.drawn='';draw();
+}
+function placePointAt(m){
+  var g=pg&&pg.g;
+  if(!g)return false;
+  m=cl(m,0,1439);
+  var on=onList(),i,d;
+  for(i=0;i<on.length;i++){
+    d=Math.abs(on[i].p.minute-m);
+    d=Math.min(d,1440-d);
+    if(d<=5){toast('There is already a point at '+hhmm(on[i].p.minute),'err');return false;}
+  }
+  var slot=freeSlot();
+  if(slot<0){toast('All '+P.slots.length+' points are used. Remove one to add another.','err');return false;}
   var v=interp(P.slots,m)||[0,0,0,0,0];
+  pushUndo();
+  var s=P.slots[slot];
   s.minute=m;s.ch=v.slice();s.enabled=true;
-  P.sel=i;P.dirty=Date.now();
-  var params={minute:m,enabled:1},c;
-  for(c=0;c<5;c++)if(hasCh(g,c))params['c'+(c+1)]=s.ch[c];
-  pvPoint(i,params,true);
-  pg.drawn='';draw();updatePanel(g);syncUnused();
+  P.sel=slot;
+  setArm(false);
+  writeSlots(P.slots);
+  try{pg.chart.scrollIntoView({block:'nearest'});}catch(e){}
+  return true;
 }
 function removePoint(i){
-  var s=P.slots[i];
-  if(!s||!s.enabled)return;
+  var s=P.slots[i],g=pg&&pg.g;
+  if(!g||!s||!s.enabled)return;
   if(onCount()<=1){toast('Keep at least one point in the program','err');return;}
+  pushUndo();
   s.enabled=false;
   P.dirty=Date.now();
-  pvPoint(i,{minute:s.minute,enabled:0},true);
   for(var k=1;k<=P.slots.length;k++){
     var j=(i+k)%P.slots.length;
     if(P.slots[j].enabled){P.sel=j;break;}
   }
-  pg.drawn='';draw();updatePanel(pg.g);syncUnused();
+  writeSlots(P.slots);
+  toast('Point removed','ok','Undo',undo);
 }
 function askPreset(pre){
   pg.pending=pre;
@@ -621,28 +788,22 @@ function askPreset(pre){
 function applyPreset(pre){
   var g=pg.g;
   if(!g)return;
-  var pts=pre[1],chain=Promise.resolve(),i;
+  var pts=pre[1],target=cloneSlots(P.slots),i,c;
   if(pts.length>P.slots.length){toast('This model has fewer points than the preset needs','err');return;}
-  toast('Applying preset…','ok');
-  for(i=0;i<P.slots.length;i++){
-    (function(i){
-      var p=pts[i];
-      chain=chain.then(function(){
-        var s=P.slots[i],params={gid:g.gid,slot:i+1,minute:p?p[0]:0,enabled:p?1:0},c;
-        for(c=0;c<5;c++)if(hasCh(g,c))params['c'+(c+1)]=p?vc(g,c,c===0?p[1]:c===1?p[2]:0):0;
-        return req(API+'/point',params).then(function(){
-          s.minute=params.minute;s.enabled=!!p;
-          for(c=0;c<5;c++)s.ch[c]=(p&&hasCh(g,c))?params['c'+(c+1)]:0;
-        });
-      });
-    })(i);
+  for(i=0;i<target.length;i++){
+    var p=pts[i],s=target[i];
+    if(p){
+      s.minute=p[0];s.enabled=true;
+      for(c=0;c<5;c++)s.ch[c]=hasCh(g,c)?vc(g,c,c===0?p[1]:c===1?p[2]:0):0;
+    }else{
+      s.minute=0;s.enabled=false;
+      for(c=0;c<5;c++)s.ch[c]=0;
+    }
   }
-  chain.then(function(){
-    toast('Program replaced','ok');
-    P.dirty=Date.now();pg.drawn='';draw();refresh();
-  },function(e){
-    toast(e.message||'Could not apply the preset','err');
-    refresh();
+  pushUndo();
+  toast('Applying preset…','ok');
+  writeSlots(target).then(function(ok){
+    if(ok)toast('Program replaced','ok','Undo',undo);
   });
 }
 function moveDrag(t){
@@ -657,12 +818,18 @@ function moveDrag(t){
   var params={minute:s.minute};
   params['c'+(P.ch+1)]=s.ch[P.ch];
   pvPoint(P.sel,params);
-  pg.drawn='';draw();updatePanel(g);
+  pg.drawn='';draw();updatePanel(g);syncToolbar();
 }
 function onDown(ev){
   var g=pg.g;
   if(!g||ev.button>0)return;
-  var t=plotPt(ev),q=t.q,on=onList(),best=-1,bd=26,i;
+  var t=plotPt(ev),q=t.q;
+  if(P.arm){
+    ev.preventDefault();
+    placePointAt(minuteAtX(t));
+    return;
+  }
+  var on=onList(),best=-1,bd=26,i;
   for(i=0;i<on.length;i++){
     var dx=px(q,on[i].p.minute)-t.x,dy=py(q,cv(g,P.ch,on[i].p.ch[P.ch]))-t.y;
     var d=Math.sqrt(dx*dx+dy*dy);
@@ -670,6 +837,7 @@ function onDown(ev){
   }
   if(best<0||!hasCh(g,P.ch))return;
   ev.preventDefault();
+  pushUndo();
   try{pg.svg.setPointerCapture(ev.pointerId);}catch(e){}
   dragPid=ev.pointerId;
   P.sel=best;P.drag=true;P.dirty=Date.now();
@@ -677,6 +845,11 @@ function onDown(ev){
   moveDrag(t);
 }
 function onMove(ev){
+  if(!pg||!pg.g)return;
+  if(P.arm){
+    setGuide(minuteAtX(plotPt(ev)));
+    return;
+  }
   if(!P.drag||ev.pointerId!==dragPid)return;
   ev.preventDefault();
   moveDrag(plotPt(ev));
@@ -690,6 +863,7 @@ function onUp(ev){
   pg.drawn='';draw();
 }
 function onKey(ev){
+  if(P.arm)return;
   var t=ev.target,ds=t&&t.getAttribute?t.getAttribute('data-slot'):null;
   if(ds==null)return;
   var idx=parseInt(ds,10),s=P.slots[idx],g=pg.g;
@@ -697,12 +871,14 @@ function onKey(ev){
   var chg=null;
   if(ev.key==='ArrowLeft'||ev.key==='ArrowRight'){
     var dm=ev.shiftKey?1:5;
+    pushUndo('minute',idx);
     s.minute=cl(s.minute+(ev.key==='ArrowRight'?dm:-dm),0,1439);
     chg={minute:s.minute};
   }else if(ev.key==='ArrowUp'||ev.key==='ArrowDown'){
     if(!hasCh(g,P.ch))return;
     var dc=ev.shiftKey?5:1;
     var pc=cl(cv(g,P.ch,s.ch[P.ch])+(ev.key==='ArrowUp'?dc:-dc),0,100);
+    pushUndo('ch'+P.ch,idx);
     s.ch[P.ch]=vc(g,P.ch,pc);
     chg={minute:s.minute};chg['c'+(P.ch+1)]=s.ch[P.ch];
   }else if(ev.key==='Delete'||ev.key==='Backspace'){
@@ -711,7 +887,7 @@ function onKey(ev){
   ev.preventDefault();
   P.sel=idx;P.dirty=Date.now();
   pvPoint(idx,chg);
-  pg.drawn='';draw();updatePanel(g);
+  pg.drawn='';draw();updatePanel(g);syncToolbar();
 }
 function buildProg(){
   var root=byId('prog-root');
@@ -727,11 +903,42 @@ function buildProg(){
   var pd=makeButton('Done','btn small');
   pd.addEventListener('click',function(){if(pg.g)act('pvd',API+'/preview/done',{gid:pg.g.gid},'Preview closed',null);});
   pg.preview.appendChild(pd);
+  pg.tools=mk('div','ptools',root);
+  pg.addBtn=makeButton('+ Add point','btn small primary');
+  pg.removeBtn=makeButton('Remove point','btn small');
+  pg.undoBtn=makeButton('Undo','btn small');
+  pg.redoBtn=makeButton('Redo','btn small');
+  pg.revertBtn=makeButton('Revert all','btn small danger');
+  pg.undoBtn.setAttribute('aria-keyshortcuts','Control+Z');
+  pg.redoBtn.setAttribute('aria-keyshortcuts','Control+Shift+Z Control+Y');
+  pg.tools.appendChild(pg.addBtn);pg.tools.appendChild(pg.removeBtn);
+  pg.tools.appendChild(pg.undoBtn);pg.tools.appendChild(pg.redoBtn);
+  pg.tools.appendChild(pg.revertBtn);
+  pg.armRow=mk('div','armrow',root);
+  pg.armRow.hidden=true;
+  mk('span',null,pg.armRow,'Arrow keys move the guide. Enter places the point, Esc cancels.');
+  pg.cancelArm=makeButton('Cancel','btn small');
+  pg.armRow.appendChild(pg.cancelArm);
+  pg.allHint=mk('p','hint',root);
+  pg.allHint.hidden=true;
+  mk('p','hint',root,'Changes apply to your lights right away. Undo or Revert all if you change your mind.');
+  pg.revertConfirm=mk('div','confirm',root);
+  pg.revertConfirm.hidden=true;
+  pg.revertText=mk('span',null,pg.revertConfirm,'Discard all changes since you opened this tab?');
+  pg.revertYes=makeButton('Revert','btn small primary');
+  pg.revertNo=makeButton('Keep editing','btn small');
+  pg.revertConfirm.appendChild(pg.revertYes);
+  pg.revertConfirm.appendChild(pg.revertNo);
+  pg.live=mk('p','sr',root);
+  pg.live.setAttribute('aria-live','polite');
+  pg.live.setAttribute('aria-atomic','true');
   var wrap=mk('div','pwrap',root);
   var left=mk('div',null,wrap);
   var box=mk('div','chartbox',left);
   pg.chart=mk('div',null,box);
   pg.chart.id='prog-chart';
+  pg.chart.tabIndex=0;
+  pg.chart.setAttribute('aria-label','Daily program chart. Add a point to choose a time.');
   pg.svg=document.createElementNS(NS,'svg');
   pg.svg.setAttribute('role','group');
   pg.svg.setAttribute('aria-label','Daily program curve');
@@ -740,8 +947,6 @@ function buildProg(){
   pg.legend=mk('div','legend',left);
   pg.legend.setAttribute('role','group');
   pg.legend.setAttribute('aria-label','Channels');
-  pg.unusedLabel=mk('p','section-label',left,'Unused points');
-  pg.unused=mk('div','unused',left);
   mk('p','section-label',left,'Scrub the day');
   pg.scrub=mk('input',null,left);
   pg.scrub.type='range';pg.scrub.min=0;pg.scrub.max=1439;pg.scrub.step=5;pg.scrub.value=0;
@@ -851,6 +1056,36 @@ function buildProg(){
   });
   pg.time.addEventListener('change',function(){setTime(pg.time.value);});
   pg.remove.addEventListener('click',function(){removePoint(P.sel);});
+  pg.addBtn.addEventListener('click',function(){setArm(!P.arm);});
+  pg.cancelArm.addEventListener('click',function(){setArm(false);pg.addBtn.focus();});
+  pg.removeBtn.addEventListener('click',function(){removePoint(P.sel);});
+  pg.undoBtn.addEventListener('click',undo);
+  pg.redoBtn.addEventListener('click',redo);
+  pg.revertBtn.addEventListener('click',function(){
+    if(!pg.revertConfirm.hidden)return;
+    pg.revertConfirm.hidden=false;
+    try{pg.revertYes.focus();}catch(e){}
+  });
+  pg.revertYes.addEventListener('click',function(){
+    pg.revertConfirm.hidden=true;
+    var h=hist();
+    if(!pg.g||!h.base)return;
+    pushUndo();
+    writeSlots(h.base);
+    toast('Reverted to the program you opened','ok');
+  });
+  pg.revertNo.addEventListener('click',function(){
+    pg.revertConfirm.hidden=true;
+    try{pg.revertBtn.focus();}catch(e){}
+  });
+  pg.chart.addEventListener('keydown',function(ev){
+    if(!P.arm)return;
+    var d=ev.shiftKey?1:5;
+    if(ev.key==='ArrowLeft'){ev.preventDefault();setGuide(P.guide-d);}
+    else if(ev.key==='ArrowRight'){ev.preventDefault();setGuide(P.guide+d);}
+    else if(ev.key==='Enter'||ev.key===' '){ev.preventDefault();placePointAt(P.guide);}
+    else if(ev.key==='Escape'){ev.preventDefault();setArm(false);pg.addBtn.focus();}
+  });
   pg.svg.addEventListener('pointerdown',onDown);
   pg.svg.addEventListener('pointermove',onMove);
   pg.svg.addEventListener('pointerup',onUp);
@@ -929,8 +1164,9 @@ function syncPanel(g){
 function updatePanel(g){
   g=g||pg.g;
   if(!g)return;
-  var s=P.slots[P.sel],on=s&&s.enabled,i;
-  setText(pg.ptitle,on?'Point '+(P.sel+1)+' of '+P.slots.length:'No point selected');
+  var s=P.slots[P.sel],on=s&&s.enabled,i,rank=0,ol=onList();
+  for(i=0;i<ol.length;i++)if(ol[i].i===P.sel)rank=i+1;
+  setText(pg.ptitle,on&&rank?'Point '+rank+' of '+ol.length:'No point selected');
   pg.time.disabled=!on;
   if(document.activeElement!==pg.time)pg.time.value=on?hhmm(s.minute):'';
   for(i=0;i<pg.chRows.length;i++){
@@ -956,19 +1192,22 @@ function updatePanel(g){
     else mk('span',null,pg.clbl,'CLR');
   }
 }
-function syncUnused(){
-  pg.unused.textContent='';
-  for(var i=0;i<P.slots.length;i++){
-    if(P.slots[i].enabled)continue;
-    (function(slot){
-      var b=makeButton('Point '+(slot+1),'btn small');
-      b.setAttribute('aria-label','Add a point in slot '+(slot+1));
-      b.addEventListener('click',function(){addPoint(slot);});
-      pg.unused.appendChild(b);
-    })(i);
-  }
-  pg.unused.hidden=!pg.unused.children.length;
-  pg.unusedLabel.hidden=pg.unused.hidden;
+function syncToolbar(){
+  if(!pg||!pg.tools)return;
+  var g=pg.g,h=hist(),i,free=0,all=P.slots.length;
+  for(i=0;i<all;i++)if(!P.slots[i].enabled)free++;
+  pg.addBtn.disabled=!g||free===0;
+  pg.addBtn.setAttribute('title',free===0?'All '+all+' points are used. Remove one to add another.':'Add a point at a time of day you choose');
+  pg.allHint.hidden=!(g&&free===0);
+  setText(pg.allHint,'All '+all+' points are used. Remove one to add another.');
+  pg.undoBtn.disabled=!h.undo.length;
+  pg.redoBtn.disabled=!h.redo.length;
+  var same=!g||!h.base||slotsEqual(P.slots,h.base,g);
+  pg.revertBtn.hidden=same;
+  pg.revertBtn.disabled=same;
+  if(same)pg.revertConfirm.hidden=true;
+  var s=P.slots[P.sel];
+  pg.removeBtn.disabled=!g||!s||!s.enabled;
 }
 function updateScrub(){
   var g=pg.g;
@@ -1010,7 +1249,7 @@ function draw(){
   var w=pg.svg.clientWidth,h=pg.svg.clientHeight;
   if(w<80||h<60)return;
   var q=geom(w,h);
-  var sig=JSON.stringify([P.slots,w,h,P.ch,g.now_minute,P.scrub,P.sel]);
+  var sig=JSON.stringify([P.slots,w,h,P.ch,g.now_minute,P.scrub,P.sel,P.arm,P.guide]);
   if(pg.drawn===sig)return;
   var focused=null,ae=document.activeElement;
   if(ae&&ae.getAttribute&&ae.getAttribute('data-slot')!=null)focused=ae.getAttribute('data-slot');
@@ -1067,13 +1306,19 @@ function draw(){
     var sx=px(q,P.scrub);
     se('line',{x1:sx,y1:q.t,x2:sx,y2:q.t+q.ph,stroke:'var(--accent)','stroke-width':1.5},svg);
   }
+  if(P.arm&&P.guide!=null){
+    var gx=px(q,P.guide);
+    se('line',{x1:gx,y1:q.t,x2:gx,y2:q.t+q.ph,stroke:'var(--focus)','stroke-width':2},svg);
+    var gt=se('text',{x:Math.min(w-20,Math.max(20,gx)),y:q.t+22,'text-anchor':'middle','font-size':11,fill:'var(--focus)'},svg);
+    gt.textContent=hhmm(P.guide);
+  }
   if(n&&hasCh(g,P.ch)){
     for(i=0;i<n;i++){
       var p=on[i].p,dx=px(q,p.minute),dy=py(q,cv(g,P.ch,p.ch[P.ch])),val=cv(g,P.ch,p.ch[P.ch]);
-      if(on[i].i===P.sel)se('circle',{cx:dx,cy:dy,r:12,fill:'none',stroke:'var(--fg)','stroke-width':1.5,'pointer-events':'none'},svg);
+      if(on[i].i===P.sel)se('circle',{cx:dx,cy:dy,r:13,fill:'none',stroke:'var(--fg)','stroke-width':2,'pointer-events':'none'},svg);
       se('circle',{cx:dx,cy:dy,r:7,fill:chCol(g,P.ch),stroke:'var(--card)','stroke-width':2,'pointer-events':'none'},svg);
       se('circle',{cx:dx,cy:dy,r:22,fill:'none','pointer-events':'all',tabindex:'0',role:'slider','data-slot':on[i].i,
-        'aria-label':'Point '+(on[i].i+1)+', '+hhmm(p.minute)+', '+g.labels[P.ch].toUpperCase()+' '+val+'%',
+        'aria-label':'Point '+(i+1)+' of '+n+', '+hhmm(p.minute)+', '+g.labels[P.ch].toUpperCase()+' '+val+'%',
         'aria-valuemin':'0','aria-valuemax':'100','aria-valuenow':val,
         'aria-valuetext':g.labels[P.ch].toUpperCase()+' '+val+'%'},svg);
     }
@@ -1103,13 +1348,18 @@ function renderProgram(s){
     pg.lsig='';pg.drawn='';
   }
   pg.g=g;pg.groups=gs;
-  if(!P.drag&&Date.now()-P.dirty>=1500)P.slots=cloneSlots(g.slots);
+  if(!P.basesInit){P.basesInit=true;setBases(s);}
+  if(!P.drag&&Date.now()-P.dirty>=1500){
+    P.slots=cloneSlots(g.slots);
+    P.dev[g.gid]=cloneSlots(g.slots);
+  }
+  if(!P.dev[g.gid])P.dev[g.gid]=cloneSlots(g.slots);
   if(P.sel<0||P.sel>=P.slots.length)P.sel=0;
   syncGroups(gs,g);
   syncPanel(g);
   updatePanel(g);
   markLegend();
-  syncUnused();
+  syncToolbar();
   updateScrub();
   syncCopy(g);
   pg.preview.hidden=g.mode!=='preview';
@@ -1124,6 +1374,25 @@ byId('scan-btn').addEventListener('click',function(){
 });
 byId('retry-btn').addEventListener('click',function(){
   act('retry',API+'/retry',{},'Retry requested',null);
+});
+document.addEventListener('keydown',function(ev){
+  if(!pg||!pg.g)return;
+  if(document.body.getAttribute('data-tab')!=='program')return;
+  if(!(ev.ctrlKey||ev.metaKey))return;
+  var t=ev.target||{},tag=(t.tagName||'').toLowerCase();
+  if(tag==='textarea'||tag==='select')return;
+  if(tag==='input'){
+    var ty=(t.type||'').toLowerCase();
+    if(ty==='text'||ty==='time'||ty==='number')return;
+  }
+  var k=(ev.key||'').toLowerCase();
+  if(k==='z'){
+    ev.preventDefault();
+    if(ev.shiftKey)redo();else undo();
+  }else if(k==='y'){
+    ev.preventDefault();
+    redo();
+  }
 });
 document.addEventListener('visibilitychange',function(){if(!document.hidden) refresh();});
 initTabs();
