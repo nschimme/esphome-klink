@@ -23,7 +23,18 @@ SUN_STOPS = []
 BLUE_STOPS = []
 
 # Channel overlays applied on top of the CLR base tint, in the group's label order.
-OVERLAYS = {"r": "#ff2a1a", "am": "#ffa000", "vio": "#7a3cff", "grn": "#22d36b"}
+# The light_* labels (g, b, ct, w) are not part of any Kessil colour model; the page uses them
+# for its own slider tracks and legend lines, and grn/g may share the same green.
+OVERLAYS = {
+    "r": "#ff2a1a",
+    "am": "#ffa000",
+    "vio": "#7a3cff",
+    "grn": "#22d36b",
+    "g": "#22d36b",
+    "b": "#2a5cff",
+    "ct": "#ffb46b",
+    "w": "#e4ebf1",
+}
 
 # CLR used when a group has no CLR channel (generic model, not rendered): the middle of the axis.
 MID_CLR = 128

@@ -164,7 +164,15 @@ function renderHeader(){
     pill.setAttribute('title',t);
   }
   byId('offline').hidden=!offline;
-  byId('writes-banner').hidden=!state||!!state.bus.writes;
+  /* Light programs are not on the K-Link bus: when they are all we have, the warning is noise. */
+  var anyLight=false,lightOnly=true,gs=state&&state.groups?state.groups:[];
+  for(var i=0;i<gs.length;i++){
+    if(gs[i].kind==='light') anyLight=true; else lightOnly=false;
+  }
+  byId('writes-banner').hidden=!state||!!state.bus.writes||(gs.length>0&&lightOnly);
+  if(state&&anyLight&&!lightOnly){
+    setText(byId('writes-text'),'Lamps on the K-Link bus are not being sent to yet. Light programs are still controlled here.');
+  }
   if(state){
     var w=!!state.bus.writes;
     setText(byId('writes-toggle'),w?'Turn off':'Turn on');
@@ -179,7 +187,8 @@ function makeCard(g){
   var head=document.createElement('div');head.className='card-head';
   var h2=document.createElement('h2');
   var badge=document.createElement('span');badge.className='badge';badge.textContent='Previewing';badge.hidden=true;
-  head.appendChild(h2);head.appendChild(badge);
+  var tag=document.createElement('span');tag.className='tag';tag.textContent='Light program';tag.hidden=true;
+  head.appendChild(h2);head.appendChild(tag);head.appendChild(badge);
   var status=document.createElement('p');status.className='status';
   var seg=document.createElement('div');seg.className='seg';seg.setAttribute('role','group');seg.setAttribute('aria-label','Mode');
   var modes=[['program','Program'],['manual','Manual'],['off','Off']];
@@ -209,14 +218,17 @@ function makeCard(g){
   card.appendChild(head);card.appendChild(status);card.appendChild(seg);
   card.appendChild(outLabel);card.appendChild(outRow);card.appendChild(rowline);card.appendChild(chips);
   byId('groups').appendChild(card);
-  return {el:card,name:h2,badge:badge,status:status,segButtons:buttons,out:out,dot:dot,find:find,count:count,chips:chips,chipEls:{}};
+  return {el:card,name:h2,badge:badge,tag:tag,status:status,segButtons:buttons,out:out,dot:dot,find:find,count:count,rowline:rowline,chips:chips,chipEls:{}};
 }
 function updateCard(g){
   var c=cards[g.gid];
   if(!c){c=makeCard(g);cards[g.gid]=c;}
   var mode=modeOf(g);
+  var light=g.kind==='light';
   setText(c.name,g.name||('Group '+g.gid));
+  c.tag.hidden=!light;
   c.badge.hidden=g.mode!=='preview';
+  c.rowline.hidden=light;
   setText(c.status,g.status||'');
   ['program','manual','off'].forEach(function(m){
     var b=c.segButtons[m],on=m===mode;
@@ -244,6 +256,7 @@ function updateCard(g){
     c.find.appendChild(document.createTextNode('Find these lamps'));
   }
   var n=g.lamps?g.lamps.length:0;
+  c.chips.hidden=light;
   setText(c.count,n===1?'1 lamp':n+' lamps');
   var seen={},i,kid,chip;
   if(g.lamps) for(i=0;i<g.lamps.length;i++){
@@ -644,9 +657,20 @@ function se(tag,attrs,parent){
 function cl(v,a,b){return v<a?a:v>b?b:v;}
 function hhmm(m){return m<0?'--:--':('0'+Math.floor(m/60)).slice(-2)+':'+('0'+m%60).slice(-2);}
 /* Each channel keeps its own colour: red is red, amber is amber, green is green, violet is violet. */
-function chCol(g,c){var l=g.labels&&g.labels[c];return 'var(--k-'+(/^(int|clr|vio|r|am|grn)$/.test(l||'')?l:'int')+')';}
+function chCol(g,c){var l=g.labels&&g.labels[c];return 'var(--k-'+(/^(int|clr|vio|r|am|grn|g|b|ct|w)$/.test(l||'')?l:'int')+')';}
 function hasCh(g,c){return !!(g.labels&&g.labels[c]);}
+function isLight(g){return !!(g&&/^light_/.test(g.model||''));}
 function hx(h){return [parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];}
+function rgbHex(o){
+  return '#'+o.map(function(x){return('0'+Math.round(cl(x,0,255)).toString(16)).slice(-2);}).join('');
+}
+/* Warm (UI2 = 0) to cool (UI2 = 255) tint used by CT swatches and the strip. */
+var CTC=['#ffb46b','#cfe4ff'];
+function ctRGB(v){
+  var f=cl(v,0,255)/255,a=hx(CTC[0]),b=hx(CTC[1]),o=[];
+  for(var k=0;k<3;k++)o[k]=a[k]+(b[k]-a[k])*f;
+  return o;
+}
 /* The colour-strip gradient, also used for the CLR channel track. */
 function stripGradient(model){
   var st=model==='tuna_blue'?KCOL.blue:KCOL.sun;
@@ -656,26 +680,49 @@ function stripGradient(model){
 function trackGradient(g,c){
   var l=g.labels&&g.labels[c];
   if(l==='clr') return stripGradient(g.model);
+  if(l==='ct') return 'linear-gradient(to right,'+CTC[0]+','+CTC[1]+')';
   if(l&&KCOL.ov[l]) return 'linear-gradient(to right,#1b232b,'+KCOL.ov[l]+')';
   return 'linear-gradient(to right,#1b232b,#ffffff)';
 }
-/* Approximate lamp colour for raw channel values, from our own model (KCOL). */
+/* Approximate lamp colour for raw channel values, from our own model (KCOL) or the light channels. */
 function swatchColor(g,ch){
   if(!g||!ch)return '';
-  var st=g.model==='tuna_sun'?KCOL.sun:g.model==='tuna_blue'?KCOL.blue:0;
+  var L=g.labels||[],m=g.model||'',k,o=[],i;
+  if(m==='light_rgb'||m==='light_rgbw'){
+    var kk=['r','g','b'];
+    for(k=0;k<3;k++){
+      i=L.indexOf(kk[k]);
+      o[k]=(i<0?0:cl(ch[i],0,100))*2.55;
+    }
+    if(m==='light_rgbw'){
+      var wf=L.indexOf('w')<0?0:cl(ch[L.indexOf('w')],0,255)/255;
+      for(k=0;k<3;k++)o[k]+=(255-o[k])*wf;
+    }
+    return rgbHex(o);
+  }
+  if(m==='light_ct'){
+    i=L.indexOf('ct');
+    return rgbHex(ctRGB(i<0?128:(ch[i]==null?128:ch[i])));
+  }
+  if(m==='light_brightness'){
+    i=L.indexOf('int');
+    var v=i<0?0:cl(ch[i]==null?0:ch[i],0,255);
+    return rgbHex([v,v,v]);
+  }
+  var st=m==='tuna_sun'?KCOL.sun:m==='tuna_blue'?KCOL.blue:0;
   if(!st)return '';
-  var L=g.labels||[],ci=L.indexOf('clr'),n=16;
-  var f=(ci<0?128:(ch[ci]==null?128:cl(ch[ci],0,255)))/255*n,i=Math.floor(f),t=f-i;
-  var a=hx(st[i]),b=hx(st[Math.min(n,i+1)]),o=[],k;
+  var ci=L.indexOf('clr'),n=16;
+  var f=(ci<0?128:(ch[ci]==null?128:cl(ch[ci],0,255)))/255*n,j=Math.floor(f),t=f-j;
+  var a=hx(st[j]),b=hx(st[Math.min(n,j+1)]);
   for(k=0;k<3;k++)o[k]=a[k]+(b[k]-a[k])*t;
   var O=['r','am','vio','grn'];
   for(k=0;k<4;k++){
-    var j=L.indexOf(O[k]);
-    if(j<0||ch[j]==null)continue;
-    var c=hx(KCOL.ov[O[k]]),m=.6*cl(ch[j],0,100)/100;
-    for(var q=0;q<3;q++)o[q]+=(c[q]-o[q])*m;
+    var q=L.indexOf(O[k]);
+    if(q<0||ch[q]==null)continue;
+    var c=hx(KCOL.ov[O[k]]),mm=.6*cl(ch[q],0,100)/100;
+    for(var z=0;z<3;z++)o[z]+=(c[z]-o[z])*mm;
   }
-  return '#'+o.map(function(x){return('0'+Math.round(cl(x,0,255)).toString(16)).slice(-2);}).join('');
+  return rgbHex(o);
 }
 /* ---- colour wheel (target colour -> nearest colour this lamp can make) ---- */
 function hsvRgb(h,s){
@@ -704,7 +751,14 @@ function parseColour(v){
   v=String(v||'').trim().replace(/^#/,'');
   return /^[0-9a-fA-F]{6}$/.test(v)?'#'+v.toLowerCase():'';
 }
-function wheelVisible(g){return !!(g&&(g.model==='tuna_sun'||g.model==='tuna_blue')&&hasCh(g,1));}
+/* What kind of colour control this model gets: snap wheel, direct disc, CT strip or none. */
+function pickKind(g){
+  if(!g)return '';
+  if(g.model==='tuna_sun'||g.model==='tuna_blue') return hasCh(g,1)?'snap':'';
+  if(g.model==='light_rgb'||g.model==='light_rgbw') return 'disc';
+  if(g.model==='light_ct') return 'ct';
+  return '';
+}
 function wheelCanEdit(){var s=P.slots[P.sel];return !!(pg&&pg.wheel&&!pg.pick.hidden&&s&&s.enabled);}
 function wheelCssSize(){
   var avail=pg&&pg.wheelbox?(pg.wheelbox.clientWidth||0):0;
@@ -759,7 +813,7 @@ function updateWheelStatus(){
   setText(pg.lampHex,W.lampHex||'—');
   setText(pg.wheelExact,exact===true?'Exact':exact===false?'Closest this lamp can make':'');
   pg.wheelExact.className='whint'+(exact===true?' exact':'');
-  setText(pg.wheelLive,W.lampHex?((exact===true?'Exact match ':'Closest this lamp can make: ')+W.lampHex):'');
+  setText(pg.wheelLive,pg.kind==='disc'?('Colour '+W.targetHex):(W.lampHex?((exact===true?'Exact match ':'Closest this lamp can make: ')+W.lampHex):''));
   if(document.activeElement!==pg.wheelHex&&pg.wheelHex)pg.wheelHex.value=W.targetHex;
 }
 function wheelSetTarget(hue,sat,hex){
@@ -775,19 +829,23 @@ function wheelFromLocal(g,s){
   var col=swatchColor(g,s?s.ch:null);
   if(!col)return;
   W.lampHex=col;W.exact=null;
+  if(pg.kind==='disc'){
+    var hsv=hexToHsv(col);
+    W.targetHue=hsv.h;W.targetSat=hsv.s;W.targetHex=hsvHex(hsv.h,hsv.s);
+  }
   updateWheelStatus();
   wheelDraw();
 }
 function wheelSync(g,s){
   if(!pg||!pg.wheel)return;
-  var key=g.gid+'|'+P.sel;
+  var key=g.gid+'|'+P.sel+'|'+pg.kind;
   if(W.key!==key){
     W.key=key;
     var col=swatchColor(g,s?s.ch:null)||'#ffffff';
     W.lampHex=col;
     var hsv=hexToHsv(col);
     W.targetHue=hsv.h;W.targetSat=hsv.s;W.targetHex=hsvHex(hsv.h,hsv.s);
-    W.exact=true;W.undoPushed=true;W.dragging=false;W.pid=null;
+    W.exact=pg.kind==='snap'?true:null;W.undoPushed=true;W.dragging=false;W.pid=null;
     updateWheelStatus();
   }
   wheelDraw();
@@ -860,7 +918,64 @@ function wheelPick(ev){
   var d=Math.sqrt(dx*dx+dy*dy);
   var sat=Math.min(1,d/Math.max(1,R));
   var hue=(Math.atan2(dy,dx)*180/Math.PI+360)%360;
-  wheelSetTarget(hue,sat);
+  return {hue:hue,sat:sat};
+}
+/* Direct RGB picker: hue/saturation only, the brightest channel becomes 100, INT is untouched. */
+function directApply(hue,sat){
+  var g=pg&&pg.g,s=P.slots[P.sel];
+  if(!g||!s)return;
+  var rgb=hsvRgb(hue,sat),mx=Math.max(rgb[0],rgb[1],rgb[2]),pct=[];
+  for(var k=0;k<3;k++)pct[k]=mx>0?Math.round(rgb[k]*100/mx):0;
+  var labels=g.labels||[],params={minute:s.minute},changed=false,updates=[];
+  [['r',0],['g',1],['b',2]].forEach(function(pair){
+    var c=labels.indexOf(pair[0]);
+    if(c<0)return;
+    var val=vc(g,c,pct[pair[1]]);
+    if(s.ch[c]!==val)changed=true;
+    updates.push([c,val]);
+    params['c'+(c+1)]=val;
+  });
+  if(changed){
+    if(!W.undoPushed){pushUndo(W.dragKind,P.sel);W.undoPushed=true;}
+    for(var u=0;u<updates.length;u++)s.ch[updates[u][0]]=updates[u][1];
+    P.dirty=Date.now();
+    pvPoint(P.sel,params);
+  }
+  W.targetHue=((hue%360)+360)%360;W.targetSat=cl(sat,0,1);
+  W.targetHex=hsvHex(W.targetHue,W.targetSat);W.lampHex=W.targetHex;W.exact=null;
+  updateWheelStatus();
+  pg.drawn='';draw();updatePanel(g);syncToolbar();
+}
+function ctMax(g,c){return g.max&&typeof g.max[c]==='number'?g.max[c]:255;}
+function updateStrip(g,s){
+  if(!pg||!pg.ctthumb)return;
+  var c=g&&g.labels?g.labels.indexOf('ct'):-1;
+  var mx=c<0?255:ctMax(g,c);
+  var val=s&&c>=0&&s.ch[c]!=null?s.ch[c]:mx/2;
+  pg.ctthumb.style.left=(cl(val,0,mx)/mx*100)+'%';
+}
+/* CT strip: warm on the left (UI2 = 0), cool on the right. */
+function ctApply(val){
+  var g=pg&&pg.g,s=P.slots[P.sel];
+  if(!g||!s)return;
+  var c=g.labels?g.labels.indexOf('ct'):-1;
+  if(c<0)return;
+  val=cl(Math.round(val),0,ctMax(g,c));
+  if(s.ch[c]!==val){
+    if(!W.undoPushed){pushUndo(W.dragKind,P.sel);W.undoPushed=true;}
+    s.ch[c]=val;P.dirty=Date.now();
+    var params={minute:s.minute};params['c'+(c+1)]=val;
+    pvPoint(P.sel,params);
+  }
+  updateStrip(g,s);
+  pg.drawn='';draw();updatePanel(g);syncToolbar();
+}
+function ctPick(ev){
+  var r=pg.ctstrip.getBoundingClientRect(),g=pg.g,s=P.slots[P.sel];
+  var c=g&&g.labels?g.labels.indexOf('ct'):-1;
+  var mx=c<0?255:ctMax(g,c);
+  var w=r.width||1;
+  ctApply(cl((ev.clientX-r.left)/w,0,1)*mx);
 }
 function cv(g,c,v){var mx=g.max&&typeof g.max[c]==='number'?g.max[c]:255;return mx===255?Math.round(v*100/255):v;}
 function vc(g,c,p){var mx=g.max&&typeof g.max[c]==='number'?g.max[c]:255;return mx===255?Math.round(p*255/100):Math.round(p);}
@@ -1148,6 +1263,21 @@ function applyDefault(){
     if(ok)toast('Program reset to default','ok','Undo',undo);
   });
 }
+/* Preset channel values follow the group's labels: a preset that only knew INT+CLR would leave an
+   RGB light black at full brightness. Tuna values are kept exactly as before. */
+function presetLevel(g,p,c,pre){
+  var l=g.labels&&g.labels[c];
+  if(!l)return 0;
+  if(!isLight(g)) return c===0?vc(g,c,p[1]):c===1?vc(g,c,p[2]):0;
+  var moon=pre[0]==='Moonlight';
+  if(l==='int') return vc(g,c,p[1]);
+  if(l==='ct') return moon?0:128;
+  if(l==='w') return moon?0:255;
+  if(l==='r') return 100;
+  if(l==='g') return moon?50:100;
+  if(l==='b') return moon?20:100;
+  return 0;
+}
 function applyPreset(pre){
   var g=pg.g;
   if(!g)return;
@@ -1157,7 +1287,7 @@ function applyPreset(pre){
     var p=pts[i],s=target[i];
     if(p){
       s.minute=p[0];s.enabled=true;
-      for(c=0;c<5;c++)s.ch[c]=hasCh(g,c)?vc(g,c,c===0?p[1]:c===1?p[2]:0):0;
+      for(c=0;c<5;c++)s.ch[c]=hasCh(g,c)?presetLevel(g,p,c,pre):0;
     }else{
       s.minute=0;s.enabled=false;
       for(c=0;c<5;c++)s.ch[c]=0;
@@ -1343,19 +1473,53 @@ function buildProg(){
   pg.wheelLive.setAttribute('aria-live','polite');
   pg.wheelLive.setAttribute('aria-atomic','true');
   var pair=mk('div','swatchpair',pg.pick);
+  pg.swatchpair=pair;
   function wheelSwatch(label){
     var box=mk('div','wsw',pair);
-    mk('span','wswlab',box,label);
+    var lab=mk('span','wswlab',box,label);
     var sw=mk('div','wswatch',box);
     sw.setAttribute('aria-hidden','true');
-    return {sw:sw,hex:mk('span','wswhex',box,'')};
+    return {box:box,lab:lab,sw:sw,hex:mk('span','wswhex',box,'')};
   }
   var pickS=wheelSwatch('You picked');
-  pg.pickSw=pickS.sw;pg.pickHex=pickS.hex;
+  pg.pickBox=pickS.box;pg.pickLab=pickS.lab;pg.pickSw=pickS.sw;pg.pickHex=pickS.hex;
   var lampS=wheelSwatch('Lamp makes');
-  pg.lampSw=lampS.sw;pg.lampHex=lampS.hex;
+  pg.lampBox=lampS.box;pg.lampSw=lampS.sw;pg.lampHex=lampS.hex;
+  /* Only light_ct gets the strip; it is built on first use so other models never see it. */
+  pg.mkStrip=function(){
+    if(pg.ctstrip)return;
+    pg.ctstrip=mk('div','cstrip',pg.pick);
+    pg.pick.insertBefore(pg.ctstrip,pg.wheelExact);
+    pg.ctstrip.tabIndex=0;
+    pg.ctstrip.setAttribute('role','slider');
+    pg.ctstrip.setAttribute('aria-label','Colour temperature, warm to cool');
+    pg.ctthumb=mk('div','cthumb',pg.ctstrip);
+    var ctends=mk('div','ctends',pg.pick);
+    pg.pick.insertBefore(ctends,pg.wheelExact);
+    mk('span',null,ctends,'Warmer');
+    mk('span',null,ctends,'Cooler');
+    pg.ctends=ctends;
+    pg.ctstrip.addEventListener('pointerdown',ctStart);
+    pg.ctstrip.addEventListener('pointermove',ctMove);
+    pg.ctstrip.addEventListener('pointerup',ctEnd);
+    pg.ctstrip.addEventListener('pointercancel',ctEnd);
+    pg.ctstrip.addEventListener('keydown',function(ev){
+      var g=pg.g,s=P.slots[P.sel];
+      if(!g||!s||!s.enabled)return;
+      var c=g.labels?g.labels.indexOf('ct'):-1;
+      if(c<0)return;
+      var d=ev.shiftKey?1:5,v=s.ch[c]==null?128:s.ch[c];
+      if(ev.key==='ArrowLeft'||ev.key==='ArrowDown')v-=d;
+      else if(ev.key==='ArrowRight'||ev.key==='ArrowUp')v+=d;
+      else return;
+      ev.preventDefault();
+      W.dragKind='ct-key';W.undoPushed=false;
+      ctApply(v);
+    });
+  };
   pg.wheelExact=mk('p','whint',pg.pick);
   var hrow=mk('div','whexrow',pg.pick);
+  pg.whexrow=hrow;
   mk('span','wlbl',hrow,'Colour');
   pg.wheelHex=mk('input',null,hrow);
   pg.wheelHex.type='text';pg.wheelHex.maxLength=7;
@@ -1365,7 +1529,7 @@ function buildProg(){
   pg.wheelHex.placeholder='#rrggbb';
   pg.wheelSnap=makeButton('Snap','btn small');
   hrow.appendChild(pg.wheelSnap);
-  mk('p','hint',pg.pick,'Pick any colour. The lamp uses the closest colour it can make; brightness (INT) is not changed.');
+  pg.pickHint=mk('p','hint',pg.pick,'Pick any colour. The lamp uses the closest colour it can make; brightness (INT) is not changed.');
   function commitColour(){
     var hex=parseColour(pg.wheelHex.value);
     if(!hex){
@@ -1375,6 +1539,7 @@ function buildProg(){
       return;
     }
     var hsv=hexToHsv(hex);
+    if(pg.kind==='disc'){W.dragKind='dir-key';W.undoPushed=false;directApply(hsv.h,hsv.s);return;}
     W.dragKind='snap-key';W.undoPushed=false;
     wheelSetTarget(hsv.h,hsv.s,hex);
     snapSend(snapRequest,true);
@@ -1387,14 +1552,15 @@ function buildProg(){
     if(ev.button>0||!wheelCanEdit())return;
     ev.preventDefault();
     try{pg.wheel.setPointerCapture(ev.pointerId);}catch(e){}
-    W.pid=ev.pointerId;W.dragging=true;W.dragKind='snap-'+(++W.dragSeq);W.undoPushed=false;
-    wheelPick(ev);
-    snapSend(snapRequest);
+    W.pid=ev.pointerId;W.dragging=true;W.dragKind=(pg.kind==='disc'?'dir-':'snap-')+(++W.dragSeq);W.undoPushed=false;
+    wheelMove(ev);
   }
   function wheelMove(ev){
     if(!W.dragging||ev.pointerId!==W.pid)return;
     ev.preventDefault();
-    wheelPick(ev);
+    var p=wheelPick(ev);
+    if(pg.kind==='disc'){directApply(p.hue,p.sat);return;}
+    wheelSetTarget(p.hue,p.sat);
     snapSend(snapRequest);
   }
   function wheelEnd(ev){
@@ -1413,10 +1579,29 @@ function buildProg(){
     else if(ev.key==='ArrowUp'||ev.key==='ArrowDown')sat=cl(W.targetSat*100+(ev.key==='ArrowUp'?d:-d),0,100);
     else return;
     ev.preventDefault();
+    if(pg.kind==='disc'){W.dragKind='dir-key';W.undoPushed=false;directApply(h,sat/100);return;}
     W.dragKind='snap-key';W.undoPushed=false;
     wheelSetTarget(h,sat/100);
     snapSend(snapRequest,true);
   });
+  function ctStart(ev){
+    var s=P.slots[P.sel];
+    if(ev.button>0||pg.pick.hidden||!s||!s.enabled)return;
+    ev.preventDefault();
+    try{pg.ctstrip.setPointerCapture(ev.pointerId);}catch(e){}
+    W.pid=ev.pointerId;W.dragging=true;W.dragKind='ct-'+(++W.dragSeq);W.undoPushed=false;
+    ctMove(ev);
+  }
+  function ctMove(ev){
+    if(!W.dragging||ev.pointerId!==W.pid)return;
+    ev.preventDefault();
+    ctPick(ev);
+  }
+  function ctEnd(ev){
+    if(ev.pointerId!==W.pid)return;
+    W.dragging=false;W.pid=null;
+    try{pg.ctstrip.releasePointerCapture(ev.pointerId);}catch(e){}
+  }
   var rb=mk('div','pbtnrow',pan);
   pg.remove=makeButton('Remove point','btn danger');
   rb.appendChild(pg.remove);
@@ -1608,9 +1793,27 @@ function updatePanel(g){
     if(document.activeElement!==r.sl){r.sl.value=v;r.sl.disabled=!on;}
     if(document.activeElement!==r.num){r.num.value=v;r.num.disabled=!on;}
   }
-  var uc=wheelVisible(g);
-  pg.pick.hidden=!uc;
-  if(!uc)return;
+  var kind=pickKind(g);
+  pg.kind=kind;
+  pg.pick.hidden=!kind;
+  if(!kind)return;
+  var isCt=kind==='ct',isDisc=kind==='disc';
+  pg.wheelbox.hidden=isCt;
+  pg.swatchpair.hidden=isCt;
+  pg.whexrow.hidden=isCt;
+  pg.wheelExact.hidden=isCt||isDisc;
+  pg.lampBox.hidden=isDisc;
+  setText(pg.pickLab,isDisc?'Colour':'You picked');
+  setText(pg.pickHint,isDisc?
+    'Pick any colour. Red, green and blue follow the disc; brightness (INT) is not changed.':
+    isCt?'Slide from warm to cool. Brightness (INT) is not changed.':
+    'Pick any colour. The lamp uses the closest colour it can make; brightness (INT) is not changed.');
+  if(isCt){
+    pg.mkStrip();
+    pg.ctstrip.setAttribute('aria-disabled',on?'false':'true');
+    updateStrip(g,s);
+    return;
+  }
   pg.wheel.setAttribute('aria-disabled',on?'false':'true');
   pg.wheelSnap.disabled=!on;
   pg.wheelHex.disabled=!on;
