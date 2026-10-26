@@ -19,6 +19,7 @@ light:
     time_id: local_time
     model: tuna_blue
     slots: 8
+    web_server: { sorting_group_id: controls }
     effects:
       - klink_pulse:
       - klink_color_sweep:
@@ -29,42 +30,43 @@ light:
 # "off". The light moves linearly between points. These are starting values; edits made in Home
 # Assistant are kept in flash and take precedence.
 text:
-  - { platform: klink, group: tuna_blue, slot: 1, name: "Tuna Blue point 1", initial_value: "08:00 int=0 clr=0" }
-  - { platform: klink, group: tuna_blue, slot: 2, name: "Tuna Blue point 2", initial_value: "09:00 int=40 clr=40" }
-  - { platform: klink, group: tuna_blue, slot: 3, name: "Tuna Blue point 3", initial_value: "11:00 int=100 clr=100" }
-  - { platform: klink, group: tuna_blue, slot: 4, name: "Tuna Blue point 4", initial_value: "14:00 int=130 clr=150" }
-  - { platform: klink, group: tuna_blue, slot: 5, name: "Tuna Blue point 5", initial_value: "17:00 int=100 clr=100" }
-  - { platform: klink, group: tuna_blue, slot: 6, name: "Tuna Blue point 6", initial_value: "19:00 int=40 clr=40" }
-  - { platform: klink, group: tuna_blue, slot: 7, name: "Tuna Blue point 7", initial_value: "20:30 int=0 clr=0" }
-  - { platform: klink, group: tuna_blue, slot: 8, name: "Tuna Blue point 8", initial_value: "off" }
+  - { platform: klink, group: tuna_blue, slot: 1, name: "Tuna Blue point 1", initial_value: "08:00 int=0 clr=0", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: tuna_blue, slot: 2, name: "Tuna Blue point 2", initial_value: "09:00 int=40 clr=40", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: tuna_blue, slot: 3, name: "Tuna Blue point 3", initial_value: "11:00 int=100 clr=100", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: tuna_blue, slot: 4, name: "Tuna Blue point 4", initial_value: "14:00 int=130 clr=150", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: tuna_blue, slot: 5, name: "Tuna Blue point 5", initial_value: "17:00 int=100 clr=100", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: tuna_blue, slot: 6, name: "Tuna Blue point 6", initial_value: "19:00 int=40 clr=40", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: tuna_blue, slot: 7, name: "Tuna Blue point 7", initial_value: "20:30 int=0 clr=0", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: tuna_blue, slot: 8, name: "Tuna Blue point 8", initial_value: "off", web_server: { sorting_group_id: program } }
 
 # Program editor: pick a point, then edit its time and values, like the controller's Quick Set screen.
 # Edits apply to the running program at once and are saved to flash a couple of seconds after the last
 # change. Editing a point turns it on; use the switch to turn a point off.
 select:
-  - { platform: klink, group: tuna_blue, type: mode, name: "Tuna Blue mode" }
-  - { platform: klink, group: tuna_blue, name: "Tuna Blue program point" }
+  - { platform: klink, group: tuna_blue, type: mode, name: "Tuna Blue mode", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: tuna_blue, name: "Tuna Blue program point", web_server: { sorting_group_id: program } }
 
 text_sensor:
-  - { platform: klink, group: tuna_blue, type: status, name: "Tuna Blue status" }
+  - { platform: klink, group: tuna_blue, type: status, name: "Tuna Blue status", web_server: { sorting_group_id: controls } }
 
 datetime:
-  - { platform: klink, group: tuna_blue, type: time, name: "Tuna Blue point time" }
+  - { platform: klink, group: tuna_blue, type: time, name: "Tuna Blue point time", web_server: { sorting_group_id: program } }
 
 number:
   # Manual extra channels, outside the program. Setting one takes manual control of the group.
-  - { platform: klink, group: tuna_blue, channel: 2, name: "Tuna Blue color (raw 0-255)" }
-  - { platform: klink, group: tuna_blue, channel: 3, name: "Tuna Blue violet" }
-  - { platform: klink, group: tuna_blue, channel: 4, name: "Tuna Blue red" }
-  - { platform: klink, group: tuna_blue, channel: 5, name: "Tuna Blue green" }
-  - { platform: klink, group: tuna_blue, point_channel: 1, name: "Tuna Blue point INT (0-255)", entity_category: config }
-  - { platform: klink, group: tuna_blue, point_channel: 2, name: "Tuna Blue point CLR (0-255)", entity_category: config }
-  - { platform: klink, group: tuna_blue, point_channel: 3, name: "Tuna Blue point violet (0-100)", entity_category: config }
-  - { platform: klink, group: tuna_blue, point_channel: 4, name: "Tuna Blue point red (0-100)", entity_category: config }
-  - { platform: klink, group: tuna_blue, point_channel: 5, name: "Tuna Blue point green (0-100)", entity_category: config }
+  - { platform: klink, group: tuna_blue, channel: 2, name: "Tuna Blue color (raw 0-255)", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: tuna_blue, channel: 3, name: "Tuna Blue violet", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: tuna_blue, channel: 4, name: "Tuna Blue red", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: tuna_blue, channel: 5, name: "Tuna Blue green", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: tuna_blue, point_channel: 1, name: "Tuna Blue point INT (0-255)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: tuna_blue, point_channel: 2, name: "Tuna Blue point CLR (0-255)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: tuna_blue, point_channel: 3, name: "Tuna Blue point violet (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: tuna_blue, point_channel: 4, name: "Tuna Blue point red (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: tuna_blue, point_channel: 5, name: "Tuna Blue point green (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
 
 switch:
   - platform: klink            # the selected point on or off
     type: point_enabled
     group: tuna_blue
     name: "Tuna Blue point enabled"
+    web_server: { sorting_group_id: program }

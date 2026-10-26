@@ -16,6 +16,18 @@ external_components:
       ref: main
     components: [klink]
 
+# ESPHome's own device page (Home Assistant-style, version 3) for every entity. The K-Link page at /klink
+# is the program editor; this one is the plain list of controls. `local: true` serves the page from the
+# device, so it works on the setup access point without internet. To protect both pages, add
+# `auth: { username: ..., password: ... }` in your own config.
+web_server:
+  version: 3
+  local: true
+  sorting_groups:
+    - { id: controls, name: "Controls", sorting_weight: 10 }
+    - { id: program, name: "Program", sorting_weight: 20 }
+    - { id: bus, name: "Bus and setup", sorting_weight: 30 }
+
 logger:
   baud_rate: 0     # the USB pads are used for the bus, so there is no serial console
   level: INFO
@@ -51,13 +63,14 @@ switch:
     type: writes
     name: "Send to lights"
     restore_mode: RESTORE_DEFAULT_OFF
+    web_server: { sorting_group_id: bus }
 
 button:
-  - { platform: klink, type: retry, name: "Retry", entity_category: diagnostic }
+  - { platform: klink, type: retry, name: "Retry", entity_category: diagnostic, web_server: { sorting_group_id: bus } }
 
 text_sensor:
-  - { platform: klink, name: "Bus state" }
+  - { platform: klink, name: "Bus state", web_server: { sorting_group_id: bus } }
 
 sensor:
-  - { platform: klink, type: lamps, name: "Known lamps" }
-  - { platform: klink, type: bus_timeouts, name: "Bus timeouts" }
+  - { platform: klink, type: lamps, name: "Known lamps", web_server: { sorting_group_id: bus } }
+  - { platform: klink, type: bus_timeouts, name: "Bus timeouts", web_server: { sorting_group_id: bus } }
