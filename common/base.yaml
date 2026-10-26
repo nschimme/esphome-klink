@@ -20,6 +20,21 @@ logger:
   baud_rate: 0     # the USB pads are used for the bus, so there is no serial console
   level: INFO
 
+# Connectivity, so a freshly flashed device can be set up and updated without editing YAML: with no
+# Wi-Fi credentials it opens a "Kessil" access point with a captive portal where you pick your network;
+# the API connects Home Assistant; OTA allows later updates over Wi-Fi. To use fixed credentials, add your
+# own `wifi:` (and `api:` encryption key / `ota:` password) in the config that includes this package.
+wifi:
+  ap:
+    ssid: "${name} Setup"
+
+captive_portal:
+
+api:
+
+ota:
+  - platform: esphome
+
 time:
   - platform: sntp
     id: local_time
