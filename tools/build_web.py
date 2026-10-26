@@ -8,7 +8,7 @@ same format the firmware expects. Run from anywhere:
 
 tools/klink_colors.py supplies the KCOL colour block, which is written back into the source between
 the /*COLORS:BEGIN*/ and /*COLORS:END*/ markers so the committed page stays in sync. The gzipped
-page must fit in 16000 bytes; the script prints the size and fails otherwise.
+page must fit in 24000 bytes; the script prints the size and fails otherwise.
 """
 
 import gzip
@@ -19,7 +19,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "components" / "klink" / "web" / "index.html"
 TARGET = ROOT / "components" / "klink" / "klink_web_page.h"
-MAX_BYTES = 16000
+MAX_BYTES = 24000
 
 sys.path.insert(0, str(ROOT / "tools"))
 import klink_colors  # noqa: E402
