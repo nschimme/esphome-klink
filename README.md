@@ -3,7 +3,7 @@
 An [ESPHome](https://esphome.io) custom component that connects **Kessil X-Series aquarium lights** to
 **Home Assistant**, using a cheap USB-C ESP32 board and a USB-C cable. It controls the lamps' intensity,
 color, and extra channels, and runs an editable 8-point daily program. You can use it from Home
-Assistant or from the K-Link web page the board serves itself, which also works offline.
+Assistant or from the esphome-klink web page the board serves itself, which also works offline.
 
 > ## Disclaimer
 >
@@ -25,7 +25,7 @@ Assistant or from the K-Link web page the board serves itself, which also works 
 | **Kessil A360X Tuna Sun** | **Tested.** Two fixtures in one group, controlled from an ESP32-C6: intensity, color, red, amber, finding lamps, the daily program. |
 | Program point editor, effects (Pulse, Color sweep, Sunrise, Sunset) | Built and flashed; **not yet verified end to end** against a lamp. |
 | Group **Mode** (Program / Manual / Off), status text and live preview | Compiles in CI; **new and not yet tested on lamps**. |
-| **K-Link web page** at `/klink` and the ESPHome device page | Compiles in CI; **new and not yet tested on a device or on lamps**. The page can also be run against a mock device, see [Contributing / development](#contributing--development). |
+| **esphome-klink web page** at `/klink` and the ESPHome device page | Compiles in CI; **new and not yet tested on a device or on lamps**. The page can also be run against a mock device, see [Contributing / development](#contributing--development). |
 | **Kessil A360XE Tuna Blue** | **Untested.** Included with Kessil's layout for the A360XE: Tuna Blue plus red, green and purple (violet + indigo). The channel order matches Kessil's controller screen (VI, R, G), but the mapping to the lamp's hardware has not been confirmed on a lamp. |
 | ESP32-C6 (USB-C) | **Tested.** |
 | ESP32-S3, ESP32-C3, ESP32-S2 (USB-C) | **Compile only.** The configs build, but nobody has run them on a lamp. Reports welcome. |
@@ -167,7 +167,7 @@ developing, change the `external_components:` source in `common/base.yaml` from 
    conflict, press **Retry** once the other controller is gone.
 6. Turn on **Send to lights**. Frames are otherwise only logged (dry run). When the bus has been quiet
    and no lamps are known yet, the first scan starts by itself; **Known lamps** shows how many it found.
-7. Open the K-Link page at `http://<device>/klink`. On the Dashboard, tap a group to flash its lamps, so
+7. Open the esphome-klink page at `http://<device>/klink`. On the Dashboard, tap a group to flash its lamps, so
    you can see which lamps it controls. Use Settings to move a lamp to another group or rescan if
    needed.
 8. On the Program tab, dial in the daily program. Edits preview on the lamps at once. Then set the
@@ -206,7 +206,7 @@ SNTP and the program runs on local time.
 
 The device serves two pages. Both work offline, straight from the board.
 
-- **`http://<device>/klink`** is the K-Link page, with three tabs:
+- **`http://<device>/klink`** is the esphome-klink page, with three tabs:
   - **Dashboard**: each group's mode and status; tap a group or a lamp to flash it so you can tell
     which is which.
   - **Program**: a visual day-curve editor. Drag points, watch the change preview on the lamps, use the
@@ -217,7 +217,7 @@ The device serves two pages. Both work offline, straight from the board.
 - **`http://<device>/`** is ESPHome's own device page (`web_server` version 3, `local: true`), with the
   entities grouped as **Controls**, **Program**, and **Bus and setup**.
 
-Set `web: false` under `klink:` to leave out the K-Link page and its JSON API. Adding
+Set `web: false` under `klink:` to leave out the esphome-klink page and its JSON API. Adding
 `web_server: auth: {username: ..., password: ...}` in your own config protects both pages.
 
 ## What you get in Home Assistant
@@ -265,7 +265,7 @@ Options under `klink:`:
 
 | Option | Default | Meaning |
 |---|---|---|
-| `web` | `true` | serve the K-Link page and its JSON API at `/klink`; `false` leaves them out |
+| `web` | `true` | serve the esphome-klink page and its JSON API at `/klink`; `false` leaves them out |
 | `auto_writes` | `false` | take over the bus by itself once it has been quiet (overrides the switch) |
 
 Setup is automatic: **Send to lights** is off by default (a dry run that only logs frames), and once it
@@ -295,21 +295,26 @@ Host tests for the pure C++ logic need only a compiler:
 for t in tests/test_klink_*.cpp; do g++ -std=c++11 -Wall -Wextra -I components/klink "$t" -o /tmp/t && /tmp/t; done
 ```
 
-To work on the K-Link page without a device, `tools/mock_server.py` serves it with a fake device:
+To work on the esphome-klink page without a device, `tools/mock_server.py` serves it with a fake
+device. It re-assembles the page from `components/klink/web/` on every request, so a reload picks up
+your edits:
 
 ```sh
 python3 tools/mock_server.py            # http://127.0.0.1:8080/klink
 python3 tools/mock_server.py 9000       # another port
 ```
 
-Edit `components/klink/web/index.html`, then regenerate the committed header:
+The page sources are `components/klink/web/index.html`, `style.css` and `app.js`. Edit them
+directly; a browser can also open that folder during development. Nothing is generated into the
+tree: the component assembles the page (inline CSS and JS, generated colour block) and gzips it
+during `esphome compile`. Check the size budget with:
 
 ```sh
-python3 tools/build_web.py
+python3 components/klink/web_build.py --check
 ```
 
-CI (`.github/workflows/ci.yml`) runs the host tests, `esphome config` on every top-level config and the
-example, and `esphome compile` for the boards it builds.
+CI (`.github/workflows/ci.yml`) runs the host tests and the page tests and size check, `esphome
+config` on every top-level config and the example, and `esphome compile` for the boards it builds.
 
 ## License
 

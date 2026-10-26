@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reference tests for tools/klink_colors.py (stdlib unittest).
+"""Reference tests for components/klink/klink_colors.py (stdlib unittest).
 
 Run: python3 tests/test_klink_colors.py
 """
@@ -9,7 +9,7 @@ import re
 import sys
 import unittest
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "tools"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "components" / "klink"))
 import klink_colors as kc  # noqa: E402
 
 HEX = re.compile(r"^#[0-9a-f]{6}$")

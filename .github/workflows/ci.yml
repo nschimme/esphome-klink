@@ -64,6 +64,28 @@ jobs:
             echo "::endgroup::"
           done
 
+  # The page is assembled and gzipped at compile time by components/klink/web_build.py; check the
+  # sources and the size budget here, without installing ESPHome.
+  web:
+    name: Web page
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Colour model tests
+        run: python3 tests/test_klink_colors.py
+
+      - name: Page assembler tests
+        run: python3 tests/test_web_build.py
+
+      - name: Page size budget
+        run: python3 components/klink/web_build.py --check
+
   # Validates every top-level config and the example: YAML, substitutions, packages and the
   # Python component code (esphome config loads and validates the component modules).
   validate:
@@ -192,7 +214,7 @@ jobs:
     name: Compile ${{ matrix.config }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: [host-tests, validate]
+    needs: [host-tests, web, validate]
     strategy:
       fail-fast: false
       matrix:

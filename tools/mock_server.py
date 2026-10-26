@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """In-memory mock of the K-Link web API for developing the page without hardware.
 
-Serves the raw (not gzipped) page at http://127.0.0.1:8080/klink and implements every route from
-components/klink/klink_web.cpp with fixed state. Stdlib only:
+Serves the assembled (not gzipped) page at http://127.0.0.1:8080/klink and implements every
+route from components/klink/klink_web.cpp with fixed state. The page is re-assembled from
+components/klink/web/ on every request, so edits show up on reload. Stdlib only:
 
     python3 tools/mock_server.py            # port 8080
     python3 tools/mock_server.py 9000       # another port
@@ -24,7 +25,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-INDEX = ROOT / "components" / "klink" / "web" / "index.html"
+
+sys.path.insert(0, str(ROOT / "components" / "klink"))
+import web_build  # noqa: E402
 
 NUM_CHANNELS = 5
 CHANNEL_MAX = [255, 255, 100, 100, 100]
@@ -581,10 +584,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error_json(500, "mock error: %s" % exc)
 
     def serve_index(self):
+        # Re-assemble on every request so a reload picks up edits to components/klink/web/.
         try:
-            body = INDEX.read_bytes()
-        except OSError:
-            self.send_text(500, "missing components/klink/web/index.html", "text/plain; charset=utf-8")
+            body = web_build.assemble().encode("utf-8")
+        except (OSError, ValueError) as exc:
+            self.send_text(500, "web page build failed: %s" % exc, "text/plain; charset=utf-8")
             return
         self.send_text(200, body)
 

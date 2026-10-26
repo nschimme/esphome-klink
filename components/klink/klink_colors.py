@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Colour model for the K-Link web page (stdlib only).
+"""Colour model for the esphome-klink page (stdlib only).
 
 The values here are our own approximations of the light a lamp makes. They are rough on purpose:
 BLUE_STOPS in particular is a plain blue ramp that still needs calibration against real lamps.
 Nothing is taken from Kessil's website, images or code.
 
-Used by tools/build_web.py to generate the KCOL block in components/klink/web/index.html and by
+Used by components/klink/web_build.py to generate the KCOL block in the page and by
 tests/test_klink_colors.py as the reference implementation.
 
 Run tests with: python3 tests/test_klink_colors.py

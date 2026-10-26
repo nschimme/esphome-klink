@@ -5,12 +5,18 @@
 #include <string>
 
 #include "esphome/core/component.h"
+#include "esphome/core/hal.h"
 #include "esphome/components/web_server_base/web_server_base.h"
 
 #include "klink.h"
 
 namespace esphome {
 namespace klink {
+
+// The gzipped page, generated at compile time by components/klink/web_build.py and emitted as a
+// global in main.cpp.
+extern const uint8_t KLINK_PAGE[] PROGMEM;
+extern const size_t KLINK_PAGE_LEN;
 
 // The K-Link web handler: the page at /klink and the JSON API under /klink. Registered with the
 // shared web server (web_server_base) so it works with or without the full `web_server:` component.

@@ -5,6 +5,11 @@ from esphome.components import uart, web_server_base
 from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
 from esphome.const import CONF_ID, CONF_TRIGGER_ID
 
+try:
+    from . import web_build
+except ImportError:  # loaded as a top-level module (tests, scripts)
+    import web_build
+
 CODEOWNERS = []
 DEPENDENCIES = ["uart"]
 
@@ -65,7 +70,7 @@ CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(KLinkHub),
-            # Serve the K-Link page and JSON API at /klink on the shared HTTP server.
+            # Serve the esphome-klink page and JSON API at /klink on the shared HTTP server.
             cv.Optional(CONF_WEB, default=True): cv.boolean,
             # Dry run by default: frames are logged, nothing is transmitted.
             cv.Optional(CONF_WRITES_ENABLED, default=False): cv.boolean,
@@ -112,6 +117,37 @@ def _final_validate(config):
 FINAL_VALIDATE_SCHEMA = _final_validate
 
 
+def _add_web_page():
+    """Embed the gzipped page as a global byte array in the generated main.cpp.
+
+    The globals are emitted at file scope after esphome.h, so the statement is self-contained
+    (its own namespace and no dependence on a using-directive). PROGMEM comes from
+    esphome/core/hal.h, which esphome.h includes for every build. The `const` definition gets
+    external linkage because klink_web.h (included by esphome.h) declares the symbols `extern`
+    earlier in the same translation unit.
+    """
+    payload = web_build.page_gzip()
+    if len(payload) > web_build.MAX_GZIP_BYTES:
+        raise cv.Invalid(
+            "esphome-klink page is %d bytes gzipped (limit %d); trim components/klink/web/"
+            % (len(payload), web_build.MAX_GZIP_BYTES)
+        )
+    rows = []
+    for offset in range(0, len(payload), 16):
+        rows.append(
+            "  " + " ".join("0x%02x," % byte for byte in payload[offset:offset + 16])
+        )
+    text = (
+        "namespace esphome { namespace klink {\n"
+        "const uint8_t KLINK_PAGE[] PROGMEM = {\n"
+        + "\n".join(rows)
+        + "\n};\n"
+        "const size_t KLINK_PAGE_LEN = sizeof(KLINK_PAGE);\n"
+        "}}  // namespace esphome::klink\n"
+    )
+    cg.add_global(cg.RawStatement(text))
+
+
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
@@ -126,6 +162,7 @@ async def to_code(config):
 
     if config[CONF_WEB]:
         cg.add_define("USE_KLINK_WEB")
+        _add_web_page()
         base = await cg.get_variable(config[CONF_WEB_SERVER_BASE_ID])
         web = cg.new_Pvariable(config[CONF_KLINK_WEB_ID], base)
         await cg.register_component(web, config)

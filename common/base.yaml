@@ -16,7 +16,7 @@ external_components:
       ref: main
     components: [klink]
 
-# ESPHome's own device page (Home Assistant-style, version 3) for every entity. The K-Link page at /klink
+# ESPHome's own device page (Home Assistant-style, version 3) for every entity. The esphome-klink page at /klink
 # is the program editor; this one is the plain list of controls. `local: true` serves the page from the
 # device, so it works on the setup access point without internet. To protect both pages, add
 # `auth: { username: ..., password: ... }` in your own config.

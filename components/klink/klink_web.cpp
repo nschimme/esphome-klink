@@ -6,7 +6,6 @@
 #include "esphome/core/log.h"
 
 #include "klink_http.h"
-#include "klink_web_page.h"
 
 #if defined(USE_ESP32)
 #ifndef HTTPD_400
@@ -198,9 +197,9 @@ void KLinkWeb::handleRequest(AsyncWebServerRequest *request) {
 
 void KLinkWeb::handle_index(AsyncWebServerRequest *request) {
 #ifndef USE_ESP8266
-  AsyncWebServerResponse *response = request->beginResponse(200, "text/html", KLINK_PAGE, sizeof(KLINK_PAGE));
+  AsyncWebServerResponse *response = request->beginResponse(200, "text/html", KLINK_PAGE, KLINK_PAGE_LEN);
 #else
-  AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", KLINK_PAGE, sizeof(KLINK_PAGE));
+  AsyncWebServerResponse *response = request->beginResponse_P(200, "text/html", KLINK_PAGE, KLINK_PAGE_LEN);
 #endif
   response->addHeader("Content-Encoding", "gzip");
   request->send(response);
