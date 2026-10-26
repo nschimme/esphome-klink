@@ -30,6 +30,7 @@
 #include "klink_mode.h"
 #include "klink_names.h"
 #include "klink_program.h"
+#include "klink_program_base.h"
 #include "klink_schedule.h"
 
 namespace esphome {
@@ -216,7 +217,7 @@ enum class GroupModel : uint8_t {
   GENERIC,    // any other model: raw channels
 };
 
-class KLinkGroup : public ProgramHost, public light::LightOutput, public Component {
+class KLinkGroup : public ProgramBase, public light::LightOutput, public Component {
  public:
   const char *kind() const override { return "bus"; }
   void set_model(GroupModel model) { model_ = model; }
@@ -237,7 +238,6 @@ class KLinkGroup : public ProgramHost, public light::LightOutput, public Compone
   }
   void set_hub(KLinkHub *hub) { hub_ = hub; }
   void set_gid(uint8_t gid) { gid_ = gid; }
-  void set_time(time::RealTimeClock *time) { time_ = time; }
   void set_manual_color(uint8_t color) { manual_color_ = color; }
   // Mired range the light advertises (cold end, warm end) and which end UI2 = 0 is.
   void set_color_range(float cold_mireds, float warm_mireds, bool invert) {
@@ -245,37 +245,12 @@ class KLinkGroup : public ProgramHost, public light::LightOutput, public Compone
     warm_mireds_ = warm_mireds;
     invert_color_ = invert;
   }
-  void set_refresh_interval(uint32_t ms) { refresh_ms_ = ms; }
-  void set_num_slots(size_t n) {
-    kessil::klink::SchedulePoint blank = {0, {0, 0, 0, 0, 0}, false};
-    slots_.assign(n, blank);
-  }
 
   void setup() override;
-  void update();  // schedule tick, run every few seconds from a timer
   void dump_config() override;
   light::LightTraits get_traits() override;
   void write_state(light::LightState *state) override;
 
-  size_t num_slots() const override { return slots_.size(); }
-  // Point editor: one point at a time, like the dots on Kessil's own Quick Set screen. Editing a point
-  // enables it, stores it through the slot's text entity (saved to flash shortly after the last edit)
-  // and tells the editor entities to refresh.
-  size_t selected_point() const override { return selected_; }
-  void select_point(size_t index) override;
-  const kessil::klink::SchedulePoint &point(size_t index) const override { return slots_[index]; }
-  void edit_point_time(uint8_t hour, uint8_t minute) override;
-  void edit_point_channel(uint8_t index, uint8_t value) override;  // index 0-4 = UI1-UI5
-  void edit_point_enabled(bool enabled) override;
-  void add_on_editor_callback(std::function<void()> &&cb) override { editor_cb_.add(std::move(cb)); }
-  void register_slot_text(size_t index, KLinkSlotText *text) override;
-  void set_slot(size_t index, const kessil::klink::SchedulePoint &point) override;
-  // Web API: edit one slot (1-based in the API is passed as a 0-based index here), persist it
-  // through its slot text and preview it. False when the index is out of range.
-  bool set_slot_from_values(size_t index, uint16_t minute,
-                            const uint8_t channels[kessil::klink::NUM_CHANNELS], bool enabled) override;
-  // Web API: copy another group's whole program. Groups must have the same model and slot count.
-  bool copy_program_from(const ProgramHost &other) override;
   // Web API: the light's name, or "Group <gid>" before the light has reported one.
   std::string name() const override {
     if (this->state_ != nullptr) {
@@ -296,23 +271,6 @@ class KLinkGroup : public ProgramHost, public light::LightOutput, public Compone
         return "generic";
     }
   }
-  // Web API: the current minute of day (0-1439) or -1 without a valid clock.
-  int now_minute() const override {
-    if (this->time_ == nullptr)
-      return -1;
-    ESPTime now = this->time_->now();
-    if (!now.is_valid())
-      return -1;
-    return static_cast<int>(now.hour) * 60 + static_cast<int>(now.minute);
-  }
-  kessil::klink::Mode mode() const override { return this->mode_.mode; }
-  void set_mode(kessil::klink::Mode mode) override;
-  void add_on_mode_callback(std::function<void()> &&cb) override { this->mode_cb_.add(std::move(cb)); }
-  void preview_point(size_t slot) override;
-  void preview_minute(uint16_t minute_of_day) override;
-  void end_preview() override;
-  // One line for the dashboard: what this group's schedule is doing right now.
-  std::string status_text() override;
   uint8_t gid() const override { return gid_; }
   // UI2 (0-255, models without a color temperature) and UI3-UI5 (percent) from the number entities.
   // A change takes manual control, like the light.
@@ -331,27 +289,16 @@ class KLinkGroup : public ProgramHost, public light::LightOutput, public Compone
     this->on_user_command_();
     this->send_(channels);
   }
-  // Our scheduled value right now. False when there is no clock or no enabled slot.
-  bool compute_now(uint8_t out[5]);
 
  protected:
-  void send_(const uint8_t channels[5]);
-  void point_changed_();
-  // Persist one specific slot through its text entity (unlike point_changed_, which stores the
-  // selected point). Used by the web API's per-slot editor.
-  void slot_changed_(size_t index);
-  // A user command takes manual control and notifies/persists when the mode changes.
-  void on_user_command_();
-  void mode_changed_();
-  void save_mode_();
+  void output_(const uint8_t channels[5]) override { this->hub_->write_group(this->gid_, channels); }
+  bool effect_active() const override { return this->state_ != nullptr && this->state_->get_current_effect_index() != 0; }
+  std::string effect_name() const override { return std::string(this->state_->get_effect_name()); }
+  uint32_t preference_key() const override {
+    return fnv1_hash("klink_mode_" + std::to_string(this->gid_));
+  }
 
   KLinkHub *hub_{nullptr};
-  time::RealTimeClock *time_{nullptr};
-  size_t selected_{0};
-  std::vector<KLinkSlotText *> slot_texts_;
-  CallbackManager<void()> editor_cb_;
-  CallbackManager<void()> mode_cb_;
-  ESPPreferenceObject mode_pref_;
   uint8_t gid_{0};
   uint8_t manual_color_{127};
   float cold_mireds_{153.0f};
@@ -360,13 +307,7 @@ class KLinkGroup : public ProgramHost, public light::LightOutput, public Compone
   uint8_t extras_[3]{0, 0, 0};
   GroupModel model_{GroupModel::TUNA_SUN};
   light::LightState *state_{nullptr};  // the light, remembered from write_state
-  uint32_t refresh_ms_{1000};
-  std::vector<kessil::klink::SchedulePoint> slots_;
-  kessil::klink::ModeState mode_;
   bool ignored_initial_{false};
-  bool have_sent_{false};
-  uint8_t last_sent_[5]{0, 0, 0, 0, 0};
-  uint32_t last_sent_ms_{0};
 };
 
 // A 0-100% control for UI3, UI4 or UI5 of one group.
