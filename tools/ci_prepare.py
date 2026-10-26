@@ -7,7 +7,8 @@ commit under test instead. In ci-work/:
     external_components lists from packages, so an overlay would load `klink` twice: rewrite instead);
   * every examples/*.yaml with a `remote_package` is rewritten to local `!include`s of the same files
     (with their vars) and moved to the root of the copy, because !include may not leave the config
-    directory;
+    directory; examples without a remote_package (they already use local includes) are copied
+    unchanged and stay in examples/;
   * a dummy secrets.yaml covers every !secret used (nothing is flashed from CI).
 Run from the repository root:  python3 tools/ci_prepare.py
 """
@@ -66,7 +67,8 @@ def rewrite_examples():
         text = example.read_text()
         match = re.search(r"(?m)^packages:[ \t]*\n(?:[ \t]+\S.*\n|[ \t]*\n)*", text)
         if match is None or "remote_package" not in match.group(0):
-            fail(f"expected a remote_package block in {example.name}")
+            # Already uses local !include paths (or no packages at all): copied unchanged.
+            continue
         text = text[: match.start()] + local_packages(match.group(0)) + text[match.end():]
         (WORK / example.name).write_text(text)
         example.unlink()

@@ -19,7 +19,7 @@ from esphome.const import (
     CONF_TIME_ID,
 )
 
-from . import CONF_GID, CONF_KLINK_ID, KLinkHub, klink_ns
+from . import CONF_GID, CONF_KLINK_ID, KLinkHub, ProgramHost, klink_ns
 
 DEPENDENCIES = ["klink"]
 
@@ -29,7 +29,8 @@ CONF_REFRESH_INTERVAL = "refresh_interval"
 CONF_INVERT_COLOR = "invert_color"
 CONF_MODEL = "model"
 
-ProgramHost = klink_ns.class_("ProgramHost")
+# ProgramHost is declared in __init__.py so the hub schema can define KLinkLightProgram without a
+# circular import; it stays importable from here for the platform modules.
 KLinkGroup = klink_ns.class_("KLinkGroup", ProgramHost, light.LightOutput, cg.Component)
 KLinkEffect = klink_ns.class_("KLinkEffect", LightEffect)
 FxKind = klink_ns.enum("FxKind", is_class=True)

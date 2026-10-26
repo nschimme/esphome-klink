@@ -1,9 +1,15 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome import automation
-from esphome.components import uart, web_server_base
+from esphome.components import light, time, uart, web_server_base
 from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
-from esphome.const import CONF_ID, CONF_TRIGGER_ID
+from esphome.const import (
+    CONF_ID,
+    CONF_NAME,
+    CONF_TIME_ID,
+    CONF_TRIGGER_ID,
+    CONF_UPDATE_INTERVAL,
+)
 
 try:
     from . import klink_colors, web_build
@@ -38,10 +44,52 @@ CONF_ON_SCAN_DONE = "on_scan_done"
 CONF_KID = "kid"
 CONF_GID = "gid"
 CONF_WEB = "web"
+CONF_PROGRAMS = "programs"
+CONF_LIGHTS = "lights"
+CONF_MODEL = "model"
+CONF_SLOTS = "slots"
+CONF_TRANSITION = "transition"
 
 klink_ns = cg.esphome_ns.namespace("klink")
 KLinkHub = klink_ns.class_("KLinkHub", cg.Component, uart.UARTDevice)
 KLinkWeb = klink_ns.class_("KLinkWeb", cg.Component)
+
+# The interface every program host implements (KLinkGroup on the bus, KLinkLightProgram on ordinary
+# lights). Declared here so both light.py and the hub schema can name it without a circular import.
+ProgramHost = klink_ns.class_("ProgramHost")
+KLinkLightProgram = klink_ns.class_("KLinkLightProgram", ProgramHost, cg.Component)
+LightModel = klink_ns.enum("LightModel", is_class=True)
+
+# The entity shape is fixed at config time, so the model is explicit rather than derived from the
+# lights (a light may later lack one of the channels; that channel is then ignored for it).
+PROGRAM_MODELS = {
+    "brightness": LightModel.BRIGHTNESS,
+    "ct": LightModel.CT,
+    "rgb": LightModel.RGB,
+    "rgbw": LightModel.RGBW,
+}
+MAX_PROGRAMS = 64  # program ids 101..164; see klink_light_map.h
+
+PROGRAM_SCHEMA = (
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(KLinkLightProgram),
+            cv.Required(CONF_NAME): cv.string,
+            # One or more existing ESPHome lights, driven together with the same values.
+            cv.Required(CONF_LIGHTS): cv.All(
+                cv.ensure_list(cv.use_id(light.LightState)), cv.Length(min=1)
+            ),
+            cv.Required(CONF_MODEL): cv.one_of(*PROGRAM_MODELS, lower=True),
+            cv.Optional(CONF_SLOTS, default=8): cv.int_range(1, 16),
+            # How often an unchanged program value is re-asserted (0 disables the refresh).
+            cv.Optional(CONF_UPDATE_INTERVAL, default="5s"): cv.positive_time_period_milliseconds,
+            # Defaults to the update interval (in to_code); previews use a short transition anyway.
+            cv.Optional(CONF_TRANSITION): cv.positive_time_period_milliseconds,
+            cv.Required(CONF_TIME_ID): cv.use_id(time.RealTimeClock),
+        }
+    )
+    .extend(cv.COMPONENT_SCHEMA)
+)
 
 LampFoundTrigger = klink_ns.class_(
     "LampFoundTrigger", automation.Trigger.template(cg.uint32, cg.uint8, cg.uint8)
@@ -99,6 +147,12 @@ CONFIG_SCHEMA = cv.All(
             ),
             cv.Optional(CONF_ON_SCAN_DONE): automation.validate_automation(
                 {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(ScanDoneTrigger)}
+            ),
+            # Programs that drive ordinary ESPHome lights directly (no K-Link bus). Entities attach
+            # with `group: <program id>`, just like a bus group.
+            # No default: a hub without programs keeps an unchanged config dump.
+            cv.Optional(CONF_PROGRAMS): cv.All(
+                cv.ensure_list(PROGRAM_SCHEMA), cv.Length(max=MAX_PROGRAMS)
             ),
         }
     )
@@ -160,6 +214,31 @@ async def to_code(config):
     if CONF_DIRECT_DRIVE in config:
         dd = config[CONF_DIRECT_DRIVE]
         cg.add(var.set_direct_drive(dd[CONF_POSITIVE_PIN], dd[CONF_NEGATIVE_PIN]))
+
+    # Programs use no bus but still register with the hub (for the web API and the shared entities).
+    for index, prog in enumerate(config.get(CONF_PROGRAMS, [])):
+        pvar = cg.new_Pvariable(prog[CONF_ID])
+        cg.add(pvar.set_name(prog[CONF_NAME]))
+        cg.add(pvar.set_program_id(101 + index))
+        cg.add(pvar.set_yaml_id(str(prog[CONF_ID])))
+        cg.add(pvar.set_hub(var))
+        cg.add(pvar.set_model(PROGRAM_MODELS[prog[CONF_MODEL]]))
+        cg.add(pvar.set_num_slots(prog[CONF_SLOTS]))
+        cg.add(pvar.set_update_ms(prog[CONF_UPDATE_INTERVAL]))
+        cg.add(
+            pvar.set_transition_ms(
+                prog.get(CONF_TRANSITION, prog[CONF_UPDATE_INTERVAL])
+            )
+        )
+        cg.add(pvar.set_time(await cg.get_variable(prog[CONF_TIME_ID])))
+        for light_id in prog[CONF_LIGHTS]:
+            cg.add(pvar.add_light(await cg.get_variable(light_id)))
+        # `update_interval` here is the program's refresh interval, not a PollingComponent cadence:
+        # keep it away from register_component, which would emit the PollingComponent-only
+        # set_update_interval().
+        component_conf = dict(prog)
+        component_conf.pop(CONF_UPDATE_INTERVAL, None)
+        await cg.register_component(pvar, component_conf)
 
     if config[CONF_WEB]:
         cg.add_define("USE_KLINK_WEB")

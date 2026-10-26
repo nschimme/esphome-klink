@@ -6,6 +6,7 @@
 #include "esphome/core/log.h"
 
 #include "klink_http.h"
+#include "klink_light_map.h"
 
 #if defined(USE_ESP32)
 #ifndef HTTPD_400
@@ -245,6 +246,32 @@ bool KLinkWeb::read_uint_arg(AsyncWebServerRequest *request, const char *name, u
   return true;
 }
 
+// A program route accepts both id kinds: a bus group (1-40) or a light program (101-164).
+bool KLinkWeb::read_program_gid(AsyncWebServerRequest *request, const char *name, uint32_t &out) {
+  if (!this->read_uint_arg(request, name, kk::PROGRAM_ID_MAX, out))
+    return false;
+  if (!kk::is_bus_gid(out) && !kk::is_program_id(out)) {
+    send_error(request, 400, std::string(name) + " must be 1-40 or 101-164");
+    return false;
+  }
+  return true;
+}
+
+// A route that needs real lamps on the bus: only bus group ids qualify, never a program id.
+bool KLinkWeb::read_lamp_gid(AsyncWebServerRequest *request, const char *name, uint32_t &out) {
+  if (!this->read_uint_arg(request, name, kk::PROGRAM_ID_MAX, out))
+    return false;
+  if (kk::is_program_id(out)) {
+    send_error(request, 400, "not a lamp group");
+    return false;
+  }
+  if (!kk::is_bus_gid(out)) {
+    send_error(request, 400, std::string(name) + " must be 1-40");
+    return false;
+  }
+  return true;
+}
+
 bool KLinkWeb::read_bool_arg(AsyncWebServerRequest *request, const char *name, bool &out) {
   if (!request->hasArg(name)) {
     send_error(request, 400, std::string("missing parameter: ") + name);
@@ -336,14 +363,17 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
       append_slot_json(out, p);
     }
     out += "],\"lamps\":[";
-    bool first_lamp = true;
-    for (const auto &lamp : this->hub_->lamps()) {
-      if (lamp.gid != group->gid())
-        continue;
-      if (!first_lamp)
-        out += ',';
-      first_lamp = false;
-      out += std::to_string(lamp.kid);
+    // A light program drives ESPHome lights, not lamps on the bus, so its lamp list is empty.
+    if (!kk::is_program_id(group->gid())) {
+      bool first_lamp = true;
+      for (const auto &lamp : this->hub_->lamps()) {
+        if (lamp.gid != group->gid())
+          continue;
+        if (!first_lamp)
+          out += ',';
+        first_lamp = false;
+        out += std::to_string(lamp.kid);
+      }
     }
     out += "],\"now_minute\":";
     out += std::to_string(group->now_minute());
@@ -379,12 +409,8 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
 
 void KLinkWeb::handle_mode(AsyncWebServerRequest *request) {
   uint32_t gid;
-  if (!this->read_uint_arg(request, "gid", kk::MAX_GID, gid))
+  if (!this->read_program_gid(request, "gid", gid))
     return;
-  if (gid < kk::MIN_GID) {
-    send_error(request, 400, "gid must be 1-40");
-    return;
-  }
   ProgramHost *group = this->find_group(gid);
   if (group == nullptr) {
     send_error(request, 404, "unknown group");
@@ -411,8 +437,14 @@ void KLinkWeb::handle_identify(AsyncWebServerRequest *request) {
     return;
   }
   uint32_t value;
-  if (!this->read_uint_arg(request, has_kid ? "kid" : "gid", has_kid ? 0xFFFFFFFFu : kk::MAX_GID, value))
-    return;
+  if (has_kid) {
+    if (!this->read_uint_arg(request, "kid", 0xFFFFFFFFu, value))
+      return;
+  } else {
+    // Identifying needs real lamps: a program id is not a lamp group.
+    if (!this->read_lamp_gid(request, "gid", value))
+      return;
+  }
   if (!this->hub_->writes_enabled()) {
     send_error(request, 409, "Send to lights is off");
     return;
@@ -428,12 +460,8 @@ void KLinkWeb::handle_identify(AsyncWebServerRequest *request) {
 
 void KLinkWeb::handle_point(AsyncWebServerRequest *request) {
   uint32_t gid;
-  if (!this->read_uint_arg(request, "gid", kk::MAX_GID, gid))
+  if (!this->read_program_gid(request, "gid", gid))
     return;
-  if (gid < kk::MIN_GID) {
-    send_error(request, 400, "gid must be 1-40");
-    return;
-  }
   ProgramHost *group = this->find_group(gid);
   if (group == nullptr) {
     send_error(request, 404, "unknown group");
@@ -512,12 +540,8 @@ void KLinkWeb::handle_point(AsyncWebServerRequest *request) {
 
 void KLinkWeb::handle_preview(AsyncWebServerRequest *request) {
   uint32_t gid;
-  if (!this->read_uint_arg(request, "gid", kk::MAX_GID, gid))
+  if (!this->read_program_gid(request, "gid", gid))
     return;
-  if (gid < kk::MIN_GID) {
-    send_error(request, 400, "gid must be 1-40");
-    return;
-  }
   ProgramHost *group = this->find_group(gid);
   if (group == nullptr) {
     send_error(request, 404, "unknown group");
@@ -548,12 +572,8 @@ void KLinkWeb::handle_preview(AsyncWebServerRequest *request) {
 
 void KLinkWeb::handle_preview_done(AsyncWebServerRequest *request) {
   uint32_t gid;
-  if (!this->read_uint_arg(request, "gid", kk::MAX_GID, gid))
+  if (!this->read_program_gid(request, "gid", gid))
     return;
-  if (gid < kk::MIN_GID) {
-    send_error(request, 400, "gid must be 1-40");
-    return;
-  }
   ProgramHost *group = this->find_group(gid);
   if (group == nullptr) {
     send_error(request, 404, "unknown group");
@@ -568,12 +588,8 @@ void KLinkWeb::handle_assign(AsyncWebServerRequest *request) {
   if (!this->read_uint_arg(request, "kid", 0xFFFFFFFFu, kid))
     return;
   uint32_t gid;
-  if (!this->read_uint_arg(request, "gid", kk::MAX_GID, gid))
+  if (!this->read_lamp_gid(request, "gid", gid))
     return;
-  if (gid < kk::MIN_GID) {
-    send_error(request, 400, "gid must be 1-40");
-    return;
-  }
   std::string error;
   if (!this->hub_->assign(kid, static_cast<uint8_t>(gid), error)) {
     send_error(request, 409, error.empty() ? "assignment refused" : error);
@@ -600,19 +616,11 @@ void KLinkWeb::handle_name(AsyncWebServerRequest *request) {
 
 void KLinkWeb::handle_copy(AsyncWebServerRequest *request) {
   uint32_t from;
-  if (!this->read_uint_arg(request, "from", kk::MAX_GID, from))
+  if (!this->read_program_gid(request, "from", from))
     return;
-  if (from < kk::MIN_GID) {
-    send_error(request, 400, "from must be 1-40");
-    return;
-  }
   uint32_t to;
-  if (!this->read_uint_arg(request, "to", kk::MAX_GID, to))
+  if (!this->read_program_gid(request, "to", to))
     return;
-  if (to < kk::MIN_GID) {
-    send_error(request, 400, "to must be 1-40");
-    return;
-  }
   ProgramHost *from_group = this->find_group(from);
   ProgramHost *to_group = this->find_group(to);
   if (from_group == nullptr || to_group == nullptr) {
@@ -657,12 +665,8 @@ static void append_hex_rgb(std::string &out, const uint8_t rgb[3]) {
 // Read-only: the page applies the answer itself through /klink/point.
 void KLinkWeb::handle_snap(AsyncWebServerRequest *request) {
   uint32_t gid;
-  if (!this->read_uint_arg(request, "gid", kk::MAX_GID, gid))
+  if (!this->read_program_gid(request, "gid", gid))
     return;
-  if (gid < kk::MIN_GID) {
-    send_error(request, 400, "gid must be 1-40");
-    return;
-  }
   ProgramHost *group = this->find_group(gid);
   if (group == nullptr) {
     send_error(request, 404, "unknown group");

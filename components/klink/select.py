@@ -45,11 +45,16 @@ async def to_code(config):
         await cg.register_component(var, config)
         cg.add(var.set_group(group))
         return
-    # The slot count is a plain config value on the light; read it back from its config.
+    # The slot count is a plain config value on the host; read it back from its config. A bus group
+    # is a `light:` entry with matching output_id; a KLinkLightProgram is a `klink: programs:` entry
+    # with a matching id.
     slots = 8
     for light_conf in CORE.config.get("light", []):
         if light_conf.get("output_id") == config[CONF_GROUP]:
             slots = light_conf.get("slots", 8)
+    for program_conf in (CORE.config.get("klink") or {}).get("programs", []) or []:
+        if program_conf.get("id") == config[CONF_GROUP]:
+            slots = program_conf.get("slots", 8)
     options = [str(i) for i in range(1, slots + 1)]
     var = await select.new_select(config, options=options)
     await cg.register_component(var, config)

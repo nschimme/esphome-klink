@@ -8,6 +8,7 @@
 # no RGB LED, leave this package out.
 light:
   - platform: esp32_rmt_led_strip
+    id: board_led  # referenced by examples/light-program.yaml's klink program
     name: "${friendly_name} LED"
     pin: GPIO${rgb_pin}
     num_leds: 1

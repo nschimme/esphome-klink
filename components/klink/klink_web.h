@@ -58,6 +58,8 @@ class KLinkWeb : public AsyncWebHandler, public Component {
   ProgramHost *find_group(uint32_t gid);
   std::string lamp_name(uint32_t kid);
   bool read_uint_arg(AsyncWebServerRequest *request, const char *name, uint32_t max, uint32_t &out);
+  bool read_program_gid(AsyncWebServerRequest *request, const char *name, uint32_t &out);
+  bool read_lamp_gid(AsyncWebServerRequest *request, const char *name, uint32_t &out);
   bool read_bool_arg(AsyncWebServerRequest *request, const char *name, bool &out);
   void send_ok(AsyncWebServerRequest *request);
 
