@@ -11,6 +11,26 @@ function textNode(text) {
   return { nodeType: 3, textContent: String(text), parentNode: null };
 }
 
+function makeContext() {
+  var ctx = {
+    fillStyle: '', strokeStyle: '', lineWidth: 1, globalAlpha: 1,
+    createImageData: function (w, h) {
+      return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+    },
+    putImageData: function () {}, getImageData: function (x, y, w, h) {
+      return { width: w, height: h, data: new Uint8ClampedArray(w * h * 4) };
+    },
+    setTransform: function () {}, resetTransform: function () {}, save: function () {}, restore: function () {},
+    beginPath: function () {}, closePath: function () {}, moveTo: function () {}, lineTo: function () {},
+    arc: function () {}, rect: function () {}, fill: function () {}, stroke: function () {},
+    fillRect: function () {}, strokeRect: function () {}, clearRect: function () {},
+    translate: function () {}, scale: function () {}, rotate: function () {},
+    drawImage: function () {}, measureText: function () { return { width: 0 }; },
+    fillText: function () {}, strokeText: function () {}
+  };
+  return ctx;
+}
+
 function El(tag, doc) {
   this.tagName = String(tag).toUpperCase();
   this.nodeName = this.tagName;
@@ -130,6 +150,11 @@ El.prototype.getBoundingClientRect = function () {
 };
 El.prototype.setPointerCapture = function () {};
 El.prototype.releasePointerCapture = function () {};
+El.prototype.getContext = function (type) {
+  if (String(type) !== '2d') return null;
+  if (!this._ctx) this._ctx = makeContext();
+  return this._ctx;
+};
 El.prototype.scrollIntoView = function () { this._scrolled = true; };
 El.prototype.matches = matches;
 El.prototype.querySelectorAll = function (sel) {
@@ -350,6 +375,14 @@ function makeServer(opts) {
     }
   }
 
+  /* Canned /klink/snap answer: deterministic settings the tests can assert against. */
+  function snapJson(rgb) {
+    var set = { clr: 100 };
+    if (group.model === 'tuna_sun') { set.r = 20; set.am = 10; }
+    else if (group.model === 'tuna_blue') { set.vio = 30; set.r = 20; set.grn = 10; }
+    return { set: set, rgb: '403020', target: rgb, exact: false };
+  }
+
   function response(code, body) {
     var text = JSON.stringify(body);
     return {
@@ -365,6 +398,16 @@ function makeServer(opts) {
     requests.push({ path: u.pathname, params: params, method: (opts && opts.method) || 'GET' });
     try {
       if (u.pathname === '/klink/state') return Promise.resolve(response(200, stateJson()));
+      if (u.pathname === '/klink/snap') {
+        var gid = parseUint(u.searchParams.get('gid'), 40);
+        if (gid !== group.gid) throw new HttpError(404, 'unknown group');
+        if (group.model !== 'tuna_sun' && group.model !== 'tuna_blue') {
+          throw new HttpError(400, 'no colour model for this group');
+        }
+        var rgb = (u.searchParams.get('rgb') || '').toLowerCase().replace(/^#/, '');
+        if (!/^[0-9a-f]{6}$/.test(rgb)) throw new HttpError(400, 'invalid parameter: rgb');
+        return Promise.resolve(response(200, snapJson(rgb)));
+      }
       if (u.pathname === '/klink/point') { handlePoint(u.searchParams); return Promise.resolve(response(200, { ok: true })); }
       if (u.pathname === '/klink/preview/done') return Promise.resolve(response(200, { ok: true }));
       if (u.pathname === '/klink/preview') return Promise.resolve(response(200, { ok: true }));
@@ -382,6 +425,9 @@ function makeServer(opts) {
     fetch: fetch,
     pointRequests: function () {
       return requests.filter(function (r) { return r.path === '/klink/point'; });
+    },
+    snapRequests: function () {
+      return requests.filter(function (r) { return r.path === '/klink/snap'; });
     },
     resetRequests: function () { requests.length = 0; }
   };
@@ -409,7 +455,7 @@ function loadPage(server) {
     getItem: function (k) { return Object.prototype.hasOwnProperty.call(stored, k) ? stored[k] : null; },
     setItem: function (k, v) { stored[k] = String(v); }
   };
-  var window = { addEventListener: function () {}, console: console };
+  var window = { addEventListener: function () {}, console: console, devicePixelRatio: 1 };
   var location = { hash: '' };
   var src = fs.readFileSync(APP, 'utf8').replace('/*KCOL*/', KCOL);
   var run = new Function('document', 'window', 'location', 'localStorage', 'fetch',
@@ -430,6 +476,22 @@ function loadPage(server) {
     storage: function (key) { return stored[key]; },
     refresh: async function () { doc.dispatch('visibilitychange'); await settle(); },
     chart: function () { return doc.getElementById('prog-chart'); },
+    wheelCard: function () { return page.progRoot() ? page.progRoot().querySelector('.pick') : null; },
+    wheel: function () { return page.progRoot() ? page.progRoot().querySelector('.wheel') : null; },
+    hexInput: function () {
+      var row = page.progRoot() ? page.progRoot().querySelector('.whexrow') : null;
+      if (!row) return null;
+      var found = null;
+      walk(row, function (el) { if (!found && el.tagName === 'INPUT') found = el; });
+      return found;
+    },
+    snapButton: function () {
+      var row = page.progRoot() ? page.progRoot().querySelector('.whexrow') : null;
+      if (!row) return null;
+      var found = null;
+      walk(row, function (el) { if (!found && el.tagName === 'BUTTON') found = el; });
+      return found;
+    },
     svg: function () {
       var c = page.chart();
       return c ? c.children[0] : null;

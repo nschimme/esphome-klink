@@ -365,6 +365,129 @@ async function scenarioTracks() {
   check(name + ': thumb has no fixed track colour', ranges[3].style.background === undefined || !ranges[3].style.background);
 }
 
+async function settleSnap(page) {
+  // One tick fires the throttled snap, the next fires the trailing point preview.
+  page.clock.tick(120);
+  await stub.settle();
+  page.clock.tick(120);
+  await stub.settle();
+}
+
+async function scenarioWheelDrag() {
+  var name = 'colour wheel snap';
+  var server = stub.makeServer();
+  var page = await newPage(server);
+  var wheel = page.wheel();
+  check(name + ': wheel present', !!wheel);
+  var card = page.wheelCard();
+  check(name + ': wheel card visible', !!card && card.hidden === false);
+  check(name + ': strip is gone', page.progRoot().querySelector('.cstrip') === null && page.progRoot().querySelector('.cthumb') === null);
+  var pre = slots(server);
+  server.resetRequests();
+  page.pointer(wheel, 'pointerdown', { button: 0, pointerId: 5, clientX: 160, clientY: 110 });
+  page.pointer(wheel, 'pointermove', { pointerId: 5, clientX: 150, clientY: 90 });
+  page.pointer(wheel, 'pointerup', { pointerId: 5 });
+  await settleSnap(page);
+  var snaps = server.snapRequests();
+  check(name + ': one snap request', snaps.length === 1, 'got ' + snaps.length);
+  if (snaps[0]) {
+    check(name + ': snap sends the picked rgb', /^[0-9a-f]{6}$/.test(snaps[0].params.rgb), snaps[0].params.rgb);
+    eq(name + ': snap gid', snaps[0].params.gid, '2');
+    check(name + ': snap is a GET', snaps[0].method === 'GET', snaps[0].method);
+  }
+  var points = server.pointRequests();
+  check(name + ': one point request', points.length === 1, 'got ' + points.length);
+  if (points[0]) {
+    eq(name + ': snapped channels sent', {
+      gid: points[0].params.gid, slot: points[0].params.slot,
+      c2: points[0].params.c2, c4: points[0].params.c4, c5: points[0].params.c5,
+      c1: points[0].params.c1
+    }, { gid: '2', slot: '1', c2: '100', c4: '20', c5: '10', c1: undefined });
+  }
+  eq(name + ': local slot follows the answer', server.group.slots[0].ch, [30, 100, 0, 20, 10]);
+  check(name + ': lamp swatch shows the result', page.progRoot().textContent.indexOf('#403020') >= 0);
+  check(name + ': closest wording', page.progRoot().textContent.indexOf('Closest this lamp can make') >= 0);
+  check(name + ': INT unchanged', server.group.slots[0].ch[0] === pre[0].ch[0]);
+  check(name + ': dragged', JSON.stringify(pre) !== JSON.stringify(slots(server)));
+
+  server.resetRequests();
+  page.click(buttonExact(page, 'Undo'));
+  await stub.settle();
+  eq(name + ': undo restores', slots(server), pre);
+  check(name + ': undo one request', server.pointRequests().length === 1, server.pointRequests().length);
+}
+
+async function scenarioWheelHexAndKeys() {
+  var name = 'colour wheel hex and keys';
+  var server = stub.makeServer();
+  var page = await newPage(server);
+  var input = page.hexInput();
+  var snap = page.snapButton();
+  check(name + ': colour field present', !!input);
+  check(name + ': Snap button present', !!snap);
+  check(name + ': field labelled Colour', !!input && input.getAttribute('aria-label') === 'Colour');
+  server.resetRequests();
+  input.value = '#00ff00';
+  page.click(snap);
+  await settleSnap(page);
+  var snaps = server.snapRequests();
+  check(name + ': one snap for the typed colour', snaps.length === 1, 'got ' + snaps.length);
+  check(name + ': typed rgb sent', !!snaps[0] && snaps[0].params.rgb === '00ff00', snaps[0] && snaps[0].params.rgb);
+  check(name + ': point sent', server.pointRequests().length === 1, server.pointRequests().length);
+
+  var wheel = page.wheel();
+  wheel.focus();
+  var before = input.value;
+  server.resetRequests();
+  wheel.dispatch('keydown', { key: 'ArrowRight' });
+  await settleSnap(page);
+  check(name + ': arrow sent a snap', server.snapRequests().length === 1, server.snapRequests().length);
+  check(name + ': arrow moved the target', input.value !== before, before + ' -> ' + input.value);
+  check(name + ': arrow point sent', server.pointRequests().length === 1, server.pointRequests().length);
+
+  server.resetRequests();
+  input.value = 'not a colour';
+  page.click(snap);
+  await stub.settle();
+  check(name + ': invalid colour sends nothing', server.snapRequests().length === 0, server.snapRequests().length);
+  check(name + ': invalid colour explains', page.progRoot().textContent.indexOf('Enter a colour like #ff8800') >= 0);
+}
+
+async function scenarioWheelHiddenGeneric() {
+  var name = 'wheel hidden for generic';
+  var group = makeGroup(2, 'Generic', 'generic', ['ui1', 'ui2', 'ui3', 'ui4', 'ui5']);
+  var server = stub.makeServer({ group: group, groups: [group] });
+  var page = await newPage(server);
+  var card = page.wheelCard();
+  check(name + ': card exists', !!card);
+  check(name + ': card hidden', !!card && card.hidden === true);
+  server.resetRequests();
+  var wheel = page.wheel();
+  page.pointer(wheel, 'pointerdown', { button: 0, pointerId: 9, clientX: 150, clientY: 110 });
+  page.clock.tick(120);
+  await stub.settle();
+  check(name + ': no snap for generic', server.snapRequests().length === 0, server.snapRequests().length);
+}
+
+async function scenarioWheelSliderSync() {
+  var name = 'wheel follows sliders';
+  var server = stub.makeServer();
+  var page = await newPage(server);
+  var before = page.progRoot().textContent;
+  server.resetRequests();
+  var ranges = page.progRoot().querySelectorAll('input').filter(function (el) {
+    return el.type === 'range' && el.style.getPropertyValue('--trk');
+  });
+  var clr = ranges[1];
+  clr.value = '255';
+  clr.dispatch('input', {});
+  page.clock.tick(120);
+  await stub.settle();
+  check(name + ': slider still sends a point', server.pointRequests().length === 1, server.pointRequests().length);
+  check(name + ': slider sends no snap', server.snapRequests().length === 0, server.snapRequests().length);
+  check(name + ': lamp swatch changed', page.progRoot().textContent !== before);
+}
+
 async function main() {
   await scenarioPlace();
   await scenarioRefused();
@@ -378,6 +501,10 @@ async function main() {
   await scenarioPicker();
   await scenarioManyLamps();
   await scenarioTracks();
+  await scenarioWheelDrag();
+  await scenarioWheelHexAndKeys();
+  await scenarioWheelHiddenGeneric();
+  await scenarioWheelSliderSync();
   console.log(failures ? failures + ' failure(s)' : 'all web tests passed');
   process.exit(failures ? 1 : 0);
 }
