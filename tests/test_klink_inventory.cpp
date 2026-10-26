@@ -55,6 +55,14 @@ int main() {
   check("mixed types in one group rejected", !a.check_assignment(1001, 4).empty());
   check("default gids", default_gid(1) == 1 && default_gid(2) == 2 && default_gid(3) == 26 && default_gid(9) == 0);
 
+  // assignment error codes and their user-facing text
+  check("no assignment error", a.check_assignment_error(1001, 3) == AssignmentError::NONE);
+  check("assignment error code matches string", a.check_assignment_error(7, 3) == AssignmentError::UNKNOWN_KID &&
+                                                     a.check_assignment(7, 3) == assignment_error_text(AssignmentError::UNKNOWN_KID));
+  check("assignment error text", std::string(assignment_error_text(AssignmentError::GROUP_TYPE_CONFLICT)) ==
+                                     "group already holds a different lamp type");
+  check("no error has no text", std::string(assignment_error_text(AssignmentError::NONE)).empty());
+
   std::printf(failures ? "%d failure(s)\n" : "all passed\n", failures);
   return failures != 0;
 }

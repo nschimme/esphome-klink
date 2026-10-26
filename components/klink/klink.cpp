@@ -70,7 +70,7 @@ void KLinkHub::setup() {
       // Another controller started talking while we were writing: stop at once and latch.
       this->writes_enabled_ = false;
       this->want_writes_ = false;
-      ESP_LOGE(TAG, "BUS CONFLICT: another controller was heard while writing (%s). Bus writes are OFF.",
+      ESP_LOGE(TAG, "BUS CONFLICT: another controller was heard while writing (%s). Send to lights is OFF.",
                kk::describe_frame(frame).c_str());
       this->writes_cb_.call(false);
     }
@@ -100,12 +100,18 @@ void KLinkHub::loop() {
     std::string why;
     if (this->guard_.request_transmit(millis(), why)) {
       this->writes_enabled_ = true;
-      ESP_LOGW(TAG, "Bus writes ENABLED: the bus is quiet, frames are now transmitted");
+      ESP_LOGW(TAG, "Send to lights ENABLED: the bus is quiet, frames are now transmitted");
       this->writes_cb_.call(true);
     } else if (millis() - this->last_guard_log_ms_ > 10000) {
       this->last_guard_log_ms_ = millis();
-      ESP_LOGW(TAG, "Bus writes pending: %s", why.c_str());
+      ESP_LOGW(TAG, "Send to lights pending: %s", why.c_str());
     }
+  }
+  // No stored lamps: scan once by itself as soon as the hub controls the bus, so a fresh device
+  // finds its lamps without any button press. A manual scan can always be run later.
+  if (this->writes_enabled_ && !this->scanning_ && this->inventory_.lamps().empty() && !this->auto_scanned_) {
+    this->auto_scanned_ = true;
+    this->start_scan();
   }
   if (this->commissioning_ && static_cast<int32_t>(millis() - this->commissioning_deadline_) >= 0) {
     ESP_LOGI(TAG, "Commissioning mode timed out");
@@ -129,7 +135,7 @@ void KLinkHub::dump_config() {
 bool KLinkHub::set_writes_enabled(bool enabled) {
   if (!enabled) {
     if (this->writes_enabled_)
-      ESP_LOGW(TAG, "Bus writes disabled: dry run, frames are only logged");
+      ESP_LOGW(TAG, "Send to lights disabled: dry run, frames are only logged");
     this->want_writes_ = false;
     this->writes_enabled_ = false;
     this->guard_.stop_transmit();
@@ -144,18 +150,25 @@ bool KLinkHub::set_writes_enabled(bool enabled) {
     return false;
   }
   this->writes_enabled_ = true;
-  ESP_LOGW(TAG, "Bus writes ENABLED: frames are now transmitted");
+  ESP_LOGW(TAG, "Send to lights ENABLED: frames are now transmitted");
   return true;
 }
 
 std::string KLinkHub::state_text() const {
+  std::string text;
   if (this->guard_.conflict_latched())
-    return "Conflict: another controller wrote while this one was controlling. Toggle Bus writes to retry";
-  if (this->writes_enabled_)
-    return "Controlling";
-  if (this->want_writes_)
-    return this->other_controller_recent() ? "Shadowing another controller" : "Waiting for a quiet bus";
-  return "Writes off (dry run)";
+    text = "Conflict: another controller wrote while this one was controlling. Press Retry to try again";
+  else if (this->scanning_)
+    text = "Scanning for lamps";
+  else if (this->writes_enabled_)
+    text = "Controlling";
+  else if (this->want_writes_)
+    text = this->other_controller_recent() ? "Shadowing another controller" : "Waiting for a quiet bus";
+  else
+    text = "Writes off (dry run)";
+  if (!this->scan_note_.empty())
+    text += " (" + this->scan_note_ + ")";
+  return text;
 }
 
 void KLinkHub::set_commissioning(bool enabled) {
@@ -263,11 +276,13 @@ void KLinkHub::write_group(uint8_t gid, const uint8_t channels[5]) {
 
 void KLinkHub::start_scan() {
   if (!this->writes_enabled_) {
+    this->scan_note_ = "Scan needs Send to lights on";
     ESP_LOGW(TAG, "Scan refused: the hub is not controlling the bus (%s)", this->state_text().c_str());
     return;
   }
   if (this->scanning_)
     return;
+  this->scan_note_.clear();
   ESP_LOGI(TAG, "Scanning for lamps (KIDs %u-%u)", DEFAULT_MIN_KID, DEFAULT_MAX_KID);
   this->scanning_ = true;
   this->scan_found_ = 0;
@@ -325,6 +340,14 @@ void KLinkHub::identify_next() {
   this->identify(lamps[this->identify_pos_++].kid);
 }
 
+void KLinkHub::retry() {
+  // Exactly what turning Send to lights off and on again did before: drop write control and ask
+  // for it again through the same path. request_transmit() lifts the conflict latch once the bus
+  // has been quiet long enough; until then the request stays pending in loop().
+  this->set_writes_enabled(false);
+  this->set_writes_enabled(true);
+}
+
 bool KLinkHub::stage_assignment(uint32_t kid, uint8_t gid) {
   if (!this->commissioning_) {
     ESP_LOGW(TAG, "Assignment refused: turn on commissioning mode first");
@@ -360,6 +383,22 @@ void KLinkHub::confirm_assignment() {
       ESP_LOGE(TAG, "KID %u: assignment to GID %u NOT verified; rescan before trusting the inventory", kid, gid);
     }
   });
+}
+
+bool KLinkHub::assign(uint32_t kid, uint8_t gid, std::string &error) {
+  error.clear();
+  if (!this->writes_enabled_) {
+    error = "Send to lights is off";
+    return false;
+  }
+  this->set_commissioning(true);
+  if (!this->stage_assignment(kid, gid)) {
+    kk::AssignmentError why = this->inventory_.check_assignment_error(kid, gid);
+    error = why == kk::AssignmentError::NONE ? "Assignment refused" : kk::assignment_error_text(why);
+    return false;
+  }
+  this->confirm_assignment();
+  return true;
 }
 
 // Shadow mode: when another controller writes a group we also schedule, compare its value with ours.
@@ -1001,6 +1040,9 @@ void KLinkButton::press_action() {
       break;
     case ButtonKind::IDENTIFY_NEXT:
       this->hub_->identify_next();
+      break;
+    case ButtonKind::RETRY:
+      this->hub_->retry();
       break;
   }
 }

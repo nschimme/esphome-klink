@@ -4,7 +4,7 @@
 # Substitutions you can override (defaults below):
 #   timezone     the schedule runs on local time, so set your own, e.g. Europe/Berlin
 #   auto_writes  "true" = listen first and take over the bus by itself once it has been quiet;
-#                "false" = never transmit until you turn the "Bus writes" switch on
+#                "false" = never transmit until you turn the "Send to lights" switch on
 substitutions:
   timezone: Etc/UTC
   auto_writes: "false"
@@ -49,16 +49,11 @@ klink:
 switch:
   - platform: klink            # OFF = dry run (frames are logged, nothing is sent)
     type: writes
-    name: "Bus writes"
+    name: "Send to lights"
     restore_mode: RESTORE_DEFAULT_OFF
-  - platform: klink            # gates "Find lamps"; switches itself off after 5 minutes
-    type: commissioning
-    name: "Commissioning mode"
-    restore_mode: ALWAYS_OFF
 
 button:
-  - { platform: klink, type: scan, name: "Find lamps" }
-  - { platform: klink, type: identify_next, name: "Identify next lamp" }
+  - { platform: klink, type: retry, name: "Retry", entity_category: diagnostic }
 
 text_sensor:
   - { platform: klink, name: "Bus state" }

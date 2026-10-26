@@ -154,14 +154,15 @@ external_components:
 1. **Flash while connected only to your computer.** Once the firmware runs, the board's USB pads carry the
    lamp bus, so the USB console is gone. Later updates go over WiFi (or hold the BOOT button while
    plugging in to flash by cable).
-2. Unplug it from the computer and power it from the lamp.
-3. **"Bus writes" is OFF by default.** In that state the component logs the frames it would send and
-   transmits nothing. Check the logs, then turn the switch on.
-4. If Kessil's WiFi dongle is on the chain, unplug it before enabling writes. With
+2. Unplug it from the computer and power it from the lamp. The hub listens first and transmits nothing
+   while **Send to lights** is off.
+3. If Kessil's WiFi dongle is on the chain, unplug it before enabling writes. With
    `auto_writes: "true"` the component listens for 15 seconds and only takes over by itself after the bus has
    been quiet; if another controller appears later, it stops and reports a conflict in **Bus state**.
-5. Press **Find lamps** (with **Commissioning mode** on) to list the lamps and their groups. Set `tuna_sun_gid` or
-   `tuna_blue_gid` to the group your lamps are in.
+4. Turn on **Send to lights**. When no lamps are known yet, the first scan starts by itself. Check
+   **Known lamps** and **Bus state**: the scan is done when **Known lamps** shows your lamps. Set
+   `tuna_sun_gid` or `tuna_blue_gid` to the group your lamps are in.
+5. If **Bus state** reports a conflict, press **Retry** once the other controller is gone.
 
 ## What you get in Home Assistant
 

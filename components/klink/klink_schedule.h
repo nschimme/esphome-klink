@@ -14,7 +14,7 @@ namespace klink {
 
 static const size_t NUM_CHANNELS = 5;
 static const uint32_t SECONDS_PER_DAY = 86400;
-// UI1-UI2 are full-range bytes; UI3-UI5 stop at 100 (same limits as tools/kessil_control_light.py).
+// UI1-UI2 are full-range bytes; UI3-UI5 stop at 100.
 static const uint8_t CHANNEL_MAX[NUM_CHANNELS] = {255, 255, 100, 100, 100};
 
 struct SchedulePoint {

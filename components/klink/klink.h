@@ -67,8 +67,8 @@ class KLinkHub : public Component, public uart::UARTDevice {
   bool writes_enabled() const { return writes_enabled_; }
   // Auto mode: ask for writes at boot and let the bus guard decide. While another controller (for
   // example the WiFi dongle) is heard the hub only shadows it; once the bus has been quiet it takes over by itself,
-  // and a controller that shows up later stops it. Turning the Bus writes switch off ends auto mode
-  // until the switch is turned on again or the device restarts.
+  // and a controller that shows up later stops it. Turning the Send to lights switch off ends auto
+  // mode until the switch is turned on again or the device restarts.
   void set_auto_writes(bool on) { auto_writes_ = on; }
   bool auto_writes() const { return auto_writes_; }
   // One line for the dashboard: what the hub is doing with the bus right now.
@@ -84,7 +84,7 @@ class KLinkHub : public Component, public uart::UARTDevice {
   uint32_t foreign_frames() const { return guard_.foreign_frames(); }
   bool other_controller_recent() const { return guard_.other_controller_recent(millis()); }
   bool conflict_latched() const { return guard_.conflict_latched(); }
-  // Commissioning mode gates scan/assign and switches itself off after a timeout.
+  // Commissioning gates assignment and switches itself off after a timeout.
   void set_commissioning(bool enabled);
   bool commissioning() const { return commissioning_; }
 
@@ -92,12 +92,14 @@ class KLinkHub : public Component, public uart::UARTDevice {
   void write_group(uint8_t gid, const uint8_t channels[5]);
   void start_scan();
   void identify(uint32_t kid);
-  // Diagnostic: unmute one KID, read its identity, mute it again, and log exactly what came back.
-  // Diagnostic: does the broadcast unmute-all (1A FFFFFFFF) bring two known lamps out of mute?
-  // Diagnostic: unmute-all, then 18 range queries over ranges holding one, both or no known lamp.
   void identify_next();
+  // One push of the Retry button: what turning Send to lights off and on again does today.
+  void retry();
   bool stage_assignment(uint32_t kid, uint8_t gid);
   void confirm_assignment();
+  // Commission, validate, stage and confirm an assignment in one call. The confirm itself is
+  // asynchronous; this returns true once it has been sent.
+  bool assign(uint32_t kid, uint8_t gid, std::string &error);
 
   size_t lamp_count() const { return inventory_.lamps().size(); }
   uint32_t bus_timeouts() const { return bus_.timeouts(); }
@@ -162,6 +164,8 @@ class KLinkHub : public Component, public uart::UARTDevice {
 
   bool scanning_{false};
   bool scan_complete_{false};
+  bool auto_scanned_{false};
+  std::string scan_note_;
   std::vector<uint32_t> scan_kids_;
   size_t scan_pos_{0};
   uint32_t scan_found_{0};
@@ -434,7 +438,7 @@ class KLinkSwitch : public switch_::Switch, public Component {
   KLinkGroup *group_{nullptr};
 };
 
-enum class ButtonKind : uint8_t { SCAN, IDENTIFY_NEXT };
+enum class ButtonKind : uint8_t { SCAN, IDENTIFY_NEXT, RETRY };
 
 class KLinkButton : public button::Button, public Component {
  public:

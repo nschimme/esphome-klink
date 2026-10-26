@@ -12,6 +12,7 @@ ButtonKind = klink_ns.enum("ButtonKind", is_class=True)
 KINDS = {
     "scan": ButtonKind.SCAN,
     "identify_next": ButtonKind.IDENTIFY_NEXT,
+    "retry": ButtonKind.RETRY,
 }
 
 CONFIG_SCHEMA = (
