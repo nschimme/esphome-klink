@@ -157,6 +157,14 @@ jobs:
           (work / "two-groups.yaml").write_text(text)
           example.unlink()
 
+          # The top-level device configs have no wifi/api/ota (they are adopted from the ESPHome
+          # dashboard, which adds them), but time.sntp requires a network component: add a stub.
+          for path in work.glob("kessil-tuna-*.yaml"):
+              path.write_text(
+                  path.read_text()
+                  + "\nwifi:\n  ssid: ci\n  password: ci-password\napi:\nota:\n  - platform: esphome\n"
+              )
+
           # 3) Dummy secrets for every !secret reference in the copies (secrets.yaml is
           #    gitignored). Nothing is flashed from CI, so bogus values are fine; 32-byte
           #    base64 is used for anything that looks like a key.
@@ -271,6 +279,14 @@ jobs:
               raise SystemExit("ci: expected exactly one packages block in examples/two-groups.yaml")
           (work / "two-groups.yaml").write_text(text)
           example.unlink()
+
+          # The top-level device configs have no wifi/api/ota (they are adopted from the ESPHome
+          # dashboard, which adds them), but time.sntp requires a network component: add a stub.
+          for path in work.glob("kessil-tuna-*.yaml"):
+              path.write_text(
+                  path.read_text()
+                  + "\nwifi:\n  ssid: ci\n  password: ci-password\napi:\nota:\n  - platform: esphome\n"
+              )
 
           # 3) Dummy secrets for every !secret reference in the copies (secrets.yaml is
           #    gitignored). Nothing is flashed from CI, so bogus values are fine; 32-byte
