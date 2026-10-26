@@ -1,0 +1,11 @@
+# ESP32-C6 on its native USB-C port. The chip's USB data pads carry the bus, so there is no extra
+# hardware: a USB-C cable from the board to the lamp's K-Link port is all that is wired.
+# D- is GPIO12 (UART TX) and D+ is GPIO13 (UART RX).
+substitutions:
+  dm_pin: "12"
+  dp_pin: "13"
+
+esp32:
+  board: esp32-c6-devkitc-1
+  framework:
+    type: esp-idf

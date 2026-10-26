@@ -1,0 +1,68 @@
+# Shared by every lamp package: the K-Link hub, the clock, and the controls that are not tied to a
+# lamp model. Pulled in by the lamp packages, not used on its own.
+#
+# Substitutions you can override (defaults below):
+#   timezone     the schedule runs on local time, so set your own, e.g. Europe/Berlin
+#   auto_writes  "true" = listen first and take over the bus by itself once it has been quiet;
+#                "false" = never transmit until you turn the "Bus writes" switch on
+substitutions:
+  timezone: Etc/UTC
+  auto_writes: "false"
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/nschimme/esphome-klink
+      ref: main
+    components: [klink]
+
+logger:
+  baud_rate: 0     # the USB pads are used for the bus, so there is no serial console
+  level: INFO
+
+time:
+  - platform: sntp
+    id: local_time
+    timezone: ${timezone}
+
+# 8N1 at 115200. tx_pin MUST be the D- pad: the klink component routes the UART's TX signal to D+
+# plain and to D- inverted. The board file sets dm_pin / dp_pin for each chip.
+uart:
+  id: klink_uart
+  tx_pin: GPIO${dm_pin}   # D-
+  rx_pin: GPIO${dp_pin}   # D+ (also read back while transmitting; the bus ignores the echo)
+  baud_rate: 115200
+  rx_buffer_size: 1024
+
+klink:
+  id: kl
+  uart_id: klink_uart
+  auto_writes: ${auto_writes}
+  direct_drive:
+    positive_pin: ${dp_pin}
+    negative_pin: ${dm_pin}
+  on_lamp_found:
+    - logger.log:
+        format: "Found lamp KID %u in GID %u (type %u)"
+        args: ["kid", "gid", "type"]
+
+switch:
+  - platform: klink            # OFF = dry run (frames are logged, nothing is sent)
+    type: writes
+    name: "Bus writes"
+    restore_mode: RESTORE_DEFAULT_OFF
+  - platform: klink            # gates "Find lamps"; switches itself off after 5 minutes
+    type: commissioning
+    name: "Commissioning mode"
+    restore_mode: ALWAYS_OFF
+
+button:
+  - { platform: klink, type: scan, name: "Find lamps" }
+  - { platform: klink, type: identify_next, name: "Identify next lamp" }
+
+text_sensor:
+  - { platform: klink, name: "Bus state" }
+
+sensor:
+  - { platform: klink, type: lamps, name: "Known lamps" }
+  - { platform: klink, type: bus_timeouts, name: "Bus timeouts" }

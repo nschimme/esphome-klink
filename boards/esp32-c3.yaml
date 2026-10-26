@@ -1,0 +1,11 @@
+# ESP32-C3 on its native USB-C port. The chip's USB data pads carry the bus, so there is no extra
+# hardware: a USB-C cable from the board to the lamp's K-Link port is all that is wired.
+# D- is GPIO18 (UART TX) and D+ is GPIO19 (UART RX).
+substitutions:
+  dm_pin: "18"
+  dp_pin: "19"
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: esp-idf
