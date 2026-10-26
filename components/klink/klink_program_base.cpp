@@ -1,5 +1,7 @@
 #include "klink_program_base.h"
 
+#include "klink.h"  // KLinkSlotText
+
 #include <cmath>
 #include <cstdio>
 #include <cstring>
