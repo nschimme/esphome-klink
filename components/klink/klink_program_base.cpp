@@ -3,6 +3,7 @@
 #include "klink.h"  // KLinkSlotText
 
 #include <cmath>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 
@@ -178,6 +179,7 @@ void ProgramBase::preview_point(size_t slot) {
   const kk::SchedulePoint &p = this->slots_[slot];
   if (!p.enabled)
     return;
+  this->preview_minute_ = -1;
   uint8_t channels[5];
   std::memcpy(channels, p.channels, sizeof(channels));
   this->send_(channels);
@@ -195,6 +197,7 @@ void ProgramBase::preview_minute(uint16_t minute_of_day) {
   uint8_t channels[5];
   if (!kk::schedule_compute(this->slots_, static_cast<uint32_t>(minute_of_day) * 60u, channels))
     return;  // nothing enabled
+  this->preview_minute_ = static_cast<int>(minute_of_day);
   this->send_(channels);
   uint32_t now = millis();
   kk::Mode before = this->mode_.mode;
@@ -220,11 +223,23 @@ std::string ProgramBase::status_text() {
       uint32_t second_of_day = now.hour * 3600u + now.minute * 60u + now.second;
       if (!kk::schedule_compute(this->slots_, second_of_day, channels))
         return "Program · no points enabled";
-      char buf[64];
-      std::snprintf(buf, sizeof(buf), "Program · %02u:%02u · INT %u%% CLR %u%%",
-                    static_cast<unsigned>(now.hour), static_cast<unsigned>(now.minute),
-                    static_cast<unsigned>(std::lround(channels[0] * 100.0f / 255.0f)),
-                    static_cast<unsigned>(std::lround(channels[1] * 100.0f / 255.0f)));
+      // Every channel the model has, by its own label: "INT 42% CLR 26% R 0% AM 0%", "INT 53% R 90% G 100% B 60%".
+      char buf[96];
+      int len = std::snprintf(buf, sizeof(buf), "Program · %02u:%02u", static_cast<unsigned>(now.hour),
+                              static_cast<unsigned>(now.minute));
+      const kk::SlotLabels *labels = this->slot_labels();
+      for (size_t i = 0; i < kk::NUM_CHANNELS && len > 0 && static_cast<size_t>(len) < sizeof(buf); i++) {
+        if (labels->name[i] == nullptr)
+          continue;
+        unsigned value = kk::CHANNEL_MAX[i] == 255 ? static_cast<unsigned>(std::lround(channels[i] * 100.0f / 255.0f))
+                                                   : static_cast<unsigned>(channels[i]);
+        char label[8];
+        size_t n = 0;
+        for (; labels->name[i][n] != '\0' && n < sizeof(label) - 1; n++)
+          label[n] = static_cast<char>(std::toupper(static_cast<unsigned char>(labels->name[i][n])));
+        label[n] = '\0';
+        len += std::snprintf(buf + len, sizeof(buf) - len, " · %s %u%%", label, value);
+      }
       return buf;
     }
     case kk::Mode::MANUAL:
@@ -232,6 +247,11 @@ std::string ProgramBase::status_text() {
     case kk::Mode::OFF:
       return "Off";
     case kk::Mode::PREVIEW:
+      if (this->preview_minute_ >= 0) {
+        char when[40];
+        std::snprintf(when, sizeof(when), "Previewing %02d:%02d", this->preview_minute_ / 60, this->preview_minute_ % 60);
+        return when;
+      }
       return "Editing point " + std::to_string(this->selected_ + 1) + " (previewing)";
   }
   return "";

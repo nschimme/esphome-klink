@@ -85,6 +85,7 @@ class ProgramBase : public ProgramHost {
 
   time::RealTimeClock *time_{nullptr};
   size_t selected_{0};
+  int preview_minute_{-1};  // the time of day being previewed, or -1 for a point preview
   std::vector<KLinkSlotText *> slot_texts_;
   CallbackManager<void()> editor_cb_;
   CallbackManager<void()> mode_cb_;
