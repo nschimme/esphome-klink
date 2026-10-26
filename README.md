@@ -223,41 +223,6 @@ With `auto_writes: "true"` the component listens for 15 seconds and only takes o
 bus has been quiet; if another controller appears later, it stops and reports a conflict in
 **Bus state**.
 
-## Upgrading from 0.1.0
-
-Version 0.2.0 reshapes the controls and the way the config is assembled. The Home Assistant
-integration will need a little cleanup after you flash the new firmware.
-
-**Renamed and removed entities.** Take a look at the device's **Entities** page in Home Assistant
-after the upgrade:
-
-- **Bus writes** is now **Send to lights**.
-- The per-group schedule switch, the pause switch and the **Resume schedule** button are gone. The
-  **Mode** select (**Program** / **Manual** / **Off**) and the **Status** text sensor replace them.
-- **Commissioning mode**, **Find lamps** and **Identify next lamp** are no longer in the default
-  config. Setup is automatic now, and **Retry** clears a bus conflict; the power-user actions
-  `klink.scan`, `klink.identify`, `klink.stage_assignment` and `klink.confirm_assignment` still
-  exist for scripting.
-
-Home Assistant keeps the old entities as unavailable/orphaned entries and adds the new ones next to
-them. Remove the old entries from the device's **Entities** page; do not delete the new **Mode** and
-**Status** entities, they are the replacements.
-
-**Send to lights is off after the upgrade** because its entity name changed and the new switch
-starts in the off position. Frames are only logged (dry run) until you turn **Send to lights** on
-again.
-
-**Stored point values and modes are kept.** The per-group package keeps exactly the same entity
-names and ids for the light, the eight point texts, the point editor and the manual channels, so
-the values in flash (the daily program and the chosen mode) still belong to the same entities. Only
-the entities listed above changed name.
-
-**Connectivity moved to `common/network-wifi.yaml`.** The device now serves its own web pages and
-the top-level files get Wi-Fi (with a setup access point), the API and OTA from
-`common/network-wifi.yaml`. It is **unsecured by default**: no API encryption key and no OTA
-password. If the device is on a network you do not trust, add your own key and password (see
-[Network](#network-wifi-api-and-ota)).
-
 ## Network: Wi-Fi, API and OTA
 
 `common/network-wifi.yaml` is the default connectivity package used by all eight top-level files. It
