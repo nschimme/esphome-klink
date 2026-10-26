@@ -425,7 +425,10 @@ void KLinkWeb::handle_mode(AsyncWebServerRequest *request) {
     send_error(request, 400, "invalid mode (program, manual or off)");
     return;
   }
-  group->set_mode(mode);
+  // Every change runs on the main loop (as ESPHome's own web handlers do with defer()): this handler
+  // runs on the HTTP server's task, and state changes publish to the API and the event stream and
+  // write bus frames, none of which is safe from another task.
+  this->defer([group, mode]() { group->set_mode(mode); });
   this->send_ok(request);
 }
 
@@ -449,11 +452,20 @@ void KLinkWeb::handle_identify(AsyncWebServerRequest *request) {
     send_error(request, 409, "Send to lights is off");
     return;
   }
+  KLinkHub *hub = this->hub_;
   if (has_kid) {
-    this->hub_->identify(value);
-  } else if (!this->hub_->identify_gid(static_cast<uint8_t>(value))) {
-    send_error(request, 404, "no known lamps in that group");
-    return;
+    this->defer([hub, value]() { hub->identify(value); });
+  } else {
+    bool any = false;
+    for (const auto &lamp : hub->lamps())
+      if (lamp.gid == value)
+        any = true;
+    if (!any) {
+      send_error(request, 404, "no known lamps in that group");
+      return;
+    }
+    const uint8_t gid = static_cast<uint8_t>(value);
+    this->defer([hub, gid]() { hub->identify_gid(gid); });
   }
   this->send_ok(request);
 }
@@ -534,7 +546,7 @@ void KLinkWeb::handle_point(AsyncWebServerRequest *request) {
       return;
     p.enabled = enabled;
   }
-  group->set_slot_from_values(index, p.minute, p.channels, p.enabled);
+  this->defer([group, index, p]() { group->set_slot_from_values(index, p.minute, p.channels, p.enabled); });
   this->send_ok(request);
 }
 
@@ -559,13 +571,15 @@ void KLinkWeb::handle_preview(AsyncWebServerRequest *request) {
       send_error(request, 400, "invalid parameter: slot");
       return;
     }
-    group->preview_point(value - 1);
+    const size_t slot_index = value - 1;
+    this->defer([group, slot_index]() { group->preview_point(slot_index); });
   } else {
     if (!parse_uint(arg_string(request, "minute"), 1439, value)) {
       send_error(request, 400, "invalid parameter: minute");
       return;
     }
-    group->preview_minute(static_cast<uint16_t>(value));
+    const uint16_t minute = static_cast<uint16_t>(value);
+    this->defer([group, minute]() { group->preview_minute(minute); });
   }
   this->send_ok(request);
 }
@@ -579,7 +593,7 @@ void KLinkWeb::handle_preview_done(AsyncWebServerRequest *request) {
     send_error(request, 404, "unknown group");
     return;
   }
-  group->end_preview();
+  this->defer([group]() { group->end_preview(); });
   this->send_ok(request);
 }
 
@@ -591,10 +605,16 @@ void KLinkWeb::handle_assign(AsyncWebServerRequest *request) {
   if (!this->read_lamp_gid(request, "gid", gid))
     return;
   std::string error;
-  if (!this->hub_->assign(kid, static_cast<uint8_t>(gid), error)) {
+  if (!this->hub_->check_assign(kid, static_cast<uint8_t>(gid), error)) {
     send_error(request, 409, error.empty() ? "assignment refused" : error);
     return;
   }
+  KLinkHub *hub = this->hub_;
+  const uint8_t target = static_cast<uint8_t>(gid);
+  this->defer([hub, kid, target]() {
+    std::string why;
+    hub->assign(kid, target, why);
+  });
   this->send_ok(request);
 }
 
@@ -607,10 +627,16 @@ void KLinkWeb::handle_name(AsyncWebServerRequest *request) {
     return;
   }
   std::string error;
-  if (!this->hub_->set_name(kid, arg_string(request, "name"), error)) {
+  const std::string name = arg_string(request, "name");
+  if (!this->hub_->check_name(kid, name, error)) {
     send_error(request, 400, error);
     return;
   }
+  KLinkHub *hub = this->hub_;
+  this->defer([hub, kid, name]() {
+    std::string why;
+    hub->set_name(kid, name, why);
+  });
   this->send_ok(request);
 }
 
@@ -627,10 +653,11 @@ void KLinkWeb::handle_copy(AsyncWebServerRequest *request) {
     send_error(request, 404, "unknown group");
     return;
   }
-  if (!to_group->copy_program_from(*from_group)) {
+  if (to_group->model_name() != from_group->model_name() || to_group->num_slots() != from_group->num_slots()) {
     send_error(request, 409, "groups differ in model or slot count");
     return;
   }
+  this->defer([to_group, from_group]() { to_group->copy_program_from(*from_group); });
   this->send_ok(request);
 }
 
@@ -639,17 +666,20 @@ void KLinkWeb::handle_writes(AsyncWebServerRequest *request) {
   bool on;
   if (!this->read_bool_arg(request, "on", on))
     return;
-  bool ok = this->hub_->set_writes_from_ui(on);
-  send_json(request, 200, ok ? "{\"ok\":true}" : "{\"ok\":true,\"pending\":true}");
+  KLinkHub *hub = this->hub_;
+  this->defer([hub, on]() { hub->set_writes_from_ui(on); });
+  this->send_ok(request);
 }
 
 void KLinkWeb::handle_retry(AsyncWebServerRequest *request) {
-  this->hub_->retry();
+  KLinkHub *hub = this->hub_;
+  this->defer([hub]() { hub->retry(); });
   this->send_ok(request);
 }
 
 void KLinkWeb::handle_scan(AsyncWebServerRequest *request) {
-  this->hub_->start_scan();
+  KLinkHub *hub = this->hub_;
+  this->defer([hub]() { hub->start_scan(); });
   this->send_ok(request);
 }
 

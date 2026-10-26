@@ -397,6 +397,20 @@ void KLinkHub::confirm_assignment() {
   });
 }
 
+bool KLinkHub::check_assign(uint32_t kid, uint8_t gid, std::string &error) const {
+  error.clear();
+  if (!this->writes_enabled_) {
+    error = "Send to lights is off";
+    return false;
+  }
+  kk::AssignmentError why = this->inventory_.check_assignment_error(kid, gid);
+  if (why != kk::AssignmentError::NONE) {
+    error = kk::assignment_error_text(why);
+    return false;
+  }
+  return true;
+}
+
 bool KLinkHub::assign(uint32_t kid, uint8_t gid, std::string &error) {
   error.clear();
   if (!this->writes_enabled_) {
@@ -457,6 +471,20 @@ void KLinkHub::save_names_() {
   stored.length = static_cast<uint16_t>(blob.size());
   std::memcpy(stored.data, blob.data(), blob.size());
   this->names_pref_.save(&stored);
+}
+
+bool KLinkHub::check_name(uint32_t kid, const std::string &name, std::string &error) const {
+  error.clear();
+  kk::NameTable probe = this->names_;
+  if (probe.set(kid, name))
+    return true;
+  if (name.size() > kk::NAME_MAX_LEN)
+    error = "name is too long (24 bytes max)";
+  else if (!this->names_.contains(kid) && this->names_.size() >= kk::MAX_NAMES)
+    error = "no room for another name";
+  else
+    error = "name is not valid UTF-8";
+  return false;
 }
 
 bool KLinkHub::set_name(uint32_t kid, const std::string &name, std::string &error) {

@@ -111,6 +111,10 @@ class KLinkHub : public Component, public uart::UARTDevice {
   // Commission, validate, stage and confirm an assignment in one call. The confirm itself is
   // asynchronous; this returns true once it has been sent.
   bool assign(uint32_t kid, uint8_t gid, std::string &error);
+  // The checks assign() and set_name() would fail on, without changing anything: the web handler runs
+  // them on the HTTP task to answer at once, then does the work on the main loop.
+  bool check_assign(uint32_t kid, uint8_t gid, std::string &error) const;
+  bool check_name(uint32_t kid, const std::string &name, std::string &error) const;
 
   size_t lamp_count() const { return inventory_.lamps().size(); }
   // Views for the web API.
