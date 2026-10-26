@@ -1,0 +1,321 @@
+# CI for the esphome-klink external component.
+#
+# The shipped device configs pull the component from GitHub
+# (`external_components` in common/base.yaml, remote packages in examples/two-groups.yaml),
+# which would test "main" instead of the commit under test. The jobs below therefore work on a
+# temporary copy of the tree (`ci-work/`) in which
+#   * common/base.yaml points external_components at this checkout, and
+#   * examples/two-groups.yaml includes the same files locally instead of downloading them.
+#
+# Why rewrite the block instead of adding an overlay config that packages the original?
+# ESPHome *appends* `external_components` lists coming from packages, it does not replace them,
+# so an overlay that adds a local source would still load the git source from common/base.yaml
+# and register the `klink` component twice. Rewriting the one block in a throwaway copy (the
+# tree in the runner workspace, never the commit) is the robust option. The rewrite is a
+# regex + assertion: if common/base.yaml or the example changes shape, CI fails loudly instead
+# of silently testing the wrong thing.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # Host-compilable unit tests for the pure-logic parts of the component (no ESPHome needed).
+  host-tests:
+    name: Host tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run every host test
+        run: |
+          set -euo pipefail
+          mkdir -p build/host-tests
+          shopt -s nullglob
+          tests=(tests/test_klink_*.cpp)
+          if [ ${#tests[@]} -eq 0 ]; then
+            echo "::error::no tests/test_klink_*.cpp files found"
+            exit 1
+          fi
+          for src in "${tests[@]}"; do
+            name="$(basename "$src" .cpp)"
+            echo "::group::$name"
+            g++ -std=c++11 -Wall -Wextra -I components/klink "$src" -o "build/host-tests/$name"
+            "./build/host-tests/$name"
+            echo "::endgroup::"
+          done
+
+  # Validates every top-level config and the example: YAML, substitutions, packages and the
+  # Python component code (esphome config loads and validates the component modules).
+  validate:
+    name: Validate ${{ matrix.config }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      # One broken config should not hide the others.
+      fail-fast: false
+      matrix:
+        # Single source of truth for the config list; the compile job reuses it via *configs
+        # and excludes the boards it does not build.
+        config: &configs
+          - kessil-tuna-sun-esp32-c3.yaml
+          - kessil-tuna-sun-esp32-c6.yaml
+          - kessil-tuna-sun-esp32-s2.yaml
+          - kessil-tuna-sun-esp32-s3.yaml
+          - kessil-tuna-blue-esp32-c3.yaml
+          - kessil-tuna-blue-esp32-c6.yaml
+          - kessil-tuna-blue-esp32-s2.yaml
+          - kessil-tuna-blue-esp32-s3.yaml
+          - examples/two-groups.yaml
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install ESPHome
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install esphome
+          esphome version
+
+      # Keep in sync with the identical step in the compile job.
+      - name: Prepare local-component workspace (ci-work/)
+        run: |
+          set -euo pipefail
+          rm -rf ci-work
+          mkdir -p ci-work
+          cp -R boards common components examples kessil-tuna-*.yaml ci-work/
+          python3 - <<'PY'
+          import base64
+          import pathlib
+          import re
+
+          work = pathlib.Path("ci-work")
+          components = (work / "components").resolve()
+          if not components.is_dir():
+              raise SystemExit(f"ci: missing component directory {components}")
+
+          # 1) Point common/base.yaml at the checked-out component instead of the git source.
+          #    (ESPHome appends external_components lists from packages, so an overlay config
+          #    would leave the git source active and load `klink` twice.)
+          base = work / "common" / "base.yaml"
+          text = base.read_text()
+          override = (
+              "# CI override (see .github/workflows/ci.yml): use the checked-out component.\n"
+              "external_components:\n"
+              "  - source:\n"
+              "      type: local\n"
+              f"      path: {components}\n"
+              "    components: [klink]\n"
+          )
+          text, count = re.subn(
+              r"(?m)^external_components:[ \t]*\n(?:[ \t]+\S.*\n)*", override, text
+          )
+          if count != 1:
+              raise SystemExit(
+                  "ci: expected exactly one external_components block in common/base.yaml"
+              )
+          base.write_text(text)
+
+          # 2) Rewrite the example's remote_package (url/files from GitHub) into local includes
+          #    of the same files, and put it at the root of the copy: ESPHome's !include may not
+          #    escape the config directory, so boards/ and common/ must be next to it.
+          example = work / "examples" / "two-groups.yaml"
+          text = example.read_text()
+          packages = (
+              "packages:\n"
+              "  board: !include boards/esp32-c6.yaml\n"
+              "  base: !include common/base.yaml\n"
+              "  tuna_sun: !include common/tuna-sun.yaml\n"
+              "  tuna_blue: !include common/tuna-blue.yaml\n"
+          )
+          text, count = re.subn(r"(?m)^packages:[ \t]*\n(?:[ \t]+\S.*\n)*", packages, text)
+          if count != 1:
+              raise SystemExit("ci: expected exactly one packages block in examples/two-groups.yaml")
+          (work / "two-groups.yaml").write_text(text)
+          example.unlink()
+
+          # 3) Dummy secrets for every !secret reference in the copies (secrets.yaml is
+          #    gitignored). Nothing is flashed from CI, so bogus values are fine; 32-byte
+          #    base64 is used for anything that looks like a key.
+          names = set()
+          for path in work.rglob("*.yaml"):
+              names.update(re.findall(r"!secret\s+([A-Za-z0-9_]+)", path.read_text()))
+          lines = []
+          for name in sorted(names):
+              if "key" in name:
+                  value = base64.b64encode(b"0123456789abcdef0123456789abcdef").decode()
+              else:
+                  value = "ci-dummy-value"
+              lines.append(f'{name}: "{value}"')
+          (work / "secrets.yaml").write_text("".join(line + "\n" for line in lines))
+          print(f"ci: prepared ci-work/ with {len(names)} dummy secret(s)")
+          PY
+
+      - name: esphome config
+        working-directory: ci-work
+        env:
+          CONFIG: ${{ matrix.config }}
+        run: |
+          set -euo pipefail
+          config="$CONFIG"
+          # examples/* are rewritten to the root of the copy in the prep step.
+          if [[ "$config" == examples/* ]]; then config="$(basename "$config")"; fi
+          test -f "$config"
+          esphome config "$config"
+
+  # Full firmware build for one board per chip family plus the two-group example.
+  compile:
+    name: Compile ${{ matrix.config }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [host-tests, validate]
+    strategy:
+      fail-fast: false
+      matrix:
+        config: *configs
+        exclude:
+          - config: kessil-tuna-sun-esp32-c3.yaml
+          - config: kessil-tuna-sun-esp32-s2.yaml
+          - config: kessil-tuna-blue-esp32-c6.yaml
+          - config: kessil-tuna-blue-esp32-s3.yaml
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install ESPHome
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install esphome
+          esphome version
+
+      # Keep in sync with the identical step in the validate job.
+      - name: Prepare local-component workspace (ci-work/)
+        run: |
+          set -euo pipefail
+          rm -rf ci-work
+          mkdir -p ci-work
+          cp -R boards common components examples kessil-tuna-*.yaml ci-work/
+          python3 - <<'PY'
+          import base64
+          import pathlib
+          import re
+
+          work = pathlib.Path("ci-work")
+          components = (work / "components").resolve()
+          if not components.is_dir():
+              raise SystemExit(f"ci: missing component directory {components}")
+
+          # 1) Point common/base.yaml at the checked-out component instead of the git source.
+          #    (ESPHome appends external_components lists from packages, so an overlay config
+          #    would leave the git source active and load `klink` twice.)
+          base = work / "common" / "base.yaml"
+          text = base.read_text()
+          override = (
+              "# CI override (see .github/workflows/ci.yml): use the checked-out component.\n"
+              "external_components:\n"
+              "  - source:\n"
+              "      type: local\n"
+              f"      path: {components}\n"
+              "    components: [klink]\n"
+          )
+          text, count = re.subn(
+              r"(?m)^external_components:[ \t]*\n(?:[ \t]+\S.*\n)*", override, text
+          )
+          if count != 1:
+              raise SystemExit(
+                  "ci: expected exactly one external_components block in common/base.yaml"
+              )
+          base.write_text(text)
+
+          # 2) Rewrite the example's remote_package (url/files from GitHub) into local includes
+          #    of the same files, and put it at the root of the copy: ESPHome's !include may not
+          #    escape the config directory, so boards/ and common/ must be next to it.
+          example = work / "examples" / "two-groups.yaml"
+          text = example.read_text()
+          packages = (
+              "packages:\n"
+              "  board: !include boards/esp32-c6.yaml\n"
+              "  base: !include common/base.yaml\n"
+              "  tuna_sun: !include common/tuna-sun.yaml\n"
+              "  tuna_blue: !include common/tuna-blue.yaml\n"
+          )
+          text, count = re.subn(r"(?m)^packages:[ \t]*\n(?:[ \t]+\S.*\n)*", packages, text)
+          if count != 1:
+              raise SystemExit("ci: expected exactly one packages block in examples/two-groups.yaml")
+          (work / "two-groups.yaml").write_text(text)
+          example.unlink()
+
+          # 3) Dummy secrets for every !secret reference in the copies (secrets.yaml is
+          #    gitignored). Nothing is flashed from CI, so bogus values are fine; 32-byte
+          #    base64 is used for anything that looks like a key.
+          names = set()
+          for path in work.rglob("*.yaml"):
+              names.update(re.findall(r"!secret\s+([A-Za-z0-9_]+)", path.read_text()))
+          lines = []
+          for name in sorted(names):
+              if "key" in name:
+                  value = base64.b64encode(b"0123456789abcdef0123456789abcdef").decode()
+              else:
+                  value = "ci-dummy-value"
+              lines.append(f'{name}: "{value}"')
+          (work / "secrets.yaml").write_text("".join(line + "\n" for line in lines))
+          print(f"ci: prepared ci-work/ with {len(names)} dummy secret(s)")
+          PY
+
+      - name: Cache slug for the config path
+        id: slug
+        env:
+          CONFIG: ${{ matrix.config }}
+        run: echo "value=${CONFIG//\//-}" >> "$GITHUB_OUTPUT"
+
+      # Restore after the prep step: prep wipes ci-work/, and esphome keeps its build tree in
+      # ci-work/.esphome because the compile step runs with that working directory.
+      - name: Cache PlatformIO and ESPHome build trees
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ci-work/.esphome
+          key: esphome-${{ runner.os }}-${{ steps.slug.outputs.value }}-${{ hashFiles('boards/**', 'common/**', 'components/klink/**', 'kessil-tuna-*.yaml', 'examples/**', '.github/workflows/ci.yml') }}
+          restore-keys: |
+            esphome-${{ runner.os }}-${{ steps.slug.outputs.value }}-
+            esphome-${{ runner.os }}-
+
+      - name: esphome compile
+        working-directory: ci-work
+        env:
+          CONFIG: ${{ matrix.config }}
+        run: |
+          set -euo pipefail
+          config="$CONFIG"
+          # examples/* are rewritten to the root of the copy in the prep step.
+          if [[ "$config" == examples/* ]]; then config="$(basename "$config")"; fi
+          test -f "$config"
+          esphome compile "$config"
