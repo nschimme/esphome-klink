@@ -275,9 +275,15 @@ api:
 ota:
   - platform: esphome
     password: !secret ota_password
+
+web_server:
+  auth:
+    username: !secret web_user
+    password: !secret web_password
 ```
 
-To use Ethernet, Thread or fixed Wi-Fi credentials instead, leave out `common/network-wifi.yaml` and add
+The OTA password does **not** protect ESPHome's web update page (`/update`), which the captive portal
+adds: set `web_server: auth` as above to protect it and both web pages. To use Ethernet, Thread or fixed Wi-Fi credentials instead, leave out `common/network-wifi.yaml` and add
 your own network, `api:` and `ota:`. Whatever you use, the device needs a network: the clock is set over
 SNTP and the program runs on local time.
 
