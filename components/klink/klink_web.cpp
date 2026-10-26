@@ -75,7 +75,6 @@ static void send_json(AsyncWebServerRequest *request, int code, const std::strin
     httpd_resp_set_status(*request, code == 405 ? HTTPD_405 : HTTPD_400);
     httpd_resp_set_type(*request, "application/json");
     httpd_resp_set_hdr(*request, "Accept-Ranges", "none");
-    httpd_resp_set_hdr(*request, "Access-Control-Allow-Origin", "*");
     httpd_resp_send(*request, body.c_str(), HTTPD_RESP_USE_STRLEN);
     return;
   }
@@ -355,14 +354,25 @@ void KLinkWeb::handle_mode(AsyncWebServerRequest *request) {
 }
 
 void KLinkWeb::handle_identify(AsyncWebServerRequest *request) {
-  uint32_t kid;
-  if (!this->read_uint_arg(request, "kid", 0xFFFFFFFFu, kid))
+  const bool has_kid = request->hasArg("kid");
+  const bool has_gid = request->hasArg("gid");
+  if (has_kid == has_gid) {
+    send_error(request, 400, "provide exactly one of kid or gid");
+    return;
+  }
+  uint32_t value;
+  if (!this->read_uint_arg(request, has_kid ? "kid" : "gid", has_kid ? 0xFFFFFFFFu : kk::MAX_GID, value))
     return;
   if (!this->hub_->writes_enabled()) {
     send_error(request, 409, "Send to lights is off");
     return;
   }
-  this->hub_->identify(kid);
+  if (has_kid) {
+    this->hub_->identify(value);
+  } else if (!this->hub_->identify_gid(static_cast<uint8_t>(value))) {
+    send_error(request, 404, "no known lamps in that group");
+    return;
+  }
   this->send_ok(request);
 }
 
