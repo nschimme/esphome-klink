@@ -169,13 +169,16 @@ For each lamp group:
 
 - a **light** (brightness is intensity; on the Tuna Sun, color temperature is the color control) with
   the effects Pulse, Color sweep, Sunrise and Sunset;
+- a **mode** select: **Program** runs the daily program; **Manual** holds what you set and any light or
+  number change switches to it automatically; **Off** turns the lamps off;
+- a **status** text sensor saying what the group is doing right now (the running program, Manual, Off,
+  a preview, or the active effect);
 - **red** and **amber** (Tuna Sun) or **violet / red / green** (Tuna Blue) manual controls;
 - a **program editor**: choose a point 1 to 8, then edit its time and its INT, CLR, R and AM values, like
-  the controller's own Quick Set screen. Editing a point turns it on and applies at once; changes are saved
-  to flash a couple of seconds later;
+  the controller's own Quick Set screen. Editing a point turns it on, shows it on the lamps at once for
+  about a minute, and then the group returns to its previous mode; changes are saved to flash a couple of
+  seconds later;
 - raw **point text entities** (`08:00 int=40 clr=20 r=10`) for copy and paste;
-- **schedule**, **pause** and **resume schedule** controls to switch between the program and manual
-  control;
 - **Bus state**, **Known lamps** and **Bus timeouts** diagnostics.
 
 Values are raw: INT and CLR run 0 to 255, red, amber, violet and green 0 to 100.

@@ -8,8 +8,8 @@ substitutions:
   tuna_sun_gid: "2"
 
 light:
-  # Manual override for the whole group. Brightness drives intensity (INT). Use "resume schedule" to
-  # hand control back to the program.
+  # Manual override for the whole group. Brightness drives intensity (INT). Touching the light switches
+  # the group to Manual; set Mode to Program to hand control back to the daily program.
   - platform: klink
     output_id: tuna_sun
     klink_id: kl
@@ -42,7 +42,11 @@ text:
 # Edits apply to the running program at once and are saved to flash a couple of seconds after the last
 # change. Editing a point turns it on; use the switch to turn a point off.
 select:
+  - { platform: klink, group: tuna_sun, type: mode, name: "Tuna Sun mode" }
   - { platform: klink, group: tuna_sun, name: "Tuna Sun program point" }
+
+text_sensor:
+  - { platform: klink, group: tuna_sun, type: status, name: "Tuna Sun status" }
 
 datetime:
   - { platform: klink, group: tuna_sun, type: time, name: "Tuna Sun point time" }
@@ -61,16 +65,3 @@ switch:
     type: point_enabled
     group: tuna_sun
     name: "Tuna Sun point enabled"
-  - platform: klink            # run the program (turning it on also ends a manual override)
-    type: schedule
-    group: tuna_sun
-    name: "Tuna Sun schedule"
-    restore_mode: RESTORE_DEFAULT_ON
-  - platform: klink            # hold the current level without leaving the program
-    type: pause
-    group: tuna_sun
-    name: "Tuna Sun pause"
-    restore_mode: RESTORE_DEFAULT_OFF
-
-button:
-  - { platform: klink, type: resume_schedule, group: tuna_sun, name: "Tuna Sun resume schedule" }

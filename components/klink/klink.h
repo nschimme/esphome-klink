@@ -322,6 +322,18 @@ class KLinkChannelNumber : public number::Number, public Component {
   ESPPreferenceObject pref_;
 };
 
+// The group's operating mode: Program, Manual or Off (option index = kessil::klink::Mode).
+class KLinkModeSelect : public select::Select, public Component {
+ public:
+  void set_group(KLinkGroup *group) { group_ = group; }
+  void setup() override;
+  void dump_config() override;
+
+ protected:
+  void control(size_t index) override { this->group_->set_mode(static_cast<kessil::klink::Mode>(index)); }
+  KLinkGroup *group_{nullptr};
+};
+
 // Which program point the editor entities show and edit.
 class KLinkPointSelect : public select::Select, public Component {
  public:
@@ -400,7 +412,7 @@ class KLinkSlotText : public text::Text, public Component {
   ESPPreferenceObject pref_;
 };
 
-enum class SwitchKind : uint8_t { SCHEDULE, PAUSE, WRITES, COMMISSIONING, POINT_ENABLED };
+enum class SwitchKind : uint8_t { WRITES, COMMISSIONING, POINT_ENABLED };
 
 class KLinkSwitch : public switch_::Switch, public Component {
  public:
@@ -415,18 +427,17 @@ class KLinkSwitch : public switch_::Switch, public Component {
   void write_state(bool state) override;
   void apply_(bool state);
 
-  SwitchKind kind_{SwitchKind::SCHEDULE};
+  SwitchKind kind_{SwitchKind::WRITES};
   KLinkHub *hub_{nullptr};
   KLinkGroup *group_{nullptr};
 };
 
-enum class ButtonKind : uint8_t { SCAN, IDENTIFY_NEXT, RESUME_SCHEDULE };
+enum class ButtonKind : uint8_t { SCAN, IDENTIFY_NEXT };
 
 class KLinkButton : public button::Button, public Component {
  public:
   void set_kind(ButtonKind kind) { kind_ = kind; }
   void set_hub(KLinkHub *hub) { hub_ = hub; }
-  void set_group(KLinkGroup *group) { group_ = group; }
   void dump_config() override;
 
  protected:
@@ -434,7 +445,6 @@ class KLinkButton : public button::Button, public Component {
 
   ButtonKind kind_{ButtonKind::SCAN};
   KLinkHub *hub_{nullptr};
-  KLinkGroup *group_{nullptr};
 };
 
 enum class SensorKind : uint8_t {
@@ -470,6 +480,19 @@ class KLinkStateSensor : public text_sensor::TextSensor, public PollingComponent
 
  protected:
   KLinkHub *hub_{nullptr};
+};
+
+// One line describing what this group is doing right now (see KLinkGroup::status_text).
+class KLinkGroupStatus : public text_sensor::TextSensor, public PollingComponent {
+ public:
+  void set_group(KLinkGroup *group) { group_ = group; }
+  void update() override;
+  void dump_config() override;
+
+ protected:
+  KLinkGroup *group_{nullptr};
+  std::string last_;
+  bool have_last_{false};
 };
 
 // Automation hooks.

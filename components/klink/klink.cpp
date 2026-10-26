@@ -755,6 +755,19 @@ void KLinkSlotText::apply_(const std::string &value, bool save) {
 
 // ---- Point editor entities ------------------------------------------------------------------
 
+void KLinkModeSelect::setup() {
+  this->group_->add_on_mode_callback([this]() {
+    if (this->group_->mode() == kk::Mode::PREVIEW)
+      return;  // keep showing the last user-selectable mode
+    this->publish_state(static_cast<size_t>(this->group_->mode()));
+  });
+  // A preview right at boot has no user-selectable mode to show yet.
+  if (this->group_->mode() != kk::Mode::PREVIEW)
+    this->publish_state(static_cast<size_t>(this->group_->mode()));
+}
+
+void KLinkModeSelect::dump_config() { LOG_SELECT("", "K-Link mode", this); }
+
 void KLinkPointSelect::setup() {
   this->group_->add_on_editor_callback([this]() { this->publish_state(this->group_->selected_point()); });
   this->publish_state(this->group_->selected_point());
@@ -798,12 +811,6 @@ void KLinkSwitch::setup() {
     return;
   }
   switch (this->kind_) {
-    case SwitchKind::SCHEDULE:
-      state = restored.value_or(true);
-      break;
-    case SwitchKind::PAUSE:
-      state = restored.value_or(false);
-      break;
     case SwitchKind::WRITES:
       state = restored.value_or(this->hub_->writes_enabled());
       this->hub_->add_on_writes_callback([this](bool on) { this->publish_state(on); });
@@ -833,12 +840,6 @@ void KLinkSwitch::write_state(bool state) {
 
 void KLinkSwitch::apply_(bool state) {
   switch (this->kind_) {
-    case SwitchKind::SCHEDULE:
-      this->group_->set_mode(state ? kk::Mode::PROGRAM : kk::Mode::OFF);
-      break;
-    case SwitchKind::PAUSE:
-      this->group_->set_mode(state ? kk::Mode::MANUAL : kk::Mode::PROGRAM);
-      break;
     case SwitchKind::WRITES:
       this->hub_->set_writes_enabled(state);
       break;
@@ -976,6 +977,19 @@ void KLinkStateSensor::update() {
 
 void KLinkStateSensor::dump_config() { LOG_TEXT_SENSOR("", "K-Link state", this); }
 
+// ---- Group status text sensor ---------------------------------------------------------------
+
+void KLinkGroupStatus::update() {
+  std::string text = this->group_->status_text();
+  if (!this->have_last_ || this->last_ != text) {
+    this->last_ = text;
+    this->have_last_ = true;
+    this->publish_state(text);
+  }
+}
+
+void KLinkGroupStatus::dump_config() { LOG_TEXT_SENSOR("", "K-Link group status", this); }
+
 // ---- Button ---------------------------------------------------------------------------------
 
 void KLinkButton::dump_config() { LOG_BUTTON("", "K-Link button", this); }
@@ -987,9 +1001,6 @@ void KLinkButton::press_action() {
       break;
     case ButtonKind::IDENTIFY_NEXT:
       this->hub_->identify_next();
-      break;
-    case ButtonKind::RESUME_SCHEDULE:
-      this->group_->set_mode(kk::Mode::PROGRAM);
       break;
   }
 }

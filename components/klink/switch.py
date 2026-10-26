@@ -13,13 +13,11 @@ CONF_GROUP = "group"
 KLinkSwitch = klink_ns.class_("KLinkSwitch", switch.Switch, cg.Component)
 SwitchKind = klink_ns.enum("SwitchKind", is_class=True)
 KINDS = {
-    "schedule": SwitchKind.SCHEDULE,
-    "pause": SwitchKind.PAUSE,
     "writes": SwitchKind.WRITES,
     "commissioning": SwitchKind.COMMISSIONING,
     "point_enabled": SwitchKind.POINT_ENABLED,  # the point editor's on/off for the selected point
 }
-GROUP_KINDS = ("schedule", "pause", "point_enabled")
+GROUP_KINDS = ("point_enabled",)
 
 
 def _check(config):
