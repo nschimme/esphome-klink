@@ -18,7 +18,11 @@ light:
     time_id: local_time
     model: tuna_sun
     slots: 8
-    invert_color: true  # on a Tuna Sun, color value 0 is the warm end
+    # Kessil's A360X specification: 6,000 K to 9,000 K plus red and yellow (amber). Color value 0 is the
+    # warm end (6,000 K). The spacing between the ends is assumed linear in mireds, not measured.
+    cold_white_color_temperature: 9000 K
+    warm_white_color_temperature: 6000 K
+    invert_color: true
     effects:
       - klink_pulse:
       - klink_color_sweep:

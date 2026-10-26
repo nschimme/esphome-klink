@@ -88,8 +88,8 @@ CONFIG_SCHEMA = (
             # Number of schedule points; each is a `text` entity (platform: klink) of this group.
             cv.Optional(CONF_SLOTS, default=8): cv.int_range(1, 16),
             # Manual commands send brightness as UI1 and the color temperature as UI2 (0-255). The
-            # Kelvin range of UI2 is NOT established for any model: these two ends are placeholders to
-            # calibrate by eye. UI2 = 0 is the cold end unless invert_color is set (on a Tuna Sun UI2 = 0 is warm, so set it).
+            # Kelvin range of UI2 depends on the model (the Tuna Sun spans 6,000 K to 9,000 K, set in
+            # common/tuna-sun.yaml); these generic defaults are placeholders. UI2 = 0 is the cold end unless invert_color is set (on a Tuna Sun UI2 = 0 is warm, so set it).
             cv.Optional(CONF_COLD_WHITE_COLOR_TEMPERATURE, default="6500 K"): cv.color_temperature,
             cv.Optional(CONF_WARM_WHITE_COLOR_TEMPERATURE, default="2700 K"): cv.color_temperature,
             cv.Optional(CONF_INVERT_COLOR, default=False): cv.boolean,
