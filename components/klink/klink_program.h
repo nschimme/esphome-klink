@@ -53,6 +53,8 @@ class ProgramHost {
   virtual void set_extra(uint8_t channel, uint8_t value) = 0;
   virtual uint8_t extra(uint8_t channel) const = 0;
   virtual void set_extra_silent(uint8_t channel, uint8_t value) = 0;
+  // Told when the manual channel values changed by themselves (a snapped colour from Home Assistant).
+  virtual void add_on_extras_callback(std::function<void()> &&cb) { (void) cb; }
 
   // Effects as a temporary overlay on the schedule. Hosts without effects keep these defaults.
   // The light's effect names, without "None".

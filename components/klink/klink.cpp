@@ -1,5 +1,6 @@
 #include "klink.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -546,13 +547,27 @@ void KLinkGroup::dump_config() {
 light::LightTraits KLinkGroup::get_traits() {
   light::LightTraits traits;
   if (this->has_color_temperature()) {
-    traits.set_supported_color_modes({light::ColorMode::COLOR_TEMPERATURE});
+    // The Tuna Sun: exact color temperature, or any colour snapped to what the lamp can make.
+    traits.set_supported_color_modes({light::ColorMode::COLOR_TEMPERATURE, light::ColorMode::RGB});
     traits.set_min_mireds(this->cold_mireds_);
     traits.set_max_mireds(this->warm_mireds_);
+  } else if (this->color_spec_() != nullptr) {
+    traits.set_supported_color_modes({light::ColorMode::RGB});  // the Tuna Blue: snapped to the nearest colour
   } else {
     traits.set_supported_color_modes({light::ColorMode::BRIGHTNESS});
   }
   return traits;
+}
+
+const kk::ColorSpec *KLinkGroup::color_spec_() const {
+  switch (this->model_) {
+    case GroupModel::TUNA_SUN:
+      return &COLOR_SUN;
+    case GroupModel::TUNA_BLUE:
+      return &COLOR_BLUE;
+    default:
+      return nullptr;
+  }
 }
 
 void KLinkGroup::set_extra(uint8_t channel, uint8_t value) {
@@ -572,10 +587,11 @@ void KLinkGroup::set_extra(uint8_t channel, uint8_t value) {
   this->manual_levels(this->state_, level, color);
   uint8_t channels[5] = {level, color, this->extras_[0], this->extras_[1], this->extras_[2]};
   this->send_(channels);
+  this->publish_to_light_(channels);  // the colour the light reports follows the numbers
 }
 
 void KLinkGroup::manual_levels(light::LightState *state, uint8_t &level, uint8_t &color) {
-  if (!this->has_color_temperature()) {
+  if (!this->has_color_temperature() || state->remote_values.get_color_mode() == light::ColorMode::RGB) {
     // Brightness only: UI1 follows the light and UI2 is whatever its number entity (or manual_color) says.
     float brightness;
     state->current_values_as_brightness(&brightness);
@@ -671,15 +687,12 @@ void KLinkGroup::set_effect_options(uint8_t speed, uint32_t duration_ms) {
 void KLinkGroup::effect_ended_() {
   // Remember what the light showed before the effect, so the light call that ends the effect (it
   // repeats those values) is not mistaken for a user command.
-  this->ended_have_published_ = this->have_published_;
-  this->ended_on_ = this->published_on_;
-  this->ended_brightness_ = this->published_brightness_;
-  this->ended_mireds_ = this->published_mireds_;
+  this->ended_shown_ = this->shown_;
   this->effect_ended_pending_ = true;
   this->effect_end_ms_ = 0;
   // The next tick sends whatever the mode asks for again, and shows it on the light.
   this->have_sent_ = false;
-  this->have_published_ = false;
+  this->shown_.have = false;
   // Manual has no tick of its own once the mode is left alone here: put the held level back at once.
   if (this->mode_.mode == kk::Mode::MANUAL && this->state_ != nullptr) {
     uint8_t level, color;
@@ -697,50 +710,100 @@ void KLinkGroup::output_(const uint8_t channels[5]) {
     this->publish_to_light_(channels);
 }
 
-void KLinkGroup::publish_to_light_(const uint8_t channels[5]) {
-  if (this->state_ == nullptr || this->effect_active())
+// Normalise an RGB colour to its direction: the largest component becomes 1 (white for black).
+static void rgb_direction(const uint8_t rgb[3], float out[3]) {
+  uint8_t peak = std::max(rgb[0], std::max(rgb[1], rgb[2]));
+  for (int c = 0; c < 3; c++)
+    out[c] = peak == 0 ? 1.0f : rgb[c] / static_cast<float>(peak);
+}
+
+void KLinkGroup::show_on_light_(bool on, float brightness, light::ColorMode mode, float mireds, const float rgb[3]) {
+  if (this->state_ == nullptr)
     return;
-  const bool on = channels[0] > 0;
-  const float brightness = channels[0] / 255.0f;
-  float mireds = this->published_mireds_;
-  if (on && this->has_color_temperature()) {
-    // The inverse of manual_levels(): UI2 = 0 is the warm end when invert_color_ is set.
-    float t = channels[1] / 255.0f;
-    if (this->invert_color_)
-      t = 1.0f - t;
-    mireds = this->cold_mireds_ + t * (this->warm_mireds_ - this->cold_mireds_);
-  }
-  if (this->have_published_ && on == this->published_on_ && std::fabs(brightness - this->published_brightness_) < 0.002f &&
-      (!on || !this->has_color_temperature() || std::fabs(mireds - this->published_mireds_) < 0.2f))
+  LightShown now;
+  now.have = true;
+  now.on = on;
+  now.mode = mode;
+  now.brightness = brightness;
+  now.mireds = mireds;
+  for (int c = 0; c < 3; c++)
+    now.rgb[c] = rgb != nullptr ? rgb[c] : 0.0f;
+  const LightShown &was = this->shown_;
+  if (was.have && was.on == on && (!on || (std::fabs(was.brightness - brightness) < 0.002f && was.mode == mode &&
+                                          (mode != light::ColorMode::COLOR_TEMPERATURE ||
+                                           std::fabs(was.mireds - mireds) < 0.2f) &&
+                                          (mode != light::ColorMode::RGB ||
+                                           (std::fabs(was.rgb[0] - now.rgb[0]) < 0.005f &&
+                                            std::fabs(was.rgb[1] - now.rgb[1]) < 0.005f &&
+                                            std::fabs(was.rgb[2] - now.rgb[2]) < 0.005f)))))
     return;
-  this->have_published_ = true;
-  this->published_on_ = on;
-  this->published_brightness_ = brightness;
-  this->published_mireds_ = mireds;
+  this->shown_ = now;
   auto call = this->state_->make_call();
   call.set_state(on);
   if (on) {
     call.set_brightness(brightness);
-    if (this->has_color_temperature())
+    if (mode == light::ColorMode::COLOR_TEMPERATURE)
       call.set_color_temperature(mireds);
+    else if (mode == light::ColorMode::RGB)
+      call.set_rgb(rgb[0], rgb[1], rgb[2]);
   }
   call.set_transition_length(0);
   call.set_save(false);
   call.perform();  // write_state() runs from the light's loop and recognises this as our own value
 }
 
-// True when the light's values are the ones publish_to_light_() just set, within rounding.
-bool KLinkGroup::is_own_publish_(light::LightState *state) const {
-  if (!this->have_published_)
+void KLinkGroup::publish_to_light_(const uint8_t channels[5]) {
+  if (this->state_ == nullptr || this->effect_active())
+    return;
+  const bool on = channels[0] > 0;
+  const float brightness = channels[0] / 255.0f;
+  const kk::ColorSpec *spec = this->color_spec_();
+  // The Tuna Blue is always shown as a colour; the Tuna Sun in whichever mode the light is in.
+  const bool rgb_display = spec != nullptr && (!this->has_color_temperature() ||
+                                                this->state_->remote_values.get_color_mode() == light::ColorMode::RGB);
+  if (rgb_display) {
+    uint8_t overlays[3] = {0, 0, 0};
+    for (uint8_t i = 0; i < spec->n_overlays && i < 3; i++)
+      overlays[i] = channels[spec->overlay_channel[i]];
+    uint8_t rgb[3];
+    kk::swatch_i(*spec, channels[1], overlays, rgb);
+    float direction[3];
+    rgb_direction(rgb, direction);
+    this->show_on_light_(on, brightness, light::ColorMode::RGB, 0.0f, direction);
+  } else if (this->has_color_temperature()) {
+    // The inverse of manual_levels(): UI2 = 0 is the warm end when invert_color_ is set.
+    float t = channels[1] / 255.0f;
+    if (this->invert_color_)
+      t = 1.0f - t;
+    this->show_on_light_(on, brightness, light::ColorMode::COLOR_TEMPERATURE,
+                         this->cold_mireds_ + t * (this->warm_mireds_ - this->cold_mireds_), nullptr);
+  } else {
+    this->show_on_light_(on, brightness, light::ColorMode::BRIGHTNESS, 0.0f, nullptr);
+  }
+}
+
+// True when the light's values are the ones show_on_light_() just set, within rounding.
+bool KLinkGroup::shown_matches_(const LightShown &shown, const light::LightColorValues &values) const {
+  if (!shown.have || values.is_on() != shown.on)
     return false;
-  const auto &values = state->remote_values;
-  if (values.is_on() != this->published_on_)
-    return false;
-  if (!this->published_on_)
+  if (!shown.on)
     return true;
-  if (std::fabs(values.get_brightness() - this->published_brightness_) > 0.01f)
+  if (std::fabs(values.get_brightness() - shown.brightness) > 0.01f)
     return false;
-  return !this->has_color_temperature() || std::fabs(values.get_color_temperature() - this->published_mireds_) <= 1.0f;
+  if (shown.mode == light::ColorMode::COLOR_TEMPERATURE)
+    return values.get_color_mode() == light::ColorMode::COLOR_TEMPERATURE &&
+           std::fabs(values.get_color_temperature() - shown.mireds) <= 1.0f;
+  if (shown.mode == light::ColorMode::RGB) {
+    if (values.get_color_mode() != light::ColorMode::RGB)
+      return false;
+    float peak = std::max(values.get_red(), std::max(values.get_green(), values.get_blue()));
+    if (peak <= 0.0f)
+      return false;
+    return std::fabs(values.get_red() / peak - shown.rgb[0]) <= 0.02f &&
+           std::fabs(values.get_green() / peak - shown.rgb[1]) <= 0.02f &&
+           std::fabs(values.get_blue() / peak - shown.rgb[2]) <= 0.02f;
+  }
+  return true;
 }
 
 void KLinkGroup::write_state(light::LightState *state) {
@@ -755,31 +818,50 @@ void KLinkGroup::write_state(light::LightState *state) {
   // the effect starts) would show up as a one-frame flash between two effect frames.
   if (state->get_current_effect_index() != 0)
     return;
+  const light::LightColorValues &values = state->remote_values;
   // The light call that ends an effect repeats the values the light already had. Treat that as our
   // own write; a real user command in the same call (turn-off, new brightness) differs and falls
   // through to take manual control below.
   if (this->effect_ended_pending_) {
     this->effect_ended_pending_ = false;
-    const auto &values = state->remote_values;
-    bool same = this->ended_have_published_ && values.is_on() == this->ended_on_;
-    if (same && this->ended_on_) {
-      same = std::fabs(values.get_brightness() - this->ended_brightness_) <= 0.01f &&
-             (!this->has_color_temperature() || std::fabs(values.get_color_temperature() - this->ended_mireds_) <= 1.0f);
-    }
-    if (same && this->mode_.mode != kk::Mode::MANUAL)
+    if (this->mode_.mode != kk::Mode::MANUAL && this->shown_matches_(this->ended_shown_, values))
       return;
   }
-  // The schedule's own value shown on the light is not a user command.
-  if (this->mode_.mode != kk::Mode::MANUAL && this->is_own_publish_(state))
+  // The value this group itself put on the light (the schedule, or a snapped colour) is not a user
+  // command, in every mode.
+  if (this->shown_matches_(this->shown_, values))
     return;
   this->on_user_command_();
   // The light now shows the user's value, so the schedule's next value must be shown again even if it
-  // equals the one published before.
-  this->have_published_ = false;
+  // equals the one shown before.
+  this->shown_.have = false;
+  const kk::ColorSpec *spec = this->color_spec_();
+  const bool rgb_command = spec != nullptr && values.is_on() && values.get_color_mode() == light::ColorMode::RGB;
+  if (rgb_command) {
+    // Any colour is accepted; the lamp gets the closest one it can make (CLR plus the overlay channels).
+    float peak = std::max(values.get_red(), std::max(values.get_green(), values.get_blue()));
+    uint8_t target[3] = {255, 255, 255};
+    if (peak > 0.0f) {
+      target[0] = static_cast<uint8_t>(std::lround(values.get_red() / peak * 255.0f));
+      target[1] = static_cast<uint8_t>(std::lround(values.get_green() / peak * 255.0f));
+      target[2] = static_cast<uint8_t>(std::lround(values.get_blue() / peak * 255.0f));
+    }
+    kk::SnapResult snapped = kk::nearest_i(*spec, target);
+    this->manual_color_ = snapped.clr;
+    for (uint8_t i = 0; i < spec->n_overlays && i < 3; i++) {
+      const uint8_t channel = spec->overlay_channel[i];  // 0-based UI index, 2..4
+      if (channel >= 2 && channel <= 4)
+        this->extras_[channel - 2] = snapped.overlays[i];
+    }
+  }
   uint8_t level, color;
   this->manual_levels(state, level, color);
   uint8_t channels[5] = {level, color, this->extras_[0], this->extras_[1], this->extras_[2]};
   this->send_(channels);
+  if (rgb_command) {
+    this->publish_to_light_(channels);  // show the colour the lamp will really make
+    this->extras_cb_.call();            // and let the number entities follow
+  }
 }
 
 // ---- Slot text ------------------------------------------------------------------------------
@@ -979,6 +1061,14 @@ void KLinkChannelNumber::setup() {
   uint8_t pct = static_cast<uint8_t>(value < 0 ? 0 : (value > max ? max : value));
   this->group_->set_extra_silent(this->channel_, pct);
   this->publish_state(pct);
+  // A colour snapped from Home Assistant changes these numbers too.
+  this->group_->add_on_extras_callback([this]() {
+    float value = this->group_->extra(this->channel_);
+    if (this->state != value) {
+      this->publish_state(value);
+      this->pref_.save(&value);
+    }
+  });
 }
 
 void KLinkChannelNumber::control(float value) {

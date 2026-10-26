@@ -241,12 +241,14 @@ async def to_code(config):
         component_conf.pop(CONF_UPDATE_INTERVAL, None)
         await cg.register_component(pvar, component_conf)
 
+    # The colour tables of the Tuna lights: Home Assistant's RGB colours are snapped to the nearest
+    # colour a lamp can make (in every build, with or without the web page). klink.h declares
+    # COLOR_SUN/COLOR_BLUE extern before this global, so the const definitions get external linkage.
+    cg.add_global(cg.RawStatement(klink_colors.emit_cpp(firmware=True)))
+
     if config[CONF_WEB]:
         cg.add_define("USE_KLINK_WEB")
         _add_web_page()
-        # The colour tables for /klink/snap. klink_web.h declares COLOR_SUN/COLOR_BLUE extern
-        # before this global, so the const definitions below get external linkage.
-        cg.add_global(cg.RawStatement(klink_colors.emit_cpp(firmware=True)))
         base = await cg.get_variable(config[CONF_WEB_SERVER_BASE_ID])
         web = cg.new_Pvariable(config[CONF_KLINK_WEB_ID], base)
         await cg.register_component(web, config)

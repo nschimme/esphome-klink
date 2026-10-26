@@ -25,6 +25,7 @@
 #include "esphome/components/light/light_effect.h"
 
 #include "klink_bus.h"
+#include "klink_colors.h"
 #include "klink_effects.h"
 #include "klink_guard.h"
 #include "klink_inventory.h"
@@ -222,6 +223,21 @@ enum class GroupModel : uint8_t {
   GENERIC,    // any other model: raw channels
 };
 
+// The colour models of the Tuna lights (tables generated at compile time from klink_colors.py).
+extern const kessil::klink::ColorSpec COLOR_SUN;
+extern const kessil::klink::ColorSpec COLOR_BLUE;
+
+// What a group last put on its light entity (the schedule's value or a snapped colour), so the light's
+// own write_state() call for that value is recognised as ours and not taken for a user command.
+struct LightShown {
+  bool have{false};
+  bool on{false};
+  light::ColorMode mode{light::ColorMode::UNKNOWN};
+  float brightness{0.0f};
+  float mireds{0.0f};
+  float rgb[3]{0.0f, 0.0f, 0.0f};  // the colour direction, largest component 1
+};
+
 class KLinkGroup : public ProgramBase, public light::LightOutput, public Component {
  public:
   const char *kind() const override { return "bus"; }
@@ -280,7 +296,8 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   // UI2 (0-255, models without a color temperature) and UI3-UI5 (percent) from the number entities.
   // A change takes manual control, like the light.
   void set_extra(uint8_t channel, uint8_t value) override;
-  uint8_t extra(uint8_t channel) const override { return extras_[channel - 3]; }
+  uint8_t extra(uint8_t channel) const override { return channel == 2 ? manual_color_ : extras_[channel - 3]; }
+  void add_on_extras_callback(std::function<void()> &&cb) override { extras_cb_.add(std::move(cb)); }
   void set_extra_silent(uint8_t channel, uint8_t value) override {
     if (channel == 2)
       manual_color_ = value;
@@ -343,18 +360,17 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   // Off that must not look like a user command, so the next write_state() compares against what
   // was last shown on the light.
   bool effect_ended_pending_{false};
-  bool ended_have_published_{false};
-  bool ended_on_{false};
-  float ended_brightness_{0.0f};
-  float ended_mireds_{0.0f};
-  // Program/Off output shown on the light entity, so Home Assistant sees the group as on and at the
-  // level the schedule sets (an off-looking light hides its controls and effects in Home Assistant).
+  LightShown ended_shown_;
+  // Program/Off output (and a snapped colour) shown on the light entity, so Home Assistant sees the
+  // group as on at the level and colour it really has (an off-looking light hides its controls and
+  // effects in Home Assistant). On the Tuna lights an RGB colour from Home Assistant is snapped to the
+  // nearest colour the lamp can make (klink_colors.h) and the snapped colour is shown here.
   void publish_to_light_(const uint8_t channels[5]);
-  bool is_own_publish_(light::LightState *state) const;
-  bool have_published_{false};
-  bool published_on_{false};
-  float published_brightness_{0.0f};
-  float published_mireds_{0.0f};
+  void show_on_light_(bool on, float brightness, light::ColorMode mode, float mireds, const float rgb[3]);
+  bool shown_matches_(const LightShown &shown, const light::LightColorValues &values) const;
+  const kessil::klink::ColorSpec *color_spec_() const;
+  LightShown shown_;
+  CallbackManager<void()> extras_cb_;
 };
 
 // A 0-100% control for UI3, UI4 or UI5 of one group.
