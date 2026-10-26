@@ -12,6 +12,7 @@ Run tests with: python3 tests/test_klink_colors.py
 """
 
 import math
+import sys
 
 # 17 evenly spaced stops over CLR 0..255 (CLR 0,16,...,240,255). CLR 0 is the warm end (6,000 K),
 # CLR 255 the cool end (9,000 K). Between the ends we interpolate linearly in mireds.
@@ -107,3 +108,242 @@ def swatch(model, clr, overlays=None):
         fraction = 0.6 * max(0.0, min(100.0, float(value))) / 100.0
         rgb = [base + (top - base) * fraction for base, top in zip(rgb, overlay)]
     return _rgb_to_hex(rgb)
+
+
+# ---------------------------------------------------------------------------
+# Integer reference model.
+#
+# The firmware needs one nearest-colour search and the page's mock server, tests and golden vectors
+# need the same answer, so the arithmetic below is integer only and is duplicated line by line in
+# components/klink/klink_colors.h. The generated tables (`--emit-cpp`) and golden vectors
+# (`--emit-golden`) come from this file; nothing generated is committed.
+
+# Overlay channels per model, in the group's label order: (channel index, label).
+CHANNELS = {
+    "tuna_sun": [(3, "r"), (4, "am")],
+    "tuna_blue": [(2, "vio"), (3, "r"), (4, "grn")],
+}
+
+# Highest number of swatch+dist evaluations nearest_i() may make for any target.
+MAX_EVALS = 700
+
+_CLR_STEPS = (16, 8, 4, 2, 1)
+_OV_STEPS = (20, 10, 5, 2, 1)
+
+
+def int_stops(model):
+    """The 17 hex stops of `model` as (r, g, b) integer tuples."""
+    return [tuple(_hex_to_rgb(value)) for value in _stops_for(model)]
+
+
+def _overlay_rgb(model):
+    return [_hex_to_rgb(OVERLAYS[label]) for _, label in CHANNELS[model]]
+
+
+def swatch_i(model, clr, overlays=None):
+    """Integer twin of swatch(): returns an (r, g, b) tuple instead of a hex string.
+
+    `clr` is 0..255 and `overlays` a list of 0..100 values in the model's overlay order. There is
+    no clamping: out-of-range inputs are caller errors (nearest_i keeps them in range).
+    """
+    stops = int_stops(model)
+    values = list(overlays or [])
+    num = int(clr) * 16
+    i = num // 255
+    if i >= 16:
+        i = 15
+    frac = num - i * 255
+    out = [0, 0, 0]
+    for c in range(3):
+        a, b = stops[i][c], stops[i + 1][c]
+        out[c] = (a * (255 - frac) + b * frac + 127) // 255
+    for index, rgb in enumerate(_overlay_rgb(model)):
+        value = int(values[index]) if index < len(values) else 0
+        k = 60 * value
+        for c in range(3):
+            out[c] = (out[c] * (10000 - k) + rgb[c] * k + 5000) // 10000
+    return tuple(out)
+
+
+def dist_i(a, b):
+    """Redmean squared distance between two (r, g, b) colours, integer only."""
+    rm = (int(a[0]) + int(b[0])) // 2
+    dr = int(a[0]) - int(b[0])
+    dg = int(a[1]) - int(b[1])
+    db = int(a[2]) - int(b[2])
+    return ((512 + rm) * dr * dr >> 8) + 4 * dg * dg + ((767 - rm) * db * db >> 8)
+
+
+def nearest_i(model, target):
+    """Find the CLR and overlay settings whose swatch_i() is closest to `target`.
+
+    Returns {"clr", "overlays", "rgb", "dist", "evals"}. Coarse scan over CLR with overlays 0,
+    then a coordinate descent from large to small steps; the first strictly improving candidate
+    wins (+ before -). Must stay identical to nearest_i() in klink_colors.h.
+    """
+    n_ov = len(CHANNELS[model])
+    target = (int(target[0]), int(target[1]), int(target[2]))
+    evals = 0
+
+    def evaluate(clr, overlays):
+        nonlocal evals
+        rgb = swatch_i(model, clr, overlays)
+        evals += 1
+        return rgb, dist_i(rgb, target)
+
+    # Stage 1: coarse CLR scan (0, 8, ..., 248, 255), overlays 0.
+    best_dist = None
+    best_clr = 0
+    best_ov = [0] * n_ov
+    best_rgb = (0, 0, 0)
+    for clr in list(range(0, 249, 8)) + [255]:
+        rgb, distance = evaluate(clr, [0] * n_ov)
+        if best_dist is None or distance < best_dist:
+            best_dist, best_clr, best_rgb = distance, clr, rgb
+
+    # Stage 2: coordinate descent over [clr, ov0, ov1, ...].
+    values = [best_clr] + [0] * n_ov
+    for s in range(5):
+        for _pass in range(8):
+            accepted = False
+            for vi in range(1 + n_ov):
+                step = _CLR_STEPS[s] if vi == 0 else _OV_STEPS[s]
+                high = 255 if vi == 0 else 100
+                current = values[vi]
+                for sign in (1, -1):
+                    candidate = current + sign * step
+                    if candidate < 0:
+                        candidate = 0
+                    elif candidate > high:
+                        candidate = high
+                    if candidate == current:
+                        continue
+                    trial = list(values)
+                    trial[vi] = candidate
+                    rgb, distance = evaluate(trial[0], trial[1:])
+                    if distance < best_dist:
+                        values[vi] = candidate
+                        best_dist = distance
+                        best_clr = values[0]
+                        best_ov = list(values[1:])
+                        best_rgb = rgb
+                        accepted = True
+                        break
+            if not accepted:
+                break
+
+    return {"clr": best_clr, "overlays": best_ov, "rgb": best_rgb, "dist": best_dist, "evals": evals}
+
+
+def _fmt_color(rgb):
+    return "{%d, %d, %d}" % (rgb[0], rgb[1], rgb[2])
+
+
+def emit_cpp():
+    """Text of the generated klink_color_tables.h (nothing generated is committed)."""
+    lines = [
+        "#pragma once",
+        "// Generated by components/klink/klink_colors.py --emit-cpp. Do not edit.",
+        '#include "klink_colors.h"',
+        "",
+        "namespace kessil {",
+        "namespace klink {",
+        "",
+    ]
+    for model, macro in (("tuna_sun", "SUN"), ("tuna_blue", "BLUE")):
+        channels = CHANNELS[model]
+        lines.append("static const uint8_t COLOR_%s_STOPS[17][3] = {" % macro)
+        for rgb in int_stops(model):
+            lines.append("    %s," % _fmt_color(rgb))
+        lines.append("};")
+        lines.append("")
+        lines.append(
+            "static const uint8_t COLOR_%s_OVERLAY_CHANNEL[%d] = {%s};"
+            % (macro, len(channels), ", ".join(str(ch) for ch, _ in channels))
+        )
+        lines.append("static const uint8_t COLOR_%s_OVERLAY_RGB[%d][3] = {" % (macro, len(channels)))
+        for rgb in _overlay_rgb(model):
+            lines.append("    %s," % _fmt_color(rgb))
+        lines.append("};")
+        lines.append("")
+        lines.append(
+            "static const ColorSpec COLOR_%s = {COLOR_%s_STOPS, %d, COLOR_%s_OVERLAY_CHANNEL, "
+            "COLOR_%s_OVERLAY_RGB};" % (macro, macro, len(channels), macro, macro)
+        )
+        lines.append("")
+    lines.append("}  // namespace klink")
+    lines.append("}  // namespace kessil")
+    return "\n".join(lines) + "\n"
+
+
+_PRIMARY_TARGETS = [
+    (0, 0, 0),
+    (255, 255, 255),
+    (255, 0, 0),
+    (0, 255, 0),
+    (0, 0, 255),
+    (255, 255, 0),
+    (0, 255, 255),
+    (255, 0, 255),
+    (128, 128, 128),
+    (255, 128, 0),
+    (128, 0, 255),
+    (0x10, 0x20, 0x30),
+]
+
+
+def _golden_targets(model):
+    targets = list(int_stops(model)) + list(_PRIMARY_TARGETS)
+    x = 42
+    for _ in range(40):
+        rgb = []
+        for _ in range(3):
+            x = (x * 1103515245 + 12345) & 0x7FFFFFFF
+            rgb.append((x >> 16) & 255)
+        targets.append(tuple(rgb))
+    return targets
+
+
+def emit_golden():
+    """Golden vectors: one line per model and target, recomputed by the C++ test."""
+    lines = []
+    for model in ("tuna_sun", "tuna_blue"):
+        for target in _golden_targets(model):
+            result = nearest_i(model, target)
+            overlays = list(result["overlays"]) + [-1] * (3 - len(result["overlays"]))
+            rgb = result["rgb"]
+            lines.append(
+                "%s %d %d %d %d %d %d %d %d %d %d %d %d"
+                % (
+                    model,
+                    target[0],
+                    target[1],
+                    target[2],
+                    result["clr"],
+                    overlays[0],
+                    overlays[1],
+                    overlays[2],
+                    rgb[0],
+                    rgb[1],
+                    rgb[2],
+                    result["dist"],
+                    result["evals"],
+                )
+            )
+    return "\n".join(lines) + "\n"
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args == ["--emit-cpp"]:
+        sys.stdout.write(emit_cpp())
+        return 0
+    if args == ["--emit-golden"]:
+        sys.stdout.write(emit_golden())
+        return 0
+    sys.stdout.write("usage: klink_colors.py --emit-cpp | --emit-golden\n")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

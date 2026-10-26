@@ -380,6 +380,17 @@ Host tests for the pure C++ logic need only a compiler:
 for t in tests/test_klink_*.cpp; do g++ -std=c++11 -Wall -Wextra -I components/klink "$t" -o /tmp/t && /tmp/t; done
 ```
 
+The nearest-colour search lives once in C++ (`klink_colors.h`) and once in Python
+(`klink_colors.py`, the reference). Its tables and golden vectors are generated from the Python
+source at test time, so nothing generated is committed:
+
+```sh
+python3 components/klink/klink_colors.py --emit-cpp > .tmp/klink_color_tables.h
+python3 components/klink/klink_colors.py --emit-golden > .tmp/snap_golden.txt
+g++ -std=c++11 -Wall -Wextra -I components/klink -I .tmp tests/test_color_snap.cpp -o .tmp/test_color_snap
+.tmp/test_color_snap .tmp/snap_golden.txt
+```
+
 To work on the esphome-klink page without a device, `tools/mock_server.py` serves it with a fake
 device. It re-assembles the page from `components/klink/web/` on every request, so a reload picks up
 your edits:

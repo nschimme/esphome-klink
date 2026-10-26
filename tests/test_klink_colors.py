@@ -71,5 +71,77 @@ class SwatchTests(unittest.TestCase):
             kc.swatch("generic", 0)
 
 
+class IntegerModelTests(unittest.TestCase):
+    def test_int_stops_round_trip(self):
+        for model, stops in (("tuna_sun", kc.SUN_STOPS), ("tuna_blue", kc.BLUE_STOPS)):
+            self.assertEqual(kc.int_stops(model), [tuple(channels(v)) for v in stops])
+
+    def test_swatch_i_endpoints(self):
+        for model in ("tuna_sun", "tuna_blue"):
+            stops = kc.int_stops(model)
+            self.assertEqual(kc.swatch_i(model, 0, []), stops[0])
+            self.assertEqual(kc.swatch_i(model, 255, []), stops[-1])
+
+    def test_overlay_full_moves_sixty_percent(self):
+        for model in ("tuna_sun", "tuna_blue"):
+            n = len(kc.CHANNELS[model])
+            for clr in (0, 64, 128, 200, 255):
+                base = kc.swatch_i(model, clr, [0] * n)
+                for index, rgb in enumerate(kc._overlay_rgb(model)):
+                    overlays = [0] * n
+                    overlays[index] = 100
+                    got = kc.swatch_i(model, clr, overlays)
+                    for c in range(3):
+                        expected = base[c] + (rgb[c] - base[c]) * 0.6
+                        self.assertLessEqual(abs(got[c] - expected), 1)
+
+    def test_nearest_i_exact_on_own_stops(self):
+        for model in ("tuna_sun", "tuna_blue"):
+            n = len(kc.CHANNELS[model])
+            for stop in kc.int_stops(model):
+                result = kc.nearest_i(model, stop)
+                self.assertEqual(result["dist"], 0)
+                self.assertEqual(result["overlays"], [0] * n)
+                self.assertEqual(kc.swatch_i(model, result["clr"], result["overlays"]), result["rgb"])
+
+    def test_nearest_i_bounds_and_determinism(self):
+        for model in ("tuna_sun", "tuna_blue"):
+            for target in ((0, 0, 0), (255, 255, 255), (12, 34, 56), (255, 128, 0)):
+                first = kc.nearest_i(model, target)
+                second = kc.nearest_i(model, target)
+                self.assertEqual(first, second)
+                self.assertLessEqual(first["evals"], kc.MAX_EVALS)
+                self.assertEqual(kc.dist_i(first["rgb"], target), first["dist"])
+                self.assertEqual(kc.swatch_i(model, first["clr"], first["overlays"]), first["rgb"])
+
+    def test_float_and_integer_swatch_agree(self):
+        for model in ("tuna_sun", "tuna_blue"):
+            labels = [label for _, label in kc.CHANNELS[model]]
+            for clr in range(0, 256, 17):
+                for level in (0, 50, 100):
+                    configs = [{label: level for label in labels}]
+                    for label in labels:
+                        configs.append({label: level})
+                    for config in configs:
+                        want = channels(kc.swatch(model, clr, config))
+                        got = list(kc.swatch_i(model, clr, [config.get(label, 0) for label in labels]))
+                        for c in range(3):
+                            self.assertLessEqual(abs(want[c] - got[c]), 1)
+
+
+class EmitTests(unittest.TestCase):
+    def test_emit_cpp_has_specs(self):
+        text = kc.emit_cpp()
+        self.assertIn("COLOR_SUN", text)
+        self.assertIn("COLOR_BLUE", text)
+        self.assertIn("ColorSpec", text)
+
+    def test_emit_golden_shape(self):
+        lines = kc.emit_golden().splitlines()
+        self.assertEqual(len(lines), 2 * (17 + 12 + 40))
+        for line in lines:
+            self.assertEqual(len(line.split()), 13)
+
+
 if __name__ == "__main__":
     unittest.main()

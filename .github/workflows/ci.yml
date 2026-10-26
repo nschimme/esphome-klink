@@ -46,6 +46,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Colour snap golden vectors
+        run: |
+          set -euo pipefail
+          mkdir -p build/host-tests
+          python3 components/klink/klink_colors.py --emit-cpp > build/host-tests/klink_color_tables.h
+          python3 components/klink/klink_colors.py --emit-golden > build/host-tests/snap_golden.txt
+          g++ -std=c++11 -Wall -Wextra -I components/klink -I build/host-tests tests/test_color_snap.cpp -o build/host-tests/test_color_snap
+          build/host-tests/test_color_snap build/host-tests/snap_golden.txt
+
       - name: Build and run every host test
         run: |
           set -euo pipefail
