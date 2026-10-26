@@ -107,6 +107,8 @@ void KLinkHub::loop() {
       ESP_LOGW(TAG, "Send to lights pending: %s", why.c_str());
     }
   }
+  if (this->writes_enabled_)
+    this->scan_note_.clear();  // the refusal it describes no longer applies
   // No stored lamps: scan once by itself as soon as the hub controls the bus, so a fresh device
   // finds its lamps without any button press. A manual scan can always be run later.
   if (this->writes_enabled_ && !this->scanning_ && this->inventory_.lamps().empty() && !this->auto_scanned_) {
@@ -341,6 +343,9 @@ void KLinkHub::identify_next() {
 }
 
 void KLinkHub::retry() {
+  // Never turns sending on by itself: only a conflict or a pending request is retried.
+  if (!this->guard_.conflict_latched() && !this->want_writes_ && !this->writes_enabled_)
+    return;
   // Exactly what turning Send to lights off and on again did before: drop write control and ask
   // for it again through the same path. request_transmit() lifts the conflict latch once the bus
   // has been quiet long enough; until then the request stays pending in loop().
