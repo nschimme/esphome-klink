@@ -24,7 +24,7 @@ except ImportError:  # running as a script, or loaded as a top-level module
 
 WEB_DIR = Path(__file__).parent / "web"
 
-MAX_GZIP_BYTES = 24000
+MAX_GZIP_BYTES = 32000
 
 STYLE_LINK = '<link rel="stylesheet" href="style.css">'
 SCRIPT_TAG = '<script src="app.js"></script>'

@@ -29,6 +29,34 @@ inline bool parse_uint(const std::string &text, uint32_t max, uint32_t &out) {
   return true;
 }
 
+// Parse exactly six hex digits, either case, with an optional single leading '#'.
+// Used for the colour-wheel target (`rgb=RRGGBB`); anything else is rejected.
+inline bool parse_hex_rgb(const std::string &text, uint8_t out[3]) {
+  size_t start = 0;
+  if (!text.empty() && text[0] == '#')
+    start = 1;
+  if (text.size() - start != 6)
+    return false;
+  for (size_t i = 0; i < 3; i++) {
+    uint8_t value = 0;
+    for (size_t j = 0; j < 2; j++) {
+      char c = text[start + i * 2 + j];
+      uint8_t digit;
+      if (c >= '0' && c <= '9')
+        digit = static_cast<uint8_t>(c - '0');
+      else if (c >= 'a' && c <= 'f')
+        digit = static_cast<uint8_t>(c - 'a' + 10);
+      else if (c >= 'A' && c <= 'F')
+        digit = static_cast<uint8_t>(c - 'A' + 10);
+      else
+        return false;
+      value = static_cast<uint8_t>(value * 16 + digit);
+    }
+    out[i] = value;
+  }
+  return true;
+}
+
 // Escape a string for embedding inside a JSON double-quoted string. UTF-8 bytes pass through
 // unchanged; quotes, backslashes and control characters are escaped.
 inline std::string json_escape(const std::string &in) {

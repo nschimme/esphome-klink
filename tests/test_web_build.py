@@ -104,5 +104,70 @@ class MockManyTests(unittest.TestCase):
         self.assertEqual(state["bus"]["known_lamps"], 32)
 
 
+class MockSnapTests(unittest.TestCase):
+    """GET /klink/snap through the mock's handler, without sockets."""
+
+    def setUp(self):
+        self.saved = list(mock_server.GROUPS)
+        mock_server.GROUPS[:] = [
+            mock_server.make_group(
+                2, "Tuna Sun", "tuna_sun", ["int", "clr", None, "r", "am"], []
+            ),
+            mock_server.make_group(
+                1, "Tuna Blue", "tuna_blue", ["int", "clr", "vio", "r", "grn"], []
+            ),
+            mock_server.make_group(
+                3, "Generic", "generic", ["ui1", "ui2", "ui3", "ui4", "ui5"], []
+            ),
+        ]
+
+    def tearDown(self):
+        mock_server.GROUPS[:] = self.saved
+
+    def snap(self, **query):
+        return mock_server.handle_snap({key: [value] for key, value in query.items()})
+
+    def test_tuna_sun(self):
+        payload = self.snap(gid="2", rgb="ff0000")
+        expected = mock_server.klink_colors.nearest_i("tuna_sun", (255, 0, 0))
+        self.assertEqual(payload["set"]["clr"], expected["clr"])
+        self.assertEqual(list(payload["set"]), ["clr", "r", "am"])
+        self.assertEqual([payload["set"]["r"], payload["set"]["am"]], expected["overlays"])
+        self.assertEqual(payload["rgb"], "%02x%02x%02x" % expected["rgb"])
+        self.assertEqual(payload["target"], "ff0000")
+        self.assertEqual(payload["exact"], expected["dist"] == 0)
+
+    def test_tuna_blue(self):
+        payload = self.snap(gid="1", rgb="#00ff00")
+        expected = mock_server.klink_colors.nearest_i("tuna_blue", (0, 255, 0))
+        self.assertEqual(list(payload["set"]), ["clr", "vio", "r", "grn"])
+        self.assertEqual(
+            [payload["set"]["vio"], payload["set"]["r"], payload["set"]["grn"]],
+            expected["overlays"],
+        )
+        self.assertEqual(payload["target"], "00ff00")
+
+    def test_generic_rejected(self):
+        with self.assertRaises(mock_server.HttpError) as raised:
+            self.snap(gid="3", rgb="ffffff")
+        self.assertEqual(raised.exception.code, 400)
+        self.assertIn("no colour model", raised.exception.message)
+
+    def test_bad_rgb_rejected(self):
+        for value in ("", "fff", "gggggg", "#1234567", "##12345"):
+            with self.assertRaises(mock_server.HttpError) as raised:
+                self.snap(gid="2", rgb=value)
+            self.assertEqual(raised.exception.code, 400)
+
+    def test_unknown_group(self):
+        with self.assertRaises(mock_server.HttpError) as raised:
+            self.snap(gid="9", rgb="ffffff")
+        self.assertEqual(raised.exception.code, 404)
+
+    def test_snap_is_get_only(self):
+        self.assertIn("/klink/snap", mock_server.GET_ROUTES)
+        self.assertNotIn("/klink/snap", mock_server.POST_ROUTES)
+
+
 if __name__ == "__main__":
     unittest.main()

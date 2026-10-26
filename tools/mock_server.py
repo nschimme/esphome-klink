@@ -28,6 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(ROOT / "components" / "klink"))
+import klink_colors  # noqa: E402
 import web_build  # noqa: E402
 
 NUM_CHANNELS = 5
@@ -38,6 +39,10 @@ NUM_SLOTS = 8
 PREVIEW_SECONDS = 60.0
 SCAN_SECONDS = 2.5
 NAME_MAX_LEN = 24
+
+GET_ROUTES = ("/klink", "/klink/state", "/klink/snap")
+
+COLOUR_MODELS = ("tuna_sun", "tuna_blue")
 
 POST_ROUTES = (
     "/klink/mode",
@@ -451,6 +456,42 @@ def handle_point(query):
         begin_preview(group)
 
 
+def parse_hex_rgb(text):
+    """Exactly six hex digits, either case, optional single leading '#' (matches the firmware)."""
+    if text.startswith("#"):
+        text = text[1:]
+    if len(text) != 6 or re.fullmatch(r"[0-9a-fA-F]{6}", text) is None:
+        return None
+    return tuple(int(text[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def handle_snap(query):
+    """Closest settings this lamp can make for a target colour; read-only."""
+    gid = require_uint(query, "gid", MAX_GID)
+    if gid < MIN_GID:
+        raise HttpError(400, "gid must be 1-40")
+    group = require_group(gid)
+    model = group["model"]
+    if model not in COLOUR_MODELS:
+        raise HttpError(400, "no colour model for this group")
+    if "rgb" not in query:
+        raise HttpError(400, "missing parameter: rgb")
+    target = parse_hex_rgb(query["rgb"][0])
+    if target is None:
+        raise HttpError(400, "invalid parameter: rgb")
+    result = klink_colors.nearest_i(model, target)
+    settings = {"clr": result["clr"]}
+    for (channel, label), value in zip(klink_colors.CHANNELS[model], result["overlays"]):
+        if group["labels"][channel] == label:
+            settings[label] = value
+    return {
+        "set": settings,
+        "rgb": "%02x%02x%02x" % result["rgb"],
+        "target": "%02x%02x%02x" % target,
+        "exact": result["dist"] == 0,
+    }
+
+
 def handle_preview(query):
     gid = require_uint(query, "gid", MAX_GID)
     if gid < MIN_GID:
@@ -645,6 +686,9 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/klink/state":
                     self.send_json(200, state_json())
                     return
+                if path == "/klink/snap":
+                    self.send_json(200, handle_snap(query))
+                    return
                 if path in POST_ROUTES:
                     self.send_error_json(405, "method not allowed")
                     return
@@ -656,6 +700,8 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     return
                 self.send_error_json(404, "not found")
+            except HttpError as err:
+                self.send_error_json(err.code, err.message)
             except Exception as exc:  # keep the mock responsive while developing
                 self.send_error_json(500, "mock error: %s" % exc)
 
@@ -687,7 +733,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 handler = ROUTES.get(path)
                 if handler is None:
-                    self.send_error_json(404, "not found")
+                    if path in GET_ROUTES:
+                        self.send_error_json(405, "method not allowed")
+                    else:
+                        self.send_error_json(404, "not found")
                     return
                 handler(query)
                 self.send_json(200, {"ok": True})

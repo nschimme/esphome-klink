@@ -6,8 +6,9 @@ from esphome.components.web_server_base import CONF_WEB_SERVER_BASE_ID
 from esphome.const import CONF_ID, CONF_TRIGGER_ID
 
 try:
-    from . import web_build
+    from . import klink_colors, web_build
 except ImportError:  # loaded as a top-level module (tests, scripts)
+    import klink_colors
     import web_build
 
 CODEOWNERS = []
@@ -163,6 +164,9 @@ async def to_code(config):
     if config[CONF_WEB]:
         cg.add_define("USE_KLINK_WEB")
         _add_web_page()
+        # The colour tables for /klink/snap. klink_web.h declares COLOR_SUN/COLOR_BLUE extern
+        # before this global, so the const definitions below get external linkage.
+        cg.add_global(cg.RawStatement(klink_colors.emit_cpp(firmware=True)))
         base = await cg.get_variable(config[CONF_WEB_SERVER_BASE_ID])
         web = cg.new_Pvariable(config[CONF_KLINK_WEB_ID], base)
         await cg.register_component(web, config)

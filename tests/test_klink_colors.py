@@ -136,6 +136,26 @@ class EmitTests(unittest.TestCase):
         self.assertIn("COLOR_BLUE", text)
         self.assertIn("ColorSpec", text)
 
+    def test_emit_cpp_firmware_definitions_only(self):
+        text = kc.emit_cpp(firmware=True)
+        self.assertNotIn("#include", text)
+        self.assertNotIn("#pragma", text)
+        self.assertIn("namespace esphome { namespace klink {", text)
+        self.assertIn("const kessil::klink::ColorSpec COLOR_SUN =", text)
+        self.assertIn("const kessil::klink::ColorSpec COLOR_BLUE =", text)
+        # The firmware specs are non-static so klink_web.cpp can link them.
+        self.assertNotIn("static const ColorSpec COLOR_SUN", text)
+        self.assertIn("static const uint8_t COLOR_SUN_STOPS[17][3]", text)
+        self.assertIn("static const uint8_t COLOR_SUN_OVERLAY_CHANNEL[2]", text)
+        self.assertIn("static const uint8_t COLOR_BLUE_OVERLAY_CHANNEL[3]", text)
+
+    def test_emit_cpp_default_still_standalone(self):
+        text = kc.emit_cpp()
+        self.assertIn("#pragma once", text)
+        self.assertIn('#include "klink_colors.h"', text)
+        self.assertIn("static const ColorSpec COLOR_SUN", text)
+        self.assertNotIn("namespace esphome", text)
+
     def test_emit_golden_shape(self):
         lines = kc.emit_golden().splitlines()
         self.assertEqual(len(lines), 2 * (17 + 12 + 40))

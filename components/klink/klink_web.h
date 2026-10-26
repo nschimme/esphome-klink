@@ -9,6 +9,7 @@
 #include "esphome/components/web_server_base/web_server_base.h"
 
 #include "klink.h"
+#include "klink_colors.h"
 
 namespace esphome {
 namespace klink {
@@ -17,6 +18,12 @@ namespace klink {
 // global in main.cpp.
 extern const uint8_t KLINK_PAGE[] PROGMEM;
 extern const size_t KLINK_PAGE_LEN;
+
+// Colour models, generated at compile time by components/klink/klink_colors.py and emitted as
+// globals in main.cpp. Declared here first so the generated const definitions get external
+// linkage (the same pattern as KLINK_PAGE).
+extern const kessil::klink::ColorSpec COLOR_SUN;
+extern const kessil::klink::ColorSpec COLOR_BLUE;
 
 // The K-Link web handler: the page at /klink and the JSON API under /klink. Registered with the
 // shared web server (web_server_base) so it works with or without the full `web_server:` component.
@@ -46,6 +53,7 @@ class KLinkWeb : public AsyncWebHandler, public Component {
   void handle_retry(AsyncWebServerRequest *request);
   void handle_writes(AsyncWebServerRequest *request);
   void handle_scan(AsyncWebServerRequest *request);
+  void handle_snap(AsyncWebServerRequest *request);
 
   ProgramHost *find_group(uint32_t gid);
   std::string lamp_name(uint32_t kid);

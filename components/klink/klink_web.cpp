@@ -49,6 +49,12 @@ static bool is_post_route(const char *path) {
          std::strcmp(path, "/klink/retry") == 0 || std::strcmp(path, "/klink/writes") == 0 || std::strcmp(path, "/klink/scan") == 0;
 }
 
+// GET-only routes. A POST to one of these answers 405, matching how a GET on a POST route does.
+static bool is_get_route(const char *path) {
+  return std::strcmp(path, "/klink") == 0 || std::strcmp(path, "/klink/state") == 0 ||
+         std::strcmp(path, "/klink/snap") == 0;
+}
+
 // `request->arg()` returns std::string on the IDF server and an Arduino String on the Arduino one;
 // normalise to std::string for the JSON building below.
 static std::string arg_string(AsyncWebServerRequest *request, const char *name) {
@@ -135,6 +141,10 @@ void KLinkWeb::handleRequest(AsyncWebServerRequest *request) {
       this->handle_state(request);
       return;
     }
+    if (std::strcmp(path, "/klink/snap") == 0) {
+      this->handle_snap(request);
+      return;
+    }
     if (is_post_route(path)) {
       send_error(request, 405, "method not allowed");
       return;
@@ -186,6 +196,10 @@ void KLinkWeb::handleRequest(AsyncWebServerRequest *request) {
     }
     if (std::strcmp(path, "/klink/scan") == 0) {
       this->handle_scan(request);
+      return;
+    }
+    if (is_get_route(path)) {
+      send_error(request, 405, "method not allowed");
       return;
     }
     send_error(request, 404, "not found");
@@ -616,6 +630,78 @@ void KLinkWeb::handle_retry(AsyncWebServerRequest *request) {
 void KLinkWeb::handle_scan(AsyncWebServerRequest *request) {
   this->hub_->start_scan();
   this->send_ok(request);
+}
+
+static void append_hex_rgb(std::string &out, const uint8_t rgb[3]) {
+  static const char HEX[] = "0123456789abcdef";
+  for (size_t c = 0; c < 3; c++) {
+    out += HEX[rgb[c] >> 4];
+    out += HEX[rgb[c] & 0x0f];
+  }
+}
+
+// GET /klink/snap?gid=&rgb=RRGGBB: the closest settings this lamp can make for the target colour.
+// Read-only: the page applies the answer itself through /klink/point.
+void KLinkWeb::handle_snap(AsyncWebServerRequest *request) {
+  uint32_t gid;
+  if (!this->read_uint_arg(request, "gid", kk::MAX_GID, gid))
+    return;
+  if (gid < kk::MIN_GID) {
+    send_error(request, 400, "gid must be 1-40");
+    return;
+  }
+  ProgramHost *group = this->find_group(gid);
+  if (group == nullptr) {
+    send_error(request, 404, "unknown group");
+    return;
+  }
+
+  const kk::ColorSpec *spec = nullptr;
+  const std::string model = group->model_name();
+  if (model == "tuna_sun")
+    spec = &COLOR_SUN;
+  else if (model == "tuna_blue")
+    spec = &COLOR_BLUE;
+  if (spec == nullptr) {
+    send_error(request, 400, "no colour model for this group");
+    return;
+  }
+
+  if (!request->hasArg("rgb")) {
+    send_error(request, 400, "missing parameter: rgb");
+    return;
+  }
+  uint8_t target[3];
+  if (!parse_hex_rgb(arg_string(request, "rgb"), target)) {
+    send_error(request, 400, "invalid parameter: rgb");
+    return;
+  }
+
+  kk::SnapResult result = kk::nearest_i(*spec, target);
+
+  const kk::SlotLabels *labels = group->slot_labels();
+  std::string out;
+  out.reserve(160);
+  out += "{\"set\":{\"clr\":";
+  out += std::to_string(result.clr);
+  for (uint8_t o = 0; o < spec->n_overlays; o++) {
+    uint8_t channel = spec->overlay_channel[o];
+    const char *label = labels->name[channel];
+    if (label == nullptr)
+      continue;
+    out += ',';
+    append_quoted(out, label);
+    out += ':';
+    out += std::to_string(result.overlays[o]);
+  }
+  out += "},\"rgb\":\"";
+  append_hex_rgb(out, result.rgb);
+  out += "\",\"target\":\"";
+  append_hex_rgb(out, target);
+  out += "\",\"exact\":";
+  out += result.dist == 0 ? "true" : "false";
+  out += '}';
+  send_json(request, 200, out);
 }
 
 }  // namespace klink
