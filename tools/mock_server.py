@@ -8,6 +8,7 @@ components/klink/web/ on every request, so edits show up on reload. Stdlib only:
     python3 tools/mock_server.py            # port 8080
     python3 tools/mock_server.py 9000       # another port
     python3 tools/mock_server.py --slow     # ~150 ms latency per request
+    python3 tools/mock_server.py --many     # 10 groups, 32 lamps, 3 groups without a program
 
 Mock-only helpers (not part of the firmware API):
     POST /klink/_mock/writes?on=0|1         toggle "Send to lights" for the API
@@ -114,6 +115,81 @@ LAMPS = [
 ]
 
 BUS = {"writes": True, "conflict": False, "scanning_until": 0.0, "scan_note": ""}
+
+
+# ---- --many laboratory ------------------------------------------------------------------------
+
+
+def many_slots():
+    """Eight slots, six enabled, valid for either model (c2 is ignored on Tuna Sun)."""
+    return [
+        point(8 * 60, [30, 60, 0, 0, 0]),
+        point(10 * 60 + 30, [150, 120, 0, 5, 15]),
+        point(13 * 60, [210, 170, 0, 20, 35]),
+        point(16 * 60, [170, 140, 0, 10, 25]),
+        point(19 * 60, [70, 70, 0, 0, 10]),
+        point(21 * 60 + 30, [8, 12, 0, 0, 0]),
+        point(0, [0, 0, 0, 0, 0], False),
+        point(0, [0, 0, 0, 0, 0], False),
+    ]
+
+
+MANY_GROUPS = (
+    (1, "Tuna Blue", "tuna_blue"),
+    (2, "Tuna Sun", "tuna_sun"),
+    (3, "Reef 3", "tuna_sun"),
+    (4, "Reef 4", "tuna_blue"),
+    (5, "Reef 5", "tuna_sun"),
+    (6, "Reef 6", "tuna_blue"),
+    (7, "Reef 7", "tuna_sun"),
+    (8, "Reef 8", "tuna_blue"),
+    (9, "Reef 9", "tuna_sun"),
+    (10, "Reef 10", "tuna_blue"),
+)
+
+LABELS = {
+    "tuna_sun": ["int", "clr", None, "r", "am"],
+    "tuna_blue": ["int", "clr", "vio", "r", "grn"],
+}
+
+
+def many_groups():
+    return [
+        make_group(gid, name, model, LABELS[model], many_slots())
+        for gid, name, model in MANY_GROUPS
+    ]
+
+
+def many_lamps():
+    """32 lamps: two in each configured group, four in each unconfigured group 11, 12 and 20."""
+    lamps = []
+    kid = 18000001
+    placement = [(gid, 2) for gid, _, _ in MANY_GROUPS] + [(11, 4), (12, 4), (20, 4)]
+    named = {18000002: "Left", 18000003: "Right", 18000008: "Reef left", 18000009: "Reef right"}
+    types = {1: 1, 2: 2}
+    for gid, count in placement:
+        if gid not in types:
+            types[gid] = 1 if gid % 2 else 2
+        for _ in range(count):
+            lamps.append(
+                {
+                    "kid": kid,
+                    "type": types[gid],
+                    "gid": gid,
+                    "name": named.get(kid, ""),
+                }
+            )
+            kid += 1
+    return lamps
+
+
+def use_many():
+    """Replace the default two groups with the large laboratory used by --many."""
+    GROUPS[:] = many_groups()
+    LAMPS[:] = many_lamps()
+    BUS["writes"] = True
+    BUS["conflict"] = False
+    BUS["scan_note"] = ""
 
 LOCK = threading.Lock()
 SLOW_SECONDS = 0.0
@@ -631,7 +707,14 @@ def main(argv=None):
     parser.add_argument("port", nargs="?", type=int, default=8080, help="TCP port (default 8080)")
     parser.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1)")
     parser.add_argument("--slow", action="store_true", help="add ~150 ms of latency to every request")
+    parser.add_argument(
+        "--many",
+        action="store_true",
+        help="10 configured groups, 32 lamps and 3 groups this controller has no program for",
+    )
     args = parser.parse_args(argv)
+    if args.many:
+        use_many()
     SLOW_SECONDS = 0.15 if args.slow else 0.0
     server = Server((args.host, args.port), Handler)
     print("K-Link mock: http://%s:%d/klink  (Ctrl+C to stop)" % (args.host, args.port))

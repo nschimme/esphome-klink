@@ -49,6 +49,28 @@ async function newPage(server) {
   return p;
 }
 
+function cardText(el) { return el.textContent.replace(/\s+/g, ' ').trim(); }
+
+function makeGroup(gid, name, model, labels) {
+  return {
+    gid: gid, name: name, model: model,
+    labels: labels || ['int', 'clr', null, 'r', 'am'],
+    max: [255, 255, 100, 100, 100], mode: 'program', now_minute: 600,
+    slots: [
+      { minute: 480, ch: [10, 10, 0, 0, 0], enabled: true },
+      { minute: 720, ch: [100, 100, 0, 0, 0], enabled: true },
+      { minute: 1200, ch: [5, 5, 0, 0, 0], enabled: true }
+    ]
+  };
+}
+
+function picker(page) { return page.progRoot().children[0]; }
+function pickerSelect(page) {
+  var p = picker(page), i;
+  for (i = 0; i < p.children.length; i++) if (p.children[i].tagName === 'SELECT') return p.children[i];
+  return null;
+}
+
 function place(page, minute) {
   page.pointer(page.svg(), 'pointerdown', { button: 0, pointerId: 1, clientX: xFor(minute), clientY: 120 });
 }
@@ -227,6 +249,122 @@ async function scenarioRevert() {
   check(name + ': undo one request', server.pointRequests().length === 1, server.pointRequests().length);
 }
 
+async function scenarioOrphans() {
+  var name = 'orphan groups';
+  var server = stub.makeServer({
+    lamps: [
+      { kid: 1, type: 1, gid: 2, name: 'A' },
+      { kid: 2, type: 1, gid: 11, name: 'B' },
+      { kid: 3, type: 2, gid: 11, name: 'C' }
+    ]
+  });
+  var page = await newPage(server);
+  var orphans = page.groupsEl().children.filter(function (el) { return el.className === 'card orphan'; });
+  check(name + ': one orphan card', orphans.length === 1, 'got ' + orphans.length);
+  var card = orphans[0];
+  check(name + ': names the group', cardText(card).indexOf('Group 11') >= 0, cardText(card));
+  check(name + ': lamp count', cardText(card).indexOf('2 lamps here are not driven by this controller') >= 0, cardText(card));
+  check(name + ': README hint', cardText(card).indexOf('group templates') >= 0);
+  var chips = card.querySelectorAll('.chip');
+  check(name + ': one chip per lamp', chips.length === 2, 'got ' + chips.length);
+  server.resetRequests();
+  page.click(chips[0]);
+  var ids = server.requests.filter(function (r) { return r.path === '/klink/identify'; });
+  check(name + ': chip flashes the lamp', ids.length === 1 && ids[0].params.kid === '2', JSON.stringify(ids));
+  server.resetRequests();
+  page.click(card.children[2].children[0]);
+  ids = server.requests.filter(function (r) { return r.path === '/klink/identify'; });
+  check(name + ': find flashes the group', ids.length === 1 && ids[0].params.gid === '11', JSON.stringify(ids));
+}
+
+async function scenarioPicker() {
+  var name = 'group picker';
+  var gs = [
+    makeGroup(1, 'Tuna Blue', 'tuna_blue', ['int', 'clr', 'vio', 'r', 'grn']),
+    makeGroup(2, 'Tuna Sun', 'tuna_sun'),
+    makeGroup(3, 'Reef 3', 'tuna_blue', ['int', 'clr', 'vio', 'r', 'grn']),
+    makeGroup(4, 'Reef 4', 'tuna_sun')
+  ];
+  var server = stub.makeServer({ group: gs[1], groups: gs });
+  var page = await newPage(server);
+  var sel = pickerSelect(page);
+  check(name + ': 4 groups use a select', !!sel);
+  check(name + ': labelled Lamp group', !!sel && sel.getAttribute('aria-label') === 'Lamp group');
+  check(name + ': select shows the first group', !!sel && sel.value === '1', sel && sel.value);
+  if (sel) {
+    sel.value = '3';
+    sel.dispatch('change', {});
+    await stub.settle();
+    eq(name + ': change persists the group', page.storage('klink.prog.gid'), '3');
+    check(name + ': panel follows the group', page.progRoot().textContent.indexOf('VIO') >= 0);
+  }
+  /* Shrinking to three groups switches back to buttons, then back again without errors. */
+  var extra = gs.pop();
+  await page.refresh();
+  check(name + ': 3 groups use buttons', pickerSelect(page) === null);
+  check(name + ': button picker has groups', picker(page).children.length === 3, picker(page).children.length);
+  gs.push(extra);
+  await page.refresh();
+  check(name + ': back to a select', !!pickerSelect(page));
+}
+
+async function scenarioManyLamps() {
+  var name = 'settings many lamps';
+  var lamps = [], i;
+  for (i = 0; i < 32; i++) {
+    var gid = i < 10 ? 2 : i < 22 ? 11 : 20;
+    lamps.push({ kid: 18000100 + (31 - i), type: 1 + (i % 2), gid: gid, name: i % 4 === 0 ? 'Reef ' + i : '' });
+  }
+  var server = stub.makeServer({ lamps: lamps });
+  var page = await newPage(server);
+  var sections = page.lampsEl().children;
+  eq(name + ': three group sections', sections.length, 3);
+  eq(name + ': sections sorted by group', sections.map(function (s) { return s.children[0].textContent; }),
+    ['Group 2 · 10 lamps', 'Group 11 · 12 lamps', 'Group 20 · 10 lamps']);
+  var rows = page.lampsEl().querySelectorAll('[data-kid]');
+  eq(name + ': 32 rows', rows.length, 32);
+  var expected = lamps.slice().sort(function (a, b) { return a.gid - b.gid || a.kid - b.kid; })
+    .map(function (l) { return String(l.kid); });
+  eq(name + ': rows sorted by group then kid', rows.map(function (r) { return r.getAttribute('data-kid'); }), expected);
+  check(name + ': compact name fallback', cardText(rows[0]).indexOf('Lamp 0122') >= 0, cardText(rows[0]));
+  check(name + ': search shown', page.searchEl().hidden === false);
+  var search = page.searchEl();
+  search.value = 'reef';
+  search.dispatch('input', {});
+  var visible = rows.filter(function (r) { return !r.hidden; });
+  var want = lamps.filter(function (l) { return l.name.toLowerCase().indexOf('reef') >= 0; }).length;
+  eq(name + ': search filters names', visible.length, want);
+  search.value = 'group 11';
+  search.dispatch('input', {});
+  visible = rows.filter(function (r) { return !r.hidden; });
+  eq(name + ': search filters by group', visible.length, 12);
+  eq(name + ': empty sections hidden', sections.map(function (s) { return s.hidden; }), [true, false, true]);
+  search.value = '';
+  search.dispatch('input', {});
+  var before = page.doc.created;
+  var firstRow = rows[0];
+  page.doc.created = 0;
+  await page.refresh();
+  eq(name + ': identical poll creates nothing', page.doc.created, 0);
+  check(name + ': identical poll keeps rows', page.lampsEl().querySelectorAll('[data-kid]')[0] === firstRow);
+  check(name + ': creation counter works', before > 0);
+}
+
+async function scenarioTracks() {
+  var name = 'coloured slider tracks';
+  var server = stub.makeServer();
+  var page = await newPage(server);
+  var ranges = page.progRoot().querySelectorAll('input').filter(function (el) {
+    return el.type === 'range' && el.style.getPropertyValue('--trk');
+  });
+  eq(name + ': one track per channel', ranges.length, 4);
+  check(name + ': INT track', ranges[0].style.getPropertyValue('--trk').indexOf('#ffffff') >= 0);
+  check(name + ': CLR track uses the strip stops', ranges[1].style.getPropertyValue('--trk').indexOf('#102030') >= 0);
+  check(name + ': R track uses the overlay', ranges[2].style.getPropertyValue('--trk').indexOf('#ff0000') >= 0);
+  check(name + ': AM track uses the overlay', ranges[3].style.getPropertyValue('--trk').indexOf('#ffaa00') >= 0);
+  check(name + ': thumb has no fixed track colour', ranges[3].style.background === undefined || !ranges[3].style.background);
+}
+
 async function main() {
   await scenarioPlace();
   await scenarioRefused();
@@ -236,6 +374,10 @@ async function main() {
   await scenarioRemoveUndo();
   await scenarioCoalesce();
   await scenarioRevert();
+  await scenarioOrphans();
+  await scenarioPicker();
+  await scenarioManyLamps();
+  await scenarioTracks();
   console.log(failures ? failures + ' failure(s)' : 'all web tests passed');
   process.exit(failures ? 1 : 0);
 }

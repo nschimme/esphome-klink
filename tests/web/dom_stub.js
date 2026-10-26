@@ -24,7 +24,10 @@ function El(tag, doc) {
   this.hidden = false;
   this.disabled = false;
   this.value = '';
-  this.style = {};
+  var style = {};
+  style.setProperty = function (k, v) { style[k] = String(v); };
+  style.getPropertyValue = function (k) { return style[k] || ''; };
+  this.style = style;
   this.clientWidth = 0;
   this.clientHeight = 0;
   this.tabIndex = -1;
@@ -62,6 +65,16 @@ El.prototype.appendChild = function (child) {
   child.parentNode = this;
   this.childNodes.push(child);
   if (child.nodeType !== 3) this.children.push(child);
+  return child;
+};
+El.prototype.insertBefore = function (child, ref) {
+  if (ref == null) return this.appendChild(child);
+  if (child.parentNode) child.parentNode.removeChild(child);
+  var ci = this.children.indexOf(ref);
+  this.children.splice(ci < 0 ? this.children.length : ci, 0, child);
+  var ni = this.childNodes.indexOf(ref);
+  this.childNodes.splice(ni < 0 ? this.childNodes.length : ni, 0, child);
+  child.parentNode = this;
   return child;
 };
 El.prototype.removeChild = function (child) {
@@ -159,8 +172,9 @@ function createDocument() {
   doc.activeElement = doc.body;
   doc.hidden = false;
   doc.listeners = {};
-  doc.createElement = function (tag) { return new El(tag, doc); };
-  doc.createElementNS = function (ns, tag) { return new El(tag, doc); };
+  doc.created = 0;
+  doc.createElement = function (tag) { doc.created++; return new El(tag, doc); };
+  doc.createElementNS = function (ns, tag) { doc.created++; return new El(tag, doc); };
   doc.createTextNode = textNode;
   doc.getElementById = function (id) {
     var found = null;
@@ -206,6 +220,8 @@ function bootstrap(doc) {
   add('span', 'bus-text');
   add('span', 'bus-count');
   add('div', 'groups');
+  var search = add('input', 'lamp-search');
+  search.type = 'search';
   add('div', 'lamps');
   add('p', 'lamps-hint');
   var panels = {};
@@ -266,10 +282,11 @@ function parseUint(text, max) {
   return v <= max ? v : null;
 }
 
-function makeServer() {
+function makeServer(opts) {
+  opts = opts || {};
   var labels = ['int', 'clr', null, 'r', 'am'];
   var max = [255, 255, 100, 100, 100];
-  var group = {
+  var group = opts.group || {
     gid: 2, name: 'Tuna Sun', model: 'tuna_sun', labels: labels, max: max,
     mode: 'program', now_minute: 600,
     slots: [
@@ -283,18 +300,27 @@ function makeServer() {
       { minute: 0, ch: [0, 0, 0, 0, 0], enabled: false }
     ]
   };
+  var groups = opts.groups || [group];
+  var lamps = opts.lamps || [];
   var requests = [];
 
   function stateJson() {
     return {
-      groups: [{
-        gid: group.gid, name: group.name, model: group.model, mode: group.mode,
-        status: 'Program', labels: group.labels.slice(), max: group.max.slice(),
-        slots: cloneSlots(group.slots), lamps: [], now_minute: group.now_minute,
-        selected: 0
-      }],
-      lamps: [],
-      bus: { state: 'Controlling', writes: true, known_lamps: 0 }
+      groups: groups.map(function (g) {
+        return {
+          gid: g.gid, name: g.name, model: g.model, mode: g.mode || 'program',
+          status: 'Program', labels: g.labels.slice(), max: g.max.slice(),
+          slots: cloneSlots(g.slots), lamps: lamps.filter(function (l) {
+            return l.gid === g.gid;
+          }).map(function (l) { return l.kid; }),
+          now_minute: g.now_minute == null ? 600 : g.now_minute,
+          selected: g.selected || 0
+        };
+      }),
+      lamps: lamps.map(function (l) {
+        return { kid: l.kid, type: l.type, gid: l.gid, name: l.name || '' };
+      }),
+      bus: { state: 'Controlling', writes: true, known_lamps: lamps.length }
     };
   }
 
@@ -350,6 +376,8 @@ function makeServer() {
 
   return {
     group: group,
+    groups: groups,
+    lamps: lamps,
     requests: requests,
     fetch: fetch,
     pointRequests: function () {
@@ -396,6 +424,11 @@ function loadPage(server) {
     server: server,
     settle: settle,
     progRoot: function () { return doc.getElementById('prog-root'); },
+    groupsEl: function () { return doc.getElementById('groups'); },
+    lampsEl: function () { return doc.getElementById('lamps'); },
+    searchEl: function () { return doc.getElementById('lamp-search'); },
+    storage: function (key) { return stored[key]; },
+    refresh: async function () { doc.dispatch('visibilitychange'); await settle(); },
     chart: function () { return doc.getElementById('prog-chart'); },
     svg: function () {
       var c = page.chart();

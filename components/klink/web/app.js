@@ -4,7 +4,7 @@
 var API='/klink';
 var TABS=['dashboard','program','settings'];
 var state=null,offline=false,fetching=false,again=false;
-var busy={},lastMode={},cards={},rows={},editing={},rowError={};
+var busy={},lastMode={},cards={},ocards={},rows={},lampSecs={},lampQuery='',editing={},rowError={};
 
 function byId(id){return document.getElementById(id);}
 function qs(params){
@@ -267,6 +267,70 @@ function updateCard(g){
     }
   }
 }
+function makeOrphanCard(gid){
+  var card=document.createElement('article');card.className='card orphan';
+  var head=document.createElement('div');head.className='card-head';
+  var h2=document.createElement('h2');head.appendChild(h2);
+  card.appendChild(head);
+  var status=document.createElement('p');status.className='status';
+  card.appendChild(status);
+  var rowline=document.createElement('div');rowline.className='rowline';
+  var find=makeButton('Find these lamps','btn');
+  find.setAttribute('data-busy','find-o-'+gid);
+  find.addEventListener('click',function(){
+    act('find-o-'+gid,API+'/identify',{gid:gid},'Flashing the lamps in Group '+gid,null);
+  });
+  var count=document.createElement('span');count.className='lamps';
+  rowline.appendChild(find);rowline.appendChild(count);
+  card.appendChild(rowline);
+  var chips=document.createElement('div');chips.className='chips';card.appendChild(chips);
+  var hint=document.createElement('p');hint.className='hint';
+  hint.textContent='Add a program for it in your config, see the README (group templates)';
+  card.appendChild(hint);
+  byId('groups').appendChild(card);
+  return {el:card,name:h2,status:status,count:count,chips:chips,chipEls:{}};
+}
+function updateOrphan(gid,kids){
+  var c=ocards[gid];
+  if(!c){c=makeOrphanCard(gid);ocards[gid]=c;}
+  var n=kids.length;
+  setText(c.name,'Group '+gid);
+  setText(c.status,'No program for this group. '+(n===1?'1 lamp here is':n+' lamps here are')+
+    ' not driven by this controller.');
+  setText(c.count,n===1?'1 lamp':n+' lamps');
+  var seen={},i,kid,chip;
+  for(i=0;i<kids.length;i++){
+    kid=kids[i];seen[kid]=true;
+    chip=c.chipEls[kid];
+    if(!chip){
+      chip=document.createElement('button');
+      chip.type='button';chip.className='chip';
+      chip.addEventListener('click',(function(k){return function(){
+        act('id-'+k,API+'/identify',{kid:k},'Flashing '+lampLabel(k),null);
+      };})(kid));
+      c.chips.appendChild(chip);c.chipEls[kid]=chip;
+    }
+    setText(chip,lampLabel(kid));
+    chip.setAttribute('aria-label','Flash '+lampLabel(kid));
+  }
+  for(kid in c.chipEls){
+    if(!seen[kid]){
+      c.chips.removeChild(c.chipEls[kid]);
+      delete c.chipEls[kid];
+    }
+  }
+}
+/* Keep cards in order (real groups first, then orphan groups) without rebuilding them. */
+function orderCards(list){
+  var container=byId('groups'),kids=container.children,i,j=0,need=false;
+  for(i=0;i<kids.length;i++){
+    if(kids[i].className==='hint') continue;
+    if(list[j]!==kids[i]){need=true;break;}
+    j++;
+  }
+  if(!need) return;
+  for(i=0;i<list.length;i++) if(list[i].parentNode===container) container.appendChild(list[i]);
+}
 function renderDashboard(){
   var gs=state.groups||[],seen={},i,g;
   var container=byId('groups');
@@ -279,8 +343,28 @@ function renderDashboard(){
       delete cards[gid];
     }
   }
-  var hint=container.querySelector('.hint');
-  if(gs.length){
+  /* Lamps whose group has no program here: show them, but do not claim what they do. */
+  var kidsByGid={},lamps=state.lamps||[],orphangids=[];
+  for(i=0;i<lamps.length;i++){
+    if(seen[lamps[i].gid]) continue;
+    if(!kidsByGid[lamps[i].gid]){kidsByGid[lamps[i].gid]=[];orphangids.push(lamps[i].gid);}
+    kidsByGid[lamps[i].gid].push(lamps[i].kid);
+  }
+  orphangids.sort(function(a,b){return a-b;});
+  for(i=0;i<orphangids.length;i++) updateOrphan(orphangids[i],kidsByGid[orphangids[i]]);
+  for(var ogid in ocards){
+    if(!kidsByGid[ogid]){
+      if(ocards[ogid].el.parentNode) ocards[ogid].el.parentNode.removeChild(ocards[ogid].el);
+      delete ocards[ogid];
+    }
+  }
+  var order=[];
+  for(i=0;i<gs.length;i++) if(cards[gs[i].gid]) order.push(cards[gs[i].gid].el);
+  for(i=0;i<orphangids.length;i++) if(ocards[orphangids[i]]) order.push(ocards[orphangids[i]].el);
+  orderCards(order);
+  var hint=null;
+  for(i=0;i<container.children.length;i++) if(container.children[i].className==='hint'){hint=container.children[i];break;}
+  if(gs.length||orphangids.length){
     if(hint) container.removeChild(hint);
   }else{
     if(!hint){
@@ -291,7 +375,8 @@ function renderDashboard(){
   }
 }
 function makeRow(lamp){
-  var row=document.createElement('div');row.className='row';
+  var row=document.createElement('div');row.className='row compact';
+  row.setAttribute('data-kid',String(lamp.kid));
   var main=document.createElement('div');main.className='row-main';
   var name=document.createElement('div');name.className='row-name';
   var meta=document.createElement('div');meta.className='row-meta';
@@ -325,7 +410,7 @@ function makeRow(lamp){
 
   var refs={el:row,name:name,meta:meta,idBtn:idBtn,renameBtn:renameBtn,edit:edit,input:input,
     saveBtn:saveBtn,cancelBtn:cancelBtn,select:select,moveBtn:moveBtn,err:err,
-    sig:'',dirty:false,nickname:''};
+    sig:'',dirty:false,nickname:'',search:''};
 
   function openEdit(){
     editing[lamp.kid]=true;
@@ -373,14 +458,17 @@ function setRowError(kid,msg){
 }
 function fillGroups(select,lamp,refs){
   var gids=[],names={},i,g;
+  function add(gid){if(gid>=1&&gid<=40&&gids.indexOf(gid)<0)gids.push(gid);}
   if(state&&state.groups) for(i=0;i<state.groups.length;i++){
-    g=state.groups[i];gids.push(g.gid);names[g.gid]=g.name||('Group '+g.gid);
+    g=state.groups[i];add(g.gid);names[g.gid]=g.name||('Group '+g.gid);
   }
-  for(i=3;i<=25;i++) if(gids.indexOf(i)<0){gids.push(i);}
-  if(gids.indexOf(lamp.gid)<0) gids.push(lamp.gid);
+  if(state&&state.lamps) for(i=0;i<state.lamps.length;i++) add(state.lamps[i].gid);
+  for(i=3;i<=25;i++) add(i);
+  add(lamp.gid);
   gids.sort(function(a,b){return a-b;});
   var sig=gids.join(',')+'#'+JSON.stringify(names);
-  if(refs.sig!==sig){
+  /* Leave the list alone while the user is choosing, and rebuild only when it really changed. */
+  if(refs.sig!==sig&&document.activeElement!==select){
     var keep=select.value;
     refs.sig=sig;
     select.textContent='';
@@ -394,30 +482,84 @@ function fillGroups(select,lamp,refs){
   }
   if(!refs.dirty&&document.activeElement!==select) select.value=String(lamp.gid);
 }
-function updateRow(lamp){
+function updateRow(lamp,body){
   var r=rows[lamp.kid];
-  if(!r){r=makeRow(lamp);rows[lamp.kid]=r;byId('lamps').appendChild(r.el);}
+  if(!r){r=makeRow(lamp);rows[lamp.kid]=r;body.appendChild(r.el);}
   setText(r.name,lampLabel(lamp.kid));
   var gname='';
-  if(state&&state.groups) for(var i=0;i<state.groups.length;i++) if(state.groups[i].gid===lamp.gid) gname=' · '+state.groups[i].name;
-  setText(r.meta,'Type '+lamp.type+' · Group '+lamp.gid+gname);
+  if(state&&state.groups) for(var i=0;i<state.groups.length;i++) if(state.groups[i].gid===lamp.gid) gname=state.groups[i].name;
+  setText(r.meta,'Type '+lamp.type);
+  r.search=(lampLabel(lamp.kid)+' '+lamp.kid+' '+String(lamp.kid).slice(-4)+' group '+lamp.gid+' '+(gname||'')).toLowerCase();
   fillGroups(r.select,lamp,r);
   if(!editing[lamp.kid]) r.edit.hidden=true;
   r.err.hidden=!rowError[lamp.kid];
   setText(r.err,rowError[lamp.kid]||'');
 }
+/* Put el at position index under parent, moving it only when it is not already there. */
+function placeRow(parent,el,index){
+  var kids=parent.children;
+  if(kids[index]===el) return;
+  parent.insertBefore(el,kids[index]||null);
+}
+function makeLampSection(gid){
+  var el=document.createElement('section');el.className='lampgroup';
+  var head=document.createElement('h4');
+  var body=document.createElement('div');body.className='lamprows';
+  el.appendChild(head);el.appendChild(body);
+  return {el:el,head:head,body:body};
+}
+function applyLampFilter(){
+  var q=lampQuery.toLowerCase();
+  for(var gid in lampSecs){
+    var sec=lampSecs[gid],any=false,i,el,r;
+    for(i=0;i<sec.body.children.length;i++){
+      el=sec.body.children[i];r=rows[el.getAttribute('data-kid')];
+      var show=!q||!!(r&&r.search.indexOf(q)>=0);
+      if(el.hidden===show) el.hidden=!show;
+      if(show) any=true;
+    }
+    if(sec.el.hidden===any) sec.el.hidden=!any;
+  }
+}
 function renderSettings(){
-  var ls=state.lamps||[],seen={},i;
+  var ls=(state.lamps||[]).slice(),seen={},i;
+  ls.sort(function(a,b){return a.gid-b.gid||a.kid-b.kid;});
   var container=byId('lamps');
-  for(i=0;i<ls.length;i++){seen[ls[i].kid]=true;updateRow(ls[i]);}
+  var byGid={},order=[];
+  for(i=0;i<ls.length;i++){
+    if(!byGid[ls[i].gid]){byGid[ls[i].gid]=[];order.push(ls[i].gid);}
+    byGid[ls[i].gid].push(ls[i]);
+  }
+  for(var gid in lampSecs){
+    if(!byGid[gid]){
+      if(lampSecs[gid].el.parentNode) lampSecs[gid].el.parentNode.removeChild(lampSecs[gid].el);
+      delete lampSecs[gid];
+    }
+  }
+  for(i=0;i<order.length;i++){
+    gid=order[i];
+    var list=byGid[gid],sec=lampSecs[gid];
+    if(!sec){sec=makeLampSection(gid);lampSecs[gid]=sec;container.appendChild(sec.el);}
+    placeRow(container,sec.el,i);
+    setText(sec.head,'Group '+gid+' · '+list.length+(list.length===1?' lamp':' lamps'));
+    for(var j=0;j<list.length;j++){
+      seen[list[j].kid]=true;
+      updateRow(list[j],sec.body);
+      placeRow(sec.body,rows[list[j].kid].el,j);
+    }
+  }
   for(var kid in rows){
     if(!seen[kid]){
-      container.removeChild(rows[kid].el);
+      if(rows[kid].el.parentNode) rows[kid].el.parentNode.removeChild(rows[kid].el);
       delete rows[kid];
       delete editing[kid];
       delete rowError[kid];
     }
   }
+  var search=byId('lamp-search');
+  search.hidden=ls.length<=8;
+  if(search.hidden&&lampQuery){lampQuery='';search.value='';}
+  applyLampFilter();
   setText(byId('lamps-hint'),ls.length?'Known lamps on the bus.':'No lamps known yet. Find lamps runs a scan.');
 }
 function render(){
@@ -501,6 +643,18 @@ function hhmm(m){return m<0?'--:--':('0'+Math.floor(m/60)).slice(-2)+':'+('0'+m%
 function chCol(g,c){var l=g.labels&&g.labels[c];return 'var(--k-'+(/^(int|clr|vio|r|am|grn)$/.test(l||'')?l:'int')+')';}
 function hasCh(g,c){return !!(g.labels&&g.labels[c]);}
 function hx(h){return [parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];}
+/* The colour-strip gradient, also used for the CLR channel track. */
+function stripGradient(model){
+  var st=model==='tuna_blue'?KCOL.blue:KCOL.sun;
+  return 'linear-gradient(to right,'+st.join(',')+')';
+}
+/* Track tint per channel: CLR follows the colour axis, overlays fade from a neutral dark. */
+function trackGradient(g,c){
+  var l=g.labels&&g.labels[c];
+  if(l==='clr') return stripGradient(g.model);
+  if(l&&KCOL.ov[l]) return 'linear-gradient(to right,#1b232b,'+KCOL.ov[l]+')';
+  return 'linear-gradient(to right,#1b232b,#ffffff)';
+}
 /* Approximate lamp colour for raw channel values, from our own model (KCOL). */
 function swatchColor(g,ch){
   if(!g||!ch)return '';
@@ -1094,20 +1248,40 @@ function buildProg(){
   if(window.ResizeObserver)new ResizeObserver(function(){pg.drawn='';draw();}).observe(pg.chart);
 }
 function syncGroups(gs,g){
-  var sig=[],i;
+  var sig=[],i,useSelect=gs.length>3;
   for(i=0;i<gs.length;i++)sig.push(gs[i].gid+'='+(gs[i].name||''));
   sig=sig.join('|');
-  if(pg.gsig!==sig){
-    pg.gsig=sig;
+  /* With many groups a native select is easier than a row of tiny buttons. */
+  if(pg.gsig!==sig||pg.gform!==useSelect){
+    pg.gsig=sig;pg.gform=useSelect;
     pg.gseg.textContent='';
-    gs.forEach(function(x){
-      var b=makeButton(x.name||('Group '+x.gid),'');
-      b.setAttribute('data-gid',String(x.gid));
-      b.addEventListener('click',function(){chooseGroup(x.gid);});
-      pg.gseg.appendChild(b);
-    });
+    if(useSelect){
+      var sel=document.createElement('select');
+      sel.className='gsel';
+      sel.setAttribute('aria-label','Lamp group');
+      gs.forEach(function(x){
+        var o=document.createElement('option');
+        o.value=String(x.gid);o.textContent=x.name||('Group '+x.gid);
+        sel.appendChild(o);
+      });
+      sel.addEventListener('change',function(){chooseGroup(parseInt(sel.value,10));});
+      pg.gseg.appendChild(sel);
+      pg.gsel=sel;
+    }else{
+      pg.gsel=null;
+      gs.forEach(function(x){
+        var b=makeButton(x.name||('Group '+x.gid),'');
+        b.setAttribute('data-gid',String(x.gid));
+        b.addEventListener('click',function(){chooseGroup(x.gid);});
+        pg.gseg.appendChild(b);
+      });
+    }
   }
   pg.gseg.hidden=gs.length<2;
+  if(pg.gsel){
+    if(document.activeElement!==pg.gsel) pg.gsel.value=String(g.gid);
+    return;
+  }
   var bs=pg.gseg.children;
   for(i=0;i<bs.length;i++){
     var on=parseInt(bs[i].getAttribute('data-gid'),10)===g.gid;
@@ -1137,7 +1311,7 @@ function syncLegend(g){
   }
 }
 function syncPanel(g){
-  var sig=(g.labels||[]).join(',');
+  var sig=(g.labels||[]).join(',')+'|'+g.model;
   if(pg.lsig===sig)return;
   pg.lsig=sig;
   var valid=[],c;
@@ -1155,6 +1329,7 @@ function syncPanel(g){
     var sl=mk('input',null,row);
     sl.type='range';sl.min=0;sl.max=100;sl.step=1;
     sl.setAttribute('aria-label',g.labels[c]+' percent slider');
+    sl.style.setProperty('--trk',trackGradient(g,c));
     sl.addEventListener('input',function(){setChan(c,parseInt(sl.value,10));});
     num.addEventListener('change',function(){setChan(c,parseInt(num.value,10));});
     pg.chRows.push({c:c,sl:sl,num:num});
@@ -1186,7 +1361,7 @@ function updatePanel(g){
   pg.strip.setAttribute('aria-disabled',on?'false':'true');
   if(pg.psig!==g.model){
     pg.psig=g.model;
-    pg.strip.style.background='linear-gradient(to right,'+(g.model==='tuna_sun'?KCOL.sun:KCOL.blue).join(',')+')';
+    pg.strip.style.background=stripGradient(g.model);
     pg.clbl.textContent='';
     if(g.model==='tuna_sun'){mk('span',null,pg.clbl,'6,000 K');mk('span',null,pg.clbl,'9,000 K');}
     else mk('span',null,pg.clbl,'CLR');
@@ -1393,6 +1568,10 @@ document.addEventListener('keydown',function(ev){
     ev.preventDefault();
     redo();
   }
+});
+byId('lamp-search').addEventListener('input',function(ev){
+  lampQuery=(ev.target&&ev.target.value)||'';
+  applyLampFilter();
 });
 document.addEventListener('visibilitychange',function(){if(!document.hidden) refresh();});
 initTabs();
