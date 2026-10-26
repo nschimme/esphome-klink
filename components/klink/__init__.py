@@ -66,7 +66,7 @@ CONFIG_SCHEMA = cv.All(
         {
             cv.GenerateID(): cv.declare_id(KLinkHub),
             # Serve the K-Link page and JSON API at /klink on the shared HTTP server.
-            cv.Optional(CONF_WEB, default=False): cv.boolean,
+            cv.Optional(CONF_WEB, default=True): cv.boolean,
             # Dry run by default: frames are logged, nothing is transmitted.
             cv.Optional(CONF_WRITES_ENABLED, default=False): cv.boolean,
             # Listen for and log every frame on the bus (other controllers' traffic, lamp replies).
