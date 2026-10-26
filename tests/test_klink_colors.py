@@ -43,6 +43,15 @@ class StopTests(unittest.TestCase):
         self.assertGreaterEqual(light[2], deep[2])
         self.assertGreaterEqual(light[0], deep[0])
 
+    def test_light_overlay_labels(self):
+        # The light_* models reuse the KCOL block for their slider tracks and legend lines.
+        for label in ("g", "b", "ct", "w"):
+            self.assertIn(label, kc.OVERLAYS)
+            self.assertRegex(kc.OVERLAYS[label], HEX)
+        self.assertNotEqual(kc.OVERLAYS["g"], kc.OVERLAYS["b"])
+        self.assertNotEqual(kc.OVERLAYS["w"], kc.OVERLAYS["ct"])
+        self.assertEqual(kc.OVERLAYS["g"], kc.OVERLAYS["grn"], "grn and g may share the green")
+
 
 class SwatchTests(unittest.TestCase):
     def test_zero_overlay_keeps_base(self):

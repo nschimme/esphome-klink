@@ -64,6 +64,18 @@ function makeGroup(gid, name, model, labels) {
   };
 }
 
+function makeLight(gid, name, model, labels) {
+  var g = makeGroup(gid, name, model, labels);
+  g.kind = 'light';
+  g.slots = [
+    { minute: 480, ch: [20, 0, 100, 60, 20], enabled: true },
+    { minute: 720, ch: [140, 0, 100, 80, 50], enabled: true },
+    { minute: 1200, ch: [5, 0, 100, 40, 10], enabled: true },
+    { minute: 0, ch: [0, 0, 0, 0, 0], enabled: false }
+  ];
+  return g;
+}
+
 function picker(page) { return page.progRoot().children[0]; }
 function pickerSelect(page) {
   var p = picker(page), i;
@@ -534,6 +546,231 @@ async function scenarioWheelSliderSync() {
   check(name + ': lamp swatch changed', page.progRoot().textContent !== before);
 }
 
+async function scenarioLightCard() {
+  var name = 'light program card';
+  var light = makeLight(101, 'Board LED', 'light_rgb', ['int', null, 'r', 'g', 'b']);
+  var bus = makeGroup(2, 'Tuna Sun', 'tuna_sun');
+  var lamp = { kid: 1, type: 1, gid: 2, name: 'A' };
+  var server = stub.makeServer({ group: light, groups: [light, bus], lamps: [lamp], writes: false });
+  var page = await newPage(server);
+  var cards = page.groupsEl().children.filter(function (el) { return el.className === 'card'; });
+  var card = cards.filter(function (el) { return cardText(el).indexOf('Board LED') >= 0; })[0];
+  check(name + ': light card exists', !!card);
+  check(name + ': light tag', !!card && cardText(card).indexOf('Light program') >= 0, card && cardText(card));
+  check(name + ': no lamp chips', !!card && card.querySelectorAll('.chip').length === 0);
+  var find = null;
+  if (card) {
+    card.querySelectorAll('button').forEach(function (b) {
+      if (!find && b.textContent.trim() === 'Find these lamps') find = b;
+    });
+  }
+  check(name + ': no find button rows', !find || find.parentNode.hidden === true);
+  var banner = page.doc.getElementById('writes-banner');
+  check(name + ': mixed banner shown', banner.hidden === false);
+  check(name + ': mixed banner wording', page.doc.getElementById('writes-text').textContent.indexOf('Lamps on the K-Link bus are not being sent to yet') >= 0,
+    page.doc.getElementById('writes-text').textContent);
+
+  var only = stub.makeServer({ group: light, groups: [light], writes: false });
+  var onlyPage = await newPage(only);
+  check(name + ': all-light banner hidden', onlyPage.doc.getElementById('writes-banner').hidden === true);
+
+  var orphans = page.groupsEl().children.filter(function (el) { return el.className === 'card orphan'; });
+  check(name + ': light program is no orphan', orphans.length === 0, orphans.length);
+  var selects = page.lampsEl().querySelectorAll('select');
+  var targets = selects.length ? selects[0].children.map(function (o) { return o.value; }) : [];
+  check(name + ': light program is no move target', targets.indexOf('101') < 0, targets.join(','));
+  check(name + ': bus group is a move target', targets.indexOf('2') >= 0, targets.join(','));
+}
+
+async function presetFromPage(page, label) {
+  page.click(buttonExact(page, label));
+  page.click(buttonExact(page, 'Yes'));
+  await stub.settle();
+}
+
+function noZeroColourAtInt(slotsArr) {
+  for (var i = 0; i < slotsArr.length; i++) {
+    var s = slotsArr[i];
+    if (s.enabled && s.ch[0] > 0 && Math.max(s.ch[2], s.ch[3], s.ch[4]) === 0) return false;
+  }
+  return true;
+}
+
+async function scenarioLightPresets() {
+  var name = 'light presets';
+  var rgb = makeLight(101, 'Board LED', 'light_rgb', ['int', null, 'r', 'g', 'b']);
+  var server = stub.makeServer({ group: rgb, groups: [rgb] });
+  var page = await newPage(server);
+  await presetFromPage(page, 'Always on');
+  eq(name + ': RGB Always on is white at full INT', server.group.slots[0].ch, [255, 0, 100, 100, 100]);
+  check(name + ': RGB never black at INT>0', noZeroColourAtInt(server.group.slots));
+
+  await presetFromPage(page, 'Moonlight');
+  eq(name + ': RGB Moonlight is dim and warm', server.group.slots[0].ch, [51, 0, 100, 50, 20]);
+  check(name + ': RGB moonlight never black', noZeroColourAtInt(server.group.slots));
+
+  await presetFromPage(page, 'Daytime plateau');
+  eq(name + ': RGB plateau white at the peak', server.group.slots[1].ch, [255, 0, 100, 100, 100]);
+  eq(name + ': RGB plateau dark at the start', server.group.slots[0].ch, [0, 0, 100, 100, 100]);
+
+  var rgbw = makeLight(101, 'Board LED', 'light_rgbw', ['int', 'w', 'r', 'g', 'b']);
+  var wServer = stub.makeServer({ group: rgbw, groups: [rgbw] });
+  var wPage = await newPage(wServer);
+  await presetFromPage(wPage, 'Always on');
+  eq(name + ': RGBW Always on uses the white channel', wServer.group.slots[0].ch, [255, 255, 100, 100, 100]);
+  await presetFromPage(wPage, 'Moonlight');
+  eq(name + ': RGBW Moonlight has no white', wServer.group.slots[0].ch, [51, 0, 100, 50, 20]);
+
+  var ct = makeLight(102, 'Hallway', 'light_ct', ['int', 'ct', null, null, null]);
+  var cServer = stub.makeServer({ group: ct, groups: [ct] });
+  var cPage = await newPage(cServer);
+  await presetFromPage(cPage, 'Always on');
+  eq(name + ': CT Always on is neutral', cServer.group.slots[0].ch.slice(0, 2), [255, 128]);
+  await presetFromPage(cPage, 'Moonlight');
+  eq(name + ': CT Moonlight is warm', cServer.group.slots[0].ch.slice(0, 2), [51, 0]);
+}
+
+async function scenarioLightDirect() {
+  var name = 'light direct colour';
+  var rgb = makeLight(101, 'Board LED', 'light_rgb', ['int', null, 'r', 'g', 'b']);
+  var server = stub.makeServer({ group: rgb, groups: [rgb] });
+  var page = await newPage(server);
+  var card = page.wheelCard();
+  check(name + ': picker shown', !!card && card.hidden === false);
+  check(name + ': wheel used as a direct disc', !!page.wheel());
+  check(name + ': single Colour swatch', page.progRoot().textContent.indexOf('Colour') >= 0);
+  var sws = page.progRoot().querySelectorAll('.wsw');
+  var lampLab = sws.filter(function (el) { return cardText(el).indexOf('Lamp makes') >= 0; })[0];
+  check(name + ': no Lamp makes swatch', !lampLab || lampLab.hidden === true);
+
+  var input = page.hexInput();
+  var pre = slots(server);
+  server.resetRequests();
+  input.value = '#00ff00';
+  page.click(page.snapButton());
+  await settleSnap(page);
+  check(name + ': no snap request', server.snapRequests().length === 0, server.snapRequests().length);
+  var pts = server.pointRequests();
+  check(name + ': one point request', pts.length === 1, pts.length);
+  if (pts[0]) {
+    eq(name + ': r,g,b sent directly', {
+      c3: pts[0].params.c3, c4: pts[0].params.c4, c5: pts[0].params.c5, c1: pts[0].params.c1
+    }, { c3: '0', c4: '100', c5: '0', c1: undefined });
+  }
+  eq(name + ': green applied', server.group.slots[0].ch, [20, 0, 0, 100, 0]);
+  check(name + ': INT unchanged by the picker', server.group.slots[0].ch[0] === pre[0].ch[0]);
+
+  server.resetRequests();
+  page.click(buttonExact(page, 'Undo'));
+  await stub.settle();
+  eq(name + ': undo restores the colour', slots(server), pre);
+  check(name + ': undo one request', server.pointRequests().length === 1, server.pointRequests().length);
+
+  var wheel = page.wheel();
+  pre = slots(server);
+  server.resetRequests();
+  page.pointer(wheel, 'pointerdown', { button: 0, pointerId: 3, clientX: 170, clientY: 110 });
+  page.pointer(wheel, 'pointermove', { pointerId: 3, clientX: 160, clientY: 100 });
+  page.pointer(wheel, 'pointerup', { pointerId: 3 });
+  page.clock.tick(120);
+  await stub.settle();
+  check(name + ': drag sends no snap', server.snapRequests().length === 0, server.snapRequests().length);
+  pts = server.pointRequests();
+  check(name + ': drag sends one point', pts.length === 1, pts.length);
+  if (pts[0]) check(name + ': drag sends rgb channels', pts[0].params.c3 != null && pts[0].params.c4 != null && pts[0].params.c5 != null);
+  check(name + ': drag changed the program', JSON.stringify(slots(server)) !== JSON.stringify(pre));
+  server.resetRequests();
+  page.click(buttonExact(page, 'Undo'));
+  await stub.settle();
+  eq(name + ': one undo per drag', slots(server), pre);
+  check(name + ': drag undo one request', server.pointRequests().length === 1, server.pointRequests().length);
+}
+
+async function scenarioLightCt() {
+  var name = 'light CT strip';
+  var ct = makeLight(102, 'Hallway', 'light_ct', ['int', 'ct', null, null, null]);
+  var server = stub.makeServer({ group: ct, groups: [ct] });
+  var page = await newPage(server);
+  var strip = page.progRoot().querySelector('.cstrip');
+  check(name + ': strip present', !!strip && strip.hidden === false);
+  check(name + ': wheel hidden', page.wheel() === null || page.wheel().parentNode.hidden === true);
+  check(name + ': picker visible', page.wheelCard().hidden === false);
+  if (!strip) return;
+  strip.clientWidth = 100;
+  strip._left = 0;
+  var pre = slots(server);
+  server.resetRequests();
+  page.pointer(strip, 'pointerdown', { button: 0, pointerId: 4, clientX: 100, clientY: 10 });
+  page.pointer(strip, 'pointerup', { pointerId: 4 });
+  page.clock.tick(120);
+  await stub.settle();
+  check(name + ': no snap request', server.snapRequests().length === 0, server.snapRequests().length);
+  var pts = server.pointRequests();
+  check(name + ': one point request', pts.length === 1, pts.length);
+  if (pts[0]) eq(name + ': strip sets c2', pts[0].params.c2, '255');
+  eq(name + ': cool end applied', server.group.slots[0].ch.slice(0, 2), [20, 255]);
+  var thumb = page.progRoot().querySelector('.cthumb');
+  check(name + ': thumb follows UI2', !!thumb && thumb.style.left === '100%', thumb && thumb.style.left);
+
+  server.resetRequests();
+  page.pointer(strip, 'pointerdown', { button: 0, pointerId: 5, clientX: 0, clientY: 10 });
+  page.pointer(strip, 'pointerup', { pointerId: 5 });
+  page.clock.tick(120);
+  await stub.settle();
+  eq(name + ': warm end applied', server.group.slots[0].ch.slice(0, 2), [20, 0]);
+
+  server.resetRequests();
+  page.click(buttonExact(page, 'Undo'));
+  await stub.settle();
+  eq(name + ': first undo steps back one drag', server.group.slots[0].ch.slice(0, 2), [20, 255]);
+  check(name + ': undo one request', server.pointRequests().length === 1, server.pointRequests().length);
+  server.resetRequests();
+  page.click(buttonExact(page, 'Undo'));
+  await stub.settle();
+  eq(name + ': second undo restores the start', slots(server), pre);
+
+  var dim = makeLight(103, 'Dim', 'light_brightness', ['int', null, null, null, null]);
+  var dServer = stub.makeServer({ group: dim, groups: [dim] });
+  var dPage = await newPage(dServer);
+  check(name + ': brightness has no picker', dPage.wheelCard().hidden === true);
+  check(name + ': brightness has no strip', dPage.progRoot().querySelector('.cstrip') === null);
+}
+
+function legendButton(page, label) {
+  var legend = page.progRoot().querySelector('.legend');
+  if (!legend) return null;
+  var found = null;
+  legend.children.forEach(function (b) {
+    if (b.textContent.trim() === label) found = b;
+  });
+  return found;
+}
+
+async function scenarioLightColours() {
+  var name = 'light channel colours';
+  var rgb = makeLight(101, 'Board LED', 'light_rgb', ['int', null, 'r', 'g', 'b']);
+  var server = stub.makeServer({ group: rgb, groups: [rgb] });
+  var page = await newPage(server);
+  var intBtn = legendButton(page, 'INT'), gBtn = legendButton(page, 'G'), bBtn = legendButton(page, 'B');
+  check(name + ': legend has INT, G and B', !!intBtn && !!gBtn && !!bBtn);
+  function stroke(btn) {
+    var line = btn && btn.querySelectorAll('line')[0];
+    return line ? line.getAttribute('stroke') : '';
+  }
+  check(name + ': G uses its own token', stroke(gBtn) === 'var(--k-g)', stroke(gBtn));
+  check(name + ': B uses its own token', stroke(bBtn) === 'var(--k-b)', stroke(bBtn));
+  check(name + ': G differs from INT', stroke(gBtn) !== stroke(intBtn), stroke(gBtn) + ' / ' + stroke(intBtn));
+  check(name + ': B differs from INT', stroke(bBtn) !== stroke(intBtn));
+  var ranges = page.progRoot().querySelectorAll('input').filter(function (el) {
+    return el.type === 'range' && el.style.getPropertyValue('--trk');
+  });
+  var trks = ranges.map(function (r) { return r.style.getPropertyValue('--trk'); });
+  check(name + ': G track is green', trks.some(function (t) { return t.indexOf('#00ff00') >= 0; }), trks.join(' | '));
+  check(name + ': B track is blue', trks.some(function (t) { return t.indexOf('#0000ff') >= 0; }), trks.join(' | '));
+  check(name + ': tracks differ from INT', trks[0].indexOf('#ffffff') >= 0 && trks.filter(function (t) { return t === trks[0]; }).length === 1,
+    trks.join(' | '));
+}
+
 async function main() {
   await scenarioPlace();
   await scenarioRefused();
@@ -552,6 +789,11 @@ async function main() {
   await scenarioWheelHexAndKeys();
   await scenarioWheelHiddenGeneric();
   await scenarioWheelSliderSync();
+  await scenarioLightCard();
+  await scenarioLightPresets();
+  await scenarioLightDirect();
+  await scenarioLightCt();
+  await scenarioLightColours();
   console.log(failures ? failures + ' failure(s)' : 'all web tests passed');
   process.exit(failures ? 1 : 0);
 }

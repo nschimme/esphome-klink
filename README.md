@@ -299,6 +299,12 @@ The device serves two pages. Both work offline, straight from the board.
 Set `web: false` under `klink:` to leave out the esphome-klink page and its JSON API. Adding
 `web_server: auth: {username: ..., password: ...}` in your own config protects both pages.
 
+The Program tab also edits **light programs** (`kind: "light"`, ids 101-164), which drive ordinary
+ESPHome lights instead of K-Link lamps. They use the same curve editor and presets, but the channels
+follow the light's type (brightness, colour temperature, RGB or RGBW), colour programs get a direct
+hue/saturation picker, colour-temperature programs a warm-to-cool strip, and a light program shows no
+lamp chips or identification buttons because it has no lamps on the bus.
+
 ## What you get in Home Assistant
 
 For each lamp group (Tuna Sun and Tuna Blue):

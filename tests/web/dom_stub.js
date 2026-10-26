@@ -237,7 +237,8 @@ function bootstrap(doc) {
   add('div', 'toasts');
   add('span', 'bus-pill');
   add('div', 'offline');
-  add('div', 'writes-banner');
+  var banner = add('div', 'writes-banner');
+  add('p', 'writes-text', null, banner);
   add('button', 'writes-on');
   add('button', 'writes-toggle');
   add('button', 'retry-btn');
@@ -326,6 +327,7 @@ function makeServer(opts) {
     ]
   };
   var groups = opts.groups || [group];
+  var writes = opts.writes !== false;
   groups.forEach(function (g) {
     if (!g.defaults) g.defaults = cloneSlots(g.slots);
   });
@@ -336,7 +338,7 @@ function makeServer(opts) {
     return {
       groups: groups.map(function (g) {
         return {
-          gid: g.gid, name: g.name, model: g.model, mode: g.mode || 'program',
+          gid: g.gid, kind: g.kind || 'bus', name: g.name, model: g.model, mode: g.mode || 'program',
           status: 'Program', labels: g.labels.slice(), max: g.max.slice(),
           slots: cloneSlots(g.slots), defaults: g.defaults ? cloneSlots(g.defaults) : undefined, lamps: lamps.filter(function (l) {
             return l.gid === g.gid;
@@ -348,12 +350,12 @@ function makeServer(opts) {
       lamps: lamps.map(function (l) {
         return { kid: l.kid, type: l.type, gid: l.gid, name: l.name || '' };
       }),
-      bus: { state: 'Controlling', writes: true, known_lamps: lamps.length }
+      bus: { state: 'Controlling', writes: writes, known_lamps: lamps.length }
     };
   }
 
   function handlePoint(q) {
-    var gid = parseUint(q.get('gid'), 40);
+    var gid = parseUint(q.get('gid'), 164);
     if (gid !== group.gid) throw new HttpError(404, 'unknown group');
     var slot = parseUint(q.get('slot'), group.slots.length);
     if (!slot || slot < 1) throw new HttpError(400, 'invalid parameter: slot');
@@ -402,7 +404,7 @@ function makeServer(opts) {
     try {
       if (u.pathname === '/klink/state') return Promise.resolve(response(200, stateJson()));
       if (u.pathname === '/klink/snap') {
-        var gid = parseUint(u.searchParams.get('gid'), 40);
+        var gid = parseUint(u.searchParams.get('gid'), 164);
         if (gid !== group.gid) throw new HttpError(404, 'unknown group');
         if (group.model !== 'tuna_sun' && group.model !== 'tuna_blue') {
           throw new HttpError(400, 'no colour model for this group');
@@ -439,7 +441,7 @@ function makeServer(opts) {
 var APP = path.join(__dirname, '..', '..', 'components', 'klink', 'web', 'app.js');
 var KCOL = 'var KCOL={sun:' + JSON.stringify(new Array(17).fill('#102030')) +
   ',blue:' + JSON.stringify(new Array(17).fill('#203040')) +
-  ',ov:{r:"#ff0000",am:"#ffaa00",vio:"#8800ff",grn:"#00ff00"}};';
+  ',ov:{r:"#ff0000",am:"#ffaa00",vio:"#8800ff",grn:"#00ff00",g:"#00ff00",b:"#0000ff",ct:"#ffb46b",w:"#eeeeee"}};';
 
 function flush() {
   return new Promise(function (resolve) { setImmediate(resolve); });

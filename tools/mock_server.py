@@ -34,6 +34,7 @@ import web_build  # noqa: E402
 NUM_CHANNELS = 5
 CHANNEL_MAX = [255, 255, 100, 100, 100]
 MIN_GID, MAX_GID = 1, 40
+PROGRAM_ID_MIN, PROGRAM_ID_MAX = 101, 164
 CUSTOM_GID_MIN, CUSTOM_GID_MAX = 3, 25
 NUM_SLOTS = 8
 PREVIEW_SECONDS = 60.0
@@ -68,9 +69,10 @@ def copy_slots(slots):
     return [point(p["minute"], p["ch"], p["enabled"]) for p in slots]
 
 
-def make_group(gid, name, model, labels, slots):
+def make_group(gid, name, model, labels, slots, kind="bus"):
     return {
         "gid": gid,
+        "kind": kind,
         "name": name,
         "model": model,
         "labels": list(labels),
@@ -83,6 +85,52 @@ def make_group(gid, name, model, labels, slots):
         # The shipped program, captured before any edit, for the page's "Default" preset.
         "defaults": copy_slots(slots),
     }
+
+
+LIGHT_RGB_SLOTS = [
+    point(8 * 60, [20, 0, 100, 55, 20]),
+    point(10 * 60 + 30, [140, 0, 100, 85, 60]),
+    point(13 * 60, [220, 0, 100, 95, 80]),
+    point(16 * 60, [180, 0, 90, 70, 55]),
+    point(19 * 60, [80, 0, 100, 50, 25]),
+    point(21 * 60 + 30, [10, 0, 100, 30, 10]),
+    point(0, [0, 0, 0, 0, 0], False),
+    point(0, [0, 0, 0, 0, 0], False),
+]
+
+
+def light_groups():
+    """The light programs every mock run starts with, plus the --many-only CT program."""
+    return [
+        make_group(
+            101,
+            "Board LED",
+            "light_rgb",
+            ["int", None, "r", "g", "b"],
+            copy_slots(LIGHT_RGB_SLOTS),
+            kind="light",
+        ),
+    ]
+
+
+def hallway_group():
+    return make_group(
+        102,
+        "Hallway",
+        "light_ct",
+        ["int", "ct", None, None, None],
+        [
+            point(7 * 60, [30, 40, 0, 0, 0]),
+            point(9 * 60, [180, 128, 0, 0, 0]),
+            point(18 * 60, [210, 160, 0, 0, 0]),
+            point(22 * 60, [60, 0, 0, 0, 0]),
+            point(23 * 60, [0, 0, 0, 0, 0], False),
+            point(0, [0, 0, 0, 0, 0], False),
+            point(0, [0, 0, 0, 0, 0], False),
+            point(0, [0, 0, 0, 0, 0], False),
+        ],
+        kind="light",
+    )
 
 
 GROUPS = [
@@ -118,7 +166,7 @@ GROUPS = [
             point(0, [0, 0, 0, 0, 0], False),
         ],
     ),
-]
+] + light_groups()
 
 LAMPS = [
     {"kid": 18000001, "type": 2, "gid": 2, "name": ""},
@@ -169,7 +217,7 @@ def many_groups():
     return [
         make_group(gid, name, model, LABELS[model], many_slots())
         for gid, name, model in MANY_GROUPS
-    ]
+    ] + light_groups() + [hallway_group()]
 
 
 def many_lamps():
@@ -265,6 +313,45 @@ def require_group(gid):
     return group
 
 
+def is_program_id(value):
+    return PROGRAM_ID_MIN <= value <= PROGRAM_ID_MAX
+
+
+def is_bus_gid(value):
+    return MIN_GID <= value <= MAX_GID
+
+
+def parse_program_gid(text):
+    """A program route takes either a bus group (1-40) or a light program (101-164)."""
+    value = parse_uint(text, PROGRAM_ID_MAX)
+    if value is None or not (is_bus_gid(value) or is_program_id(value)):
+        return None
+    return value
+
+
+def require_program_gid(query, name):
+    if name not in query:
+        raise HttpError(400, "missing parameter: " + name)
+    value = parse_program_gid(query[name][0])
+    if value is None:
+        raise HttpError(400, name + " must be 1-40 or 101-164")
+    return value
+
+
+def require_lamp_gid(query, name):
+    """Only real lamps on the bus live in a bus group; a light program never does."""
+    if name not in query:
+        raise HttpError(400, "missing parameter: " + name)
+    value = parse_uint(query[name][0], PROGRAM_ID_MAX)
+    if value is None:
+        raise HttpError(400, "invalid parameter: " + name)
+    if is_program_id(value):
+        raise HttpError(400, "not a lamp group")
+    if not is_bus_gid(value):
+        raise HttpError(400, name + " must be 1-40")
+    return value
+
+
 # ---- schedule and status text -----------------------------------------------------------------
 
 
@@ -312,6 +399,14 @@ def status_text(group):
         channels = compute_minute(group["slots"], minute)
         if channels is None:
             return "Program · no points enabled"
+        if group.get("kind") == "light":
+            parts = []
+            for c, label in enumerate(group["labels"]):
+                if not label:
+                    continue
+                value = percent(channels[c]) if CHANNEL_MAX[c] == 255 else channels[c]
+                parts.append("%s %d%%" % (label.upper(), value))
+            return "Program · %02d:%02d · %s" % (minute // 60, minute % 60, " · ".join(parts))
         return "Program · %02d:%02d · INT %d%% CLR %d%%" % (
             minute // 60,
             minute % 60,
@@ -372,6 +467,7 @@ def state_json():
         groups.append(
             {
                 "gid": group["gid"],
+                "kind": group["kind"],
                 "name": group["name"],
                 "model": group["model"],
                 "mode": group["mode"],
@@ -399,9 +495,7 @@ def state_json():
 
 
 def handle_mode(query):
-    gid = require_uint(query, "gid", MAX_GID)
-    if gid < MIN_GID:
-        raise HttpError(400, "gid must be 1-40")
+    gid = require_program_gid(query, "gid")
     group = require_group(gid)
     if "mode" not in query:
         raise HttpError(400, "missing parameter: mode")
@@ -421,7 +515,10 @@ def handle_identify(query):
     has_gid = "gid" in query
     if has_kid == has_gid:
         raise HttpError(400, "provide exactly one of kid or gid")
-    value = require_uint(query, "kid" if has_kid else "gid", 0xFFFFFFFF if has_kid else MAX_GID)
+    if has_gid:
+        value = require_lamp_gid(query, "gid")
+    else:
+        value = require_uint(query, "kid", 0xFFFFFFFF)
     if not BUS["writes"]:
         raise HttpError(409, "Send to lights is off")
     if has_gid:
@@ -430,9 +527,7 @@ def handle_identify(query):
 
 
 def handle_point(query):
-    gid = require_uint(query, "gid", MAX_GID)
-    if gid < MIN_GID:
-        raise HttpError(400, "gid must be 1-40")
+    gid = require_program_gid(query, "gid")
     group = require_group(gid)
     slot = require_uint(query, "slot", NUM_SLOTS)
     if slot < 1:
@@ -475,9 +570,7 @@ def parse_hex_rgb(text):
 
 def handle_snap(query):
     """Closest settings this lamp can make for a target colour; read-only."""
-    gid = require_uint(query, "gid", MAX_GID)
-    if gid < MIN_GID:
-        raise HttpError(400, "gid must be 1-40")
+    gid = require_program_gid(query, "gid")
     group = require_group(gid)
     model = group["model"]
     if model not in COLOUR_MODELS:
@@ -501,9 +594,7 @@ def handle_snap(query):
 
 
 def handle_preview(query):
-    gid = require_uint(query, "gid", MAX_GID)
-    if gid < MIN_GID:
-        raise HttpError(400, "gid must be 1-40")
+    gid = require_program_gid(query, "gid")
     group = require_group(gid)
     has_slot = "slot" in query
     has_minute = "minute" in query
@@ -530,9 +621,7 @@ def handle_preview(query):
 
 
 def handle_preview_done(query):
-    gid = require_uint(query, "gid", MAX_GID)
-    if gid < MIN_GID:
-        raise HttpError(400, "gid must be 1-40")
+    gid = require_program_gid(query, "gid")
     group = require_group(gid)
     if group["mode"] == "preview":
         group["mode"] = group["before_preview"]
@@ -555,9 +644,7 @@ def assignment_error(lamp, gid):
 
 def handle_assign(query):
     kid = require_uint(query, "kid", 0xFFFFFFFF)
-    gid = require_uint(query, "gid", MAX_GID)
-    if gid < MIN_GID:
-        raise HttpError(400, "gid must be 1-40")
+    gid = require_lamp_gid(query, "gid")
     if not BUS["writes"]:
         raise HttpError(409, "Send to lights is off")
     lamp = find_lamp(kid)
@@ -586,12 +673,8 @@ def handle_name(query):
 
 
 def handle_copy(query):
-    source_gid = require_uint(query, "from", MAX_GID)
-    if source_gid < MIN_GID:
-        raise HttpError(400, "from must be 1-40")
-    target_gid = require_uint(query, "to", MAX_GID)
-    if target_gid < MIN_GID:
-        raise HttpError(400, "to must be 1-40")
+    source_gid = require_program_gid(query, "from")
+    target_gid = require_program_gid(query, "to")
     source = require_group(source_gid)
     target = require_group(target_gid)
     if source["model"] != target["model"] or len(source["slots"]) != len(target["slots"]):
