@@ -19,6 +19,14 @@ static bool is(const uint8_t o[5], int a, int b, int c, int d, int e) {
 int main() {
   uint8_t o[5];
 
+  {  // Remaining-time text for the status line: mm:ss, zero-padded seconds
+    check("format 102", format_remaining(102) == "1:42");
+    check("format 7", format_remaining(7) == "0:07");
+    check("format 0", format_remaining(0) == "0:00");
+    check("format 300", format_remaining(300) == "5:00");
+    check("format negative clamps", format_remaining(-5) == "0:00");
+  }
+
   {  // Aurora, fastest variant: UI1 == UI2, rising 0..255 over 12.75 s, plateau, fall, floor at 2
     EffectEngine e; e.start(EFFECT_AURORA, 0);
     at(e, 0, o);      check("aurora t=0 floors at 2", is(o, 2, 2, 0, 0, 0));

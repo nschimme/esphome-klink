@@ -8,10 +8,21 @@
 // (variant + 1), which is what the app's Fast / Moderate / Slow slider sends. The Dongle's FREQ field
 // has no effect on the output. No ESPHome dependencies (host tested).
 #include <cstdint>
+#include <cstdio>
 #include <functional>
+#include <string>
 
 namespace kessil {
 namespace klink {
+
+// "1:42", "0:07": seconds as mm:ss, used by the status line for an effect's remaining time.
+inline std::string format_remaining(int seconds) {
+  if (seconds < 0)
+    seconds = 0;
+  char buf[16];
+  std::snprintf(buf, sizeof(buf), "%d:%02d", seconds / 60, seconds % 60);
+  return std::string(buf);
+}
 
 enum EffectKind : uint8_t {
   EFFECT_STORM = 0,      // lightning: idle, then bursts of flashes

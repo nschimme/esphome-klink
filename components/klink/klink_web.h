@@ -43,6 +43,8 @@ class KLinkWeb : public AsyncWebHandler, public Component {
   void handle_index(AsyncWebServerRequest *request);
   void handle_state(AsyncWebServerRequest *request);
   void handle_mode(AsyncWebServerRequest *request);
+  void handle_effect(AsyncWebServerRequest *request);
+  void handle_effect_stop(AsyncWebServerRequest *request);
   void handle_identify(AsyncWebServerRequest *request);
   void handle_point(AsyncWebServerRequest *request);
   void handle_preview(AsyncWebServerRequest *request);

@@ -320,17 +320,27 @@ For each lamp group (Tuna Sun and Tuna Blue):
 - a **light**: brightness is intensity; on the Tuna Sun the color temperature is the color control. The
   effects are the Dongle's own **Storm**, **Cloud** and **Aurora**, plus **Rainbow**, **Moon Red** and
   **Moon Blue** on the Tuna Blue (the Tuna Sun omits the last three, which drive UI3-UI5, like the
-  Kessil app), followed by **Pulse**, **Color sweep**, **Sunrise** and **Sunset**. The Dongle effects
-  take a `speed` (`fast`, `moderate` or `slow`) and a `duration` (default `2min`; `0s` runs until
-  stopped) and write the group about ten times a second while they run, as the Dongle does;
+  Kessil app), followed by **Pulse**, **Color sweep**, **Sunrise** and **Sunset**. An effect is a
+  **temporary overlay** on the schedule, as in Kessil's own app: starting one does not change the
+  group's mode, and while it runs the group writes only effect frames (about ten times a second, as the
+  Dongle does). When it finishes, is stopped, or is replaced, the group goes straight back to what it
+  was doing: Program shows the schedule again, Off stays off, Manual returns to the held level. Nothing
+  is left in Manual. The same overlay can be started and stopped from the JSON API with
+  `POST /klink/effect?gid=&name=&speed=&minutes=` and `POST /klink/effect/stop?gid=`;
+- an **effect speed** select (**Fast**, **Moderate**, **Slow**) and an **effect duration** number
+  (0 to 5 minutes in half-minute steps, `0` means until stopped, default 2 minutes): the runtime
+  settings of the overlay, like the Kessil app's Speed and Time sliders. They apply to the Dongle
+  effects (Storm, Cloud, Aurora, Rainbow, Moon Red, Moon Blue); the light-driven effects keep their
+  own YAML timing. For the Dongle effects the YAML `speed`/`duration` options are superseded by these
+  entities. Both are remembered across restarts;
 - a **Mode** select: **Program** runs the daily program, **Manual** holds what you set, **Off** turns
   the lamps off. Changing the light or a manual channel number switches the group to Manual
   automatically; choosing Program hands control back. The mode is remembered across restarts. Like
   Kessil's WiFi dongle, a held value (Manual, or a point preview) is repeated about once a second, since
   it is not known whether the lamps keep a level without repeats;
 - a **Status** text sensor saying what the group is doing right now, for example
-  `Program · 14:02 · INT 42% CLR 60%`, `Manual`, `Off`, `Editing point 3 (previewing)` or
-  `Effect: Sunrise`;
+  `Program · 14:02 · INT 42% CLR 60%`, `Manual`, `Off`, `Editing point 3 (previewing)`,
+  `Effect: Sunrise` or `Effect: Storm · 1:42 left`;
 - the **8 point text entities** (`08:00 int=40 clr=20 r=10`) for copy and paste;
 - a **point editor**: choose a point 1 to 8, then edit its time, whether it is on, and its channel
   numbers, like the controller's own Quick Set screen. Editing a point shows it on the lamps at once

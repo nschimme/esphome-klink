@@ -519,6 +519,18 @@ void KLinkGroup::setup() {
   this->hub_->register_group(this);
   this->hub_->register_program(this);
   this->setup_program_();
+  // Effect speed and duration: runtime settings, like the Kessil app's sliders.
+  this->effect_speed_pref_ =
+      global_preferences->make_preference<uint8_t>(fnv1_hash("klink_fxspeed_" + std::to_string(this->gid_)));
+  uint8_t speed = 0;
+  if (this->effect_speed_pref_.load(&speed) && speed <= 2)
+    this->effect_speed_ = speed;
+  this->effect_duration_pref_ =
+      global_preferences->make_preference<uint32_t>(fnv1_hash("klink_fxdur_" + std::to_string(this->gid_)));
+  uint32_t duration = 120000;
+  if (this->effect_duration_pref_.load(&duration) &&
+      (duration == 0 || (duration >= 30000 && duration <= 300000)))
+    this->effect_duration_ms_ = duration;
   this->set_interval("schedule", 1000, [this]() { this->update(); });
 }
 
@@ -580,6 +592,101 @@ void KLinkGroup::manual_levels(light::LightState *state, uint8_t &level, uint8_t
   if (this->invert_color_)
     t = 1.0f - t;
   color = static_cast<uint8_t>(std::lround(t * 255.0f));
+}
+
+// ---- Effects on the group (ProgramHost) ------------------------------------------------------
+
+std::vector<std::string> KLinkGroup::effect_names() const {
+  std::vector<std::string> names;
+  if (this->state_ == nullptr)
+    return names;
+  for (auto *effect : this->state_->get_effects()) {
+    if (effect == nullptr)
+      continue;
+    std::string name = effect->get_name().str();
+    if (name == "None")
+      continue;
+    names.push_back(name);
+  }
+  return names;
+}
+
+bool KLinkGroup::start_effect(const std::string &name) {
+  if (this->state_ == nullptr)
+    return false;
+  bool known = false;
+  for (const auto &candidate : this->effect_names())
+    if (candidate == name)
+      known = true;
+  if (!known)
+    return false;
+  auto call = this->state_->make_call();
+  call.set_effect(name);
+  call.set_save(false);
+  call.perform();
+  return true;
+}
+
+void KLinkGroup::stop_effect() {
+  if (this->state_ == nullptr || !this->effect_active())
+    return;
+  auto call = this->state_->make_call();
+  call.set_effect(static_cast<uint32_t>(0));
+  call.set_save(false);
+  call.perform();
+}
+
+int32_t KLinkGroup::effect_remaining_seconds() const {
+  if (!this->effect_active())
+    return 0;
+  if (this->effect_end_ms_ == 0)
+    return -1;  // until stopped
+  uint32_t now = millis();
+  if (static_cast<int32_t>(now - this->effect_end_ms_) >= 0)
+    return 0;
+  // Round up: the status shows how long is left, not how much has elapsed.
+  return static_cast<int32_t>((this->effect_end_ms_ - now + 999) / 1000);
+}
+
+std::string KLinkGroup::effect_label() const {
+  return this->effect_active() ? this->effect_name() : std::string();
+}
+
+void KLinkGroup::set_effect_options(uint8_t speed, uint32_t duration_ms) {
+  if (speed > 2)
+    speed = 2;
+  // 0 means "until stopped"; otherwise the app's range is 0.5 to 5 minutes in half-minute steps.
+  if (duration_ms != 0) {
+    if (duration_ms < 30000)
+      duration_ms = 30000;
+    else if (duration_ms > 300000)
+      duration_ms = 300000;
+  }
+  this->effect_speed_ = speed;
+  this->effect_duration_ms_ = duration_ms;
+  this->effect_speed_pref_.save(&this->effect_speed_);
+  this->effect_duration_pref_.save(&this->effect_duration_ms_);
+}
+
+void KLinkGroup::effect_ended_() {
+  // Remember what the light showed before the effect, so the light call that ends the effect (it
+  // repeats those values) is not mistaken for a user command.
+  this->ended_have_published_ = this->have_published_;
+  this->ended_on_ = this->published_on_;
+  this->ended_brightness_ = this->published_brightness_;
+  this->ended_mireds_ = this->published_mireds_;
+  this->effect_ended_pending_ = true;
+  this->effect_end_ms_ = 0;
+  // The next tick sends whatever the mode asks for again, and shows it on the light.
+  this->have_sent_ = false;
+  this->have_published_ = false;
+  // Manual has no tick of its own once the mode is left alone here: put the held level back at once.
+  if (this->mode_.mode == kk::Mode::MANUAL && this->state_ != nullptr) {
+    uint8_t level, color;
+    this->manual_levels(this->state_, level, color);
+    uint8_t channels[5] = {level, color, this->extras_[0], this->extras_[1], this->extras_[2]};
+    this->send_(channels);
+  }
 }
 
 void KLinkGroup::output_(const uint8_t channels[5]) {
@@ -648,6 +755,20 @@ void KLinkGroup::write_state(light::LightState *state) {
   // the effect starts) would show up as a one-frame flash between two effect frames.
   if (state->get_current_effect_index() != 0)
     return;
+  // The light call that ends an effect repeats the values the light already had. Treat that as our
+  // own write; a real user command in the same call (turn-off, new brightness) differs and falls
+  // through to take manual control below.
+  if (this->effect_ended_pending_) {
+    this->effect_ended_pending_ = false;
+    const auto &values = state->remote_values;
+    bool same = this->ended_have_published_ && values.is_on() == this->ended_on_;
+    if (same && this->ended_on_) {
+      same = std::fabs(values.get_brightness() - this->ended_brightness_) <= 0.01f &&
+             (!this->has_color_temperature() || std::fabs(values.get_color_temperature() - this->ended_mireds_) <= 1.0f);
+    }
+    if (same && this->mode_.mode != kk::Mode::MANUAL)
+      return;
+  }
   // The schedule's own value shown on the light is not a user command.
   if (this->mode_.mode != kk::Mode::MANUAL && this->is_own_publish_(state))
     return;
@@ -728,6 +849,29 @@ void KLinkModeSelect::setup() {
 }
 
 void KLinkModeSelect::dump_config() { LOG_SELECT("", "K-Link mode", this); }
+
+void KLinkEffectSpeedSelect::setup() {
+  this->publish_state(static_cast<size_t>(this->group_->effect_speed()));
+}
+
+void KLinkEffectSpeedSelect::dump_config() { LOG_SELECT("", "K-Link effect speed", this); }
+
+void KLinkEffectDurationNumber::setup() {
+  this->publish_state(static_cast<float>(this->group_->effect_duration_ms()) / 60000.0f);
+}
+
+void KLinkEffectDurationNumber::control(float value) {
+  if (value < 0.0f)
+    value = 0.0f;
+  if (value > 5.0f)
+    value = 5.0f;
+  // Half-minute steps, like the Kessil app's Time slider; 0 = until stopped.
+  uint32_t halves = static_cast<uint32_t>(std::lround(value * 2.0f));
+  this->publish_state(static_cast<float>(halves) / 2.0f);
+  this->group_->set_effect_options(this->group_->effect_speed(), halves * 30000u);
+}
+
+void KLinkEffectDurationNumber::dump_config() { LOG_NUMBER("", "K-Link effect duration", this); }
 
 void KLinkPointSelect::setup() {
   this->group_->add_on_editor_callback([this]() { this->publish_state(this->group_->selected_point()); });
@@ -861,16 +1005,38 @@ void KLinkEffect::start() {
   light::LightEffect::start();
   this->start_ms_ = millis();
   this->last_tick_ms_ = this->start_ms_ - kk::EFFECT_TICK_MS;  // first tick right away
-  if (this->kind_ <= FxKind::MOON_BLUE)
+  light::LightState *state = this->get_light_state();
+  KLinkGroup *group = state != nullptr ? static_cast<KLinkGroup *>(state->get_output()) : nullptr;
+  if (this->kind_ <= FxKind::MOON_BLUE) {
+    // The Dongle effects take the group's runtime Speed and Time settings, like the Kessil app's
+    // sliders; the YAML `speed`/`duration` values only apply while the entities have not been used.
+    if (group != nullptr) {
+      this->variant_ = group->effect_speed();
+      this->duration_ms_ = group->effect_duration_ms();
+    }
     this->engine_.start(static_cast<kk::EffectKind>(this->kind_), this->variant_);
+  }
+  if (group != nullptr)
+    group->note_effect_started(this->duration_ms_);
 }
 
-void KLinkEffect::finish_(bool turn_off) {
+void KLinkEffect::stop() {
+  light::LightEffect::stop();
+  light::LightState *state = this->get_light_state();
+  if (state == nullptr)
+    return;
+  KLinkGroup *group = static_cast<KLinkGroup *>(state->get_output());
+  if (group != nullptr)
+    group->effect_ended_();
+}
+
+void KLinkEffect::finish_() {
+  // Every effect ends by clearing itself, whatever its kind: the group then resumes its mode
+  // (Program shows the schedule again, Off stays off, Manual returns to the held level). No effect
+  // turns the light off, not even Sunset.
   auto call = this->get_light_state()->make_call();
-  if (turn_off)
-    call.set_state(false);
-  else
-    call.set_effect(static_cast<uint32_t>(0));
+  call.set_effect(static_cast<uint32_t>(0));
+  call.set_save(false);
   call.perform();
 }
 
@@ -882,7 +1048,7 @@ void KLinkEffect::apply() {
   uint32_t elapsed = now - this->start_ms_;
   bool timed = this->duration_ms_ != 0;
   if (timed && elapsed >= this->duration_ms_) {
-    this->finish_(this->kind_ == FxKind::SUNSET);
+    this->finish_();
     return;
   }
   // The light output is a K-Link group: effects are only registered for klink lights.

@@ -66,6 +66,7 @@ text:
 # change. Editing a point turns it on; use the switch to turn a point off.
 select:
   - { platform: klink, group: "${id}", type: mode, name: "${name} mode", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", type: effect_speed, name: "${name} effect speed", web_server: { sorting_group_id: controls } }
   - { platform: klink, group: "${id}", name: "${name} program point", web_server: { sorting_group_id: program } }
 
 text_sensor:
@@ -75,6 +76,8 @@ datetime:
   - { platform: klink, group: "${id}", type: time, name: "${name} point time", web_server: { sorting_group_id: program } }
 
 number:
+  # Effects are a temporary overlay on the program; these are their runtime settings.
+  - { platform: klink, group: "${id}", type: effect_duration, name: "${name} effect duration", mode: box, web_server: { sorting_group_id: controls } }
   # Manual extra channels, outside the program. Setting one takes manual control of the group.
   - { platform: klink, group: "${id}", channel: 2, name: "${name} color (raw 0-255)", web_server: { sorting_group_id: controls } }
   - { platform: klink, group: "${id}", channel: 3, name: "${name} violet", web_server: { sorting_group_id: controls } }

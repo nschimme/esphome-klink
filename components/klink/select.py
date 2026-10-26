@@ -13,9 +13,12 @@ CONF_GROUP = "group"
 
 KLinkPointSelect = klink_ns.class_("KLinkPointSelect", select.Select, cg.Component)
 KLinkModeSelect = klink_ns.class_("KLinkModeSelect", select.Select, cg.Component)
+KLinkEffectSpeedSelect = klink_ns.class_("KLinkEffectSpeedSelect", select.Select, cg.Component)
 
 # Option order matches the kessil::klink::Mode enum values: PROGRAM, MANUAL, OFF.
 MODE_OPTIONS = ["Program", "Manual", "Off"]
+# Order matches the speed values KLinkEffect uses: 0 fast, 1 moderate, 2 slow.
+EFFECT_SPEED_OPTIONS = ["Fast", "Moderate", "Slow"]
 
 # Which program point the point editor entities of a group (time, enabled, the channel numbers) show and
 # edit, like the dots at the bottom of Kessil's own Quick Set screen. Options are "1" to the group's `slots`.
@@ -32,8 +35,17 @@ MODE_SCHEMA = (
     .extend(cv.COMPONENT_SCHEMA)
 )
 
+# Speed for effects, like the Kessil app's Fast / Moderate / Slow slider.
+EFFECT_SPEED_SCHEMA = (
+    select.select_schema(
+        KLinkEffectSpeedSelect, entity_category="config", icon="mdi:speedometer"
+    )
+    .extend({cv.Required(CONF_GROUP): cv.use_id(ProgramHost)})
+    .extend(cv.COMPONENT_SCHEMA)
+)
+
 CONFIG_SCHEMA = cv.typed_schema(
-    {"point": POINT_SCHEMA, "mode": MODE_SCHEMA},
+    {"point": POINT_SCHEMA, "mode": MODE_SCHEMA, "effect_speed": EFFECT_SPEED_SCHEMA},
     default_type="point",
 )
 
@@ -42,6 +54,11 @@ async def to_code(config):
     group = await cg.get_variable(config[CONF_GROUP])
     if config[CONF_TYPE] == "mode":
         var = await select.new_select(config, options=MODE_OPTIONS)
+        await cg.register_component(var, config)
+        cg.add(var.set_group(group))
+        return
+    if config[CONF_TYPE] == "effect_speed":
+        var = await select.new_select(config, options=EFFECT_SPEED_OPTIONS)
         await cg.register_component(var, config)
         cg.add(var.set_group(group))
         return

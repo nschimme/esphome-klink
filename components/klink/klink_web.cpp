@@ -1,6 +1,9 @@
 #include "klink_web.h"
 #ifdef USE_KLINK_WEB
 
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include "esphome/core/log.h"
@@ -47,7 +50,8 @@ static bool is_post_route(const char *path) {
          std::strcmp(path, "/klink/point") == 0 || std::strcmp(path, "/klink/preview") == 0 ||
          std::strcmp(path, "/klink/preview/done") == 0 || std::strcmp(path, "/klink/assign") == 0 ||
          std::strcmp(path, "/klink/name") == 0 || std::strcmp(path, "/klink/copy") == 0 ||
-         std::strcmp(path, "/klink/retry") == 0 || std::strcmp(path, "/klink/writes") == 0 || std::strcmp(path, "/klink/scan") == 0;
+         std::strcmp(path, "/klink/retry") == 0 || std::strcmp(path, "/klink/writes") == 0 || std::strcmp(path, "/klink/scan") == 0 ||
+         std::strcmp(path, "/klink/effect") == 0 || std::strcmp(path, "/klink/effect/stop") == 0;
 }
 
 // GET-only routes. A POST to one of these answers 405, matching how a GET on a POST route does.
@@ -157,6 +161,14 @@ void KLinkWeb::handleRequest(AsyncWebServerRequest *request) {
   if (request->method() == HTTP_POST) {
     if (std::strcmp(path, "/klink/mode") == 0) {
       this->handle_mode(request);
+      return;
+    }
+    if (std::strcmp(path, "/klink/effect") == 0) {
+      this->handle_effect(request);
+      return;
+    }
+    if (std::strcmp(path, "/klink/effect/stop") == 0) {
+      this->handle_effect_stop(request);
       return;
     }
     if (std::strcmp(path, "/klink/identify") == 0) {
@@ -329,6 +341,32 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
     append_quoted(out, mode_json_name(group->mode()));
     out += ",\"status\":";
     append_quoted(out, group->status_text());
+    // Effects are a temporary overlay: the names the light offers, the one running (if any) and the
+    // runtime Speed/Time settings, like the Kessil app.
+    out += ",\"effects\":[";
+    const std::vector<std::string> effect_names = group->effect_names();
+    for (size_t i = 0; i < effect_names.size(); i++) {
+      if (i)
+        out += ',';
+      append_quoted(out, effect_names[i]);
+    }
+    out += "],\"effect\":";
+    const std::string effect_label = group->effect_label();
+    if (effect_label.empty()) {
+      out += "null";
+    } else {
+      out += "{\"name\":";
+      append_quoted(out, effect_label);
+      out += ",\"remaining\":";
+      out += std::to_string(group->effect_remaining_seconds());
+      out += '}';
+    }
+    out += ",\"effect_speed\":";
+    out += std::to_string(group->effect_speed());
+    out += ",\"effect_minutes\":";
+    char minutes[16];
+    std::snprintf(minutes, sizeof(minutes), "%.1f", group->effect_duration_ms() / 60000.0f);
+    out += minutes;
     // Channel names and limits for the program editor; null marks a channel the model does not have.
     out += ",\"labels\":[";
     for (size_t c = 0; c < kk::NUM_CHANNELS; c++) {
@@ -429,6 +467,92 @@ void KLinkWeb::handle_mode(AsyncWebServerRequest *request) {
   // runs on the HTTP server's task, and state changes publish to the API and the event stream and
   // write bus frames, none of which is safe from another task.
   this->defer([group, mode]() { group->set_mode(mode); });
+  this->send_ok(request);
+}
+
+// "0".."5" in half-minute steps: the Kessil app's Time slider.
+static bool parse_effect_minutes(const std::string &text, uint32_t &duration_ms) {
+  if (text.empty())
+    return false;
+  char *end = nullptr;
+  const double value = std::strtod(text.c_str(), &end);
+  if (end == nullptr || *end != '\0' || value < 0.0 || value > 5.0)
+    return false;
+  const double halves = value * 2.0;
+  const double rounded = std::floor(halves + 0.5);
+  if (std::fabs(halves - rounded) > 1e-6)
+    return false;  // not a half-minute step
+  duration_ms = static_cast<uint32_t>(rounded) * 30000u;
+  return true;
+}
+
+static bool effect_speed_from_name(const std::string &text, uint8_t &speed) {
+  if (text == "fast") {
+    speed = 0;
+  } else if (text == "moderate") {
+    speed = 1;
+  } else if (text == "slow") {
+    speed = 2;
+  } else {
+    return false;
+  }
+  return true;
+}
+
+// Start an effect as a temporary overlay on the schedule; the group's mode does not change.
+void KLinkWeb::handle_effect(AsyncWebServerRequest *request) {
+  uint32_t gid;
+  if (!this->read_program_gid(request, "gid", gid))
+    return;
+  ProgramHost *group = this->find_group(gid);
+  if (group == nullptr) {
+    send_error(request, 404, "unknown group");
+    return;
+  }
+  if (!request->hasArg("name")) {
+    send_error(request, 400, "missing parameter: name");
+    return;
+  }
+  const std::string name = arg_string(request, "name");
+  bool known = false;
+  for (const auto &candidate : group->effect_names())
+    if (candidate == name)
+      known = true;
+  if (!known) {
+    send_error(request, 404, "unknown effect");
+    return;
+  }
+  uint8_t speed = group->effect_speed();
+  if (request->hasArg("speed")) {
+    if (!effect_speed_from_name(arg_string(request, "speed"), speed)) {
+      send_error(request, 400, "invalid parameter: speed");
+      return;
+    }
+  }
+  uint32_t duration_ms = group->effect_duration_ms();
+  if (request->hasArg("minutes")) {
+    if (!parse_effect_minutes(arg_string(request, "minutes"), duration_ms)) {
+      send_error(request, 400, "invalid parameter: minutes");
+      return;
+    }
+  }
+  this->defer([group, name, speed, duration_ms]() {
+    group->set_effect_options(speed, duration_ms);
+    group->start_effect(name);
+  });
+  this->send_ok(request);
+}
+
+void KLinkWeb::handle_effect_stop(AsyncWebServerRequest *request) {
+  uint32_t gid;
+  if (!this->read_program_gid(request, "gid", gid))
+    return;
+  ProgramHost *group = this->find_group(gid);
+  if (group == nullptr) {
+    send_error(request, 404, "unknown group");
+    return;
+  }
+  this->defer([group]() { group->stop_effect(); });
   this->send_ok(request);
 }
 

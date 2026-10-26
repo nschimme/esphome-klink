@@ -289,17 +289,35 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   }
   // The brightness (UI1) and color (UI2) the light's current state asks for.
   void manual_levels(light::LightState *state, uint8_t &level, uint8_t &color);
-  // One frame of an effect. Holds the schedule back, like a manual command.
-  void send_effect_frame(const uint8_t channels[5]) {
-    this->on_user_command_();
-    this->send_(channels);
+  // One frame of an effect. Effects are a temporary overlay on the schedule: this does not take
+  // manual control, and while one runs ProgramBase::update() stays out of the way.
+  void send_effect_frame(const uint8_t channels[5]) { this->send_(channels); }
+  // Record how long the running effect lasts (0 = until stopped), for the status line.
+  void note_effect_started(uint32_t duration_ms) {
+    this->effect_end_ms_ = duration_ms == 0 ? 0 : millis() + duration_ms;
   }
+  // Called by an effect's stop(): resume whatever the group was doing before the effect began.
+  void effect_ended_();
+
+  // ProgramHost effect interface (called from the main loop, through defer).
+  std::vector<std::string> effect_names() const override;
+  bool start_effect(const std::string &name) override;
+  void stop_effect() override;
+  int32_t effect_remaining_seconds() const override;
+  std::string effect_label() const override;
+  uint8_t effect_speed() const override { return this->effect_speed_; }
+  uint32_t effect_duration_ms() const override { return this->effect_duration_ms_; }
+  void set_effect_options(uint8_t speed, uint32_t duration_ms) override;
 
  protected:
   void output_(const uint8_t channels[5]) override;
   bool repeat_held_value_() const override { return true; }
   bool effect_active() const override { return this->state_ != nullptr && this->state_->get_current_effect_index() != 0; }
-  std::string effect_name() const override { return std::string(this->state_->get_effect_name()); }
+  std::string effect_name() const override {
+    if (this->state_ == nullptr)
+      return "None";
+    return std::string(this->state_->get_effect_name());
+  }
   uint32_t preference_key() const override {
     return fnv1_hash("klink_mode_" + std::to_string(this->gid_));
   }
@@ -314,6 +332,21 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   GroupModel model_{GroupModel::TUNA_SUN};
   light::LightState *state_{nullptr};  // the light, remembered from write_state
   bool ignored_initial_{false};
+  // Runtime effect settings, persisted with preferences; the Kessil app's Speed and Time sliders.
+  uint8_t effect_speed_{0};           // 0 fast, 1 moderate, 2 slow
+  uint32_t effect_duration_ms_{120000};  // 0 = until stopped
+  ESPPreferenceObject effect_speed_pref_;
+  ESPPreferenceObject effect_duration_pref_;
+  // millis() when the running effect ends, 0 while it runs until stopped.
+  uint32_t effect_end_ms_{0};
+  // The light call that stops an effect repeats the values the light already has. In PROGRAM and
+  // Off that must not look like a user command, so the next write_state() compares against what
+  // was last shown on the light.
+  bool effect_ended_pending_{false};
+  bool ended_have_published_{false};
+  bool ended_on_{false};
+  float ended_brightness_{0.0f};
+  float ended_mireds_{0.0f};
   // Program/Off output shown on the light entity, so Home Assistant sees the group as on and at the
   // level the schedule sets (an off-looking light hides its controls and effects in Home Assistant).
   void publish_to_light_(const uint8_t channels[5]);
@@ -361,6 +394,35 @@ class KLinkModeSelect : public select::Select, public Component {
   ProgramHost *group_{nullptr};
 };
 
+// Speed for the running/next effect: 0 Fast, 1 Moderate, 2 Slow (like the Kessil app's slider).
+class KLinkEffectSpeedSelect : public select::Select, public Component {
+ public:
+  void set_group(ProgramHost *group) { group_ = group; }
+  void setup() override;
+  void dump_config() override;
+  // After the group, so the values it restored from flash are what the entity first shows.
+  float get_setup_priority() const override { return setup_priority::DATA - 1.0f; }
+
+ protected:
+  void control(size_t index) override {
+    this->group_->set_effect_options(static_cast<uint8_t>(index > 2 ? 2 : index), this->group_->effect_duration_ms());
+  }
+  ProgramHost *group_{nullptr};
+};
+
+// How long an effect runs, in minutes (0 = until stopped), like the Kessil app's Time slider.
+class KLinkEffectDurationNumber : public number::Number, public Component {
+ public:
+  void set_group(ProgramHost *group) { group_ = group; }
+  void setup() override;
+  void dump_config() override;
+  float get_setup_priority() const override { return setup_priority::DATA - 1.0f; }
+
+ protected:
+  void control(float value) override;
+  ProgramHost *group_{nullptr};
+};
+
 // Which program point the editor entities show and edit.
 class KLinkPointSelect : public select::Select, public Component {
  public:
@@ -403,9 +465,11 @@ class KLinkEffect : public light::LightEffect {
 
   void start() override;
   void apply() override;
+  // Called when the effect ends for any reason: lets the group resume what it was doing.
+  void stop() override;
 
  protected:
-  void finish_(bool turn_off);
+  void finish_();
 
   FxKind kind_{FxKind::PULSE};
   uint8_t variant_{0};

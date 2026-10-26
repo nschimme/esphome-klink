@@ -9,6 +9,8 @@
 
 #include "esphome/core/log.h"
 
+#include "klink_effects.h"
+
 namespace esphome {
 namespace klink {
 
@@ -174,6 +176,8 @@ void ProgramBase::end_preview() {
 }
 
 void ProgramBase::preview_point(size_t slot) {
+  if (this->effect_active())
+    return;  // an effect owns the output; previews must not fight it
   if (slot >= this->slots_.size())
     return;
   const kk::SchedulePoint &p = this->slots_[slot];
@@ -194,6 +198,8 @@ void ProgramBase::preview_point(size_t slot) {
 }
 
 void ProgramBase::preview_minute(uint16_t minute_of_day) {
+  if (this->effect_active())
+    return;  // an effect owns the output; previews must not fight it
   uint8_t channels[5];
   if (!kk::schedule_compute(this->slots_, static_cast<uint32_t>(minute_of_day) * 60u, channels))
     return;  // nothing enabled
@@ -210,8 +216,17 @@ void ProgramBase::preview_minute(uint16_t minute_of_day) {
 }
 
 std::string ProgramBase::status_text() {
-  if (this->effect_active())
-    return "Effect: " + this->effect_name();
+  if (this->effect_active()) {
+    std::string label = this->effect_label();
+    if (label.empty())
+      label = this->effect_name();
+    int32_t remaining = this->effect_remaining_seconds();
+    if (remaining < 0)
+      return "Effect: " + label;  // runs until stopped
+    if (remaining == 0)
+      return "Effect: " + label;  // about to end
+    return "Effect: " + label + " · " + kessil::klink::format_remaining(remaining) + " left";
+  }
   switch (this->mode_.mode) {
     case kk::Mode::PROGRAM: {
       if (this->time_ == nullptr)
@@ -276,6 +291,9 @@ bool ProgramBase::compute_now(uint8_t out[5]) {
 }
 
 void ProgramBase::update() {
+  // An effect is a temporary overlay: while one runs it is the only thing writing to the lamps.
+  if (this->effect_active())
+    return;
   switch (this->mode_.mode) {
     case kk::Mode::PROGRAM: {
       if (this->time_ == nullptr)

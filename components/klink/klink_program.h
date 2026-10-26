@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "klink_mode.h"
 #include "klink_schedule.h"
@@ -52,6 +53,19 @@ class ProgramHost {
   virtual void set_extra(uint8_t channel, uint8_t value) = 0;
   virtual uint8_t extra(uint8_t channel) const = 0;
   virtual void set_extra_silent(uint8_t channel, uint8_t value) = 0;
+
+  // Effects as a temporary overlay on the schedule. Hosts without effects keep these defaults.
+  // The light's effect names, without "None".
+  virtual std::vector<std::string> effect_names() const { return {}; }
+  virtual bool start_effect(const std::string &name) { return false; }
+  virtual void stop_effect() {}
+  // Seconds left, 0 when no effect is running, -1 when it runs until stopped.
+  virtual int32_t effect_remaining_seconds() const { return 0; }
+  // Name of the running effect, empty when none is running.
+  virtual std::string effect_label() const { return ""; }
+  virtual uint8_t effect_speed() const { return 0; }  // 0 fast, 1 moderate, 2 slow
+  virtual uint32_t effect_duration_ms() const { return 120000; }
+  virtual void set_effect_options(uint8_t speed, uint32_t duration_ms) {}
 };
 
 }  // namespace klink
