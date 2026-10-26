@@ -6,8 +6,8 @@
 # also controls the LED while "Send to lights" is off (dry run).
 #
 # This example uses local includes so it can be validated from a checkout (tools/ci_prepare.py
-# rewrites only the remote_package examples). Flash it, or copy the `klink: programs:` block and the
-# entities into your own config.
+# rewrites only the remote_package examples). Flash it, or copy the `led_program` package below into
+# your own config: common/program-light-rgb.yaml is the whole program, entities included.
 substitutions:
   name: klink-light-program
   friendly_name: Board
@@ -24,52 +24,9 @@ packages:
   # The on-board WS2812, defined with `id: board_led` so this program can reference it. It stays a
   # normal, user-visible light.
   rgb: !include ../common/rgb-led.yaml
-
-klink:
-  programs:
-    # `model` fixes the channel layout at config time: int (UI1), r/g/b (UI3-UI5). `lights` may list
-    # several ESPHome lights of the same shape.
-    - id: led_program
-      name: "Board LED"
-      model: rgb
-      lights: [board_led]
-      time_id: local_time
-
-# The daily program: "HH:MM int=0-255 r=0-100 g=0-100 b=0-100" per point (any subset of channels,
-# the rest 0), or "off". A gentle day: dim warm mornings, a little daylight, a soft evening.
-text:
-  - { platform: klink, group: led_program, slot: 1, name: "Board LED point 1", initial_value: "08:00 int=0 r=0 g=0 b=0", web_server: { sorting_group_id: program } }
-  - { platform: klink, group: led_program, slot: 2, name: "Board LED point 2", initial_value: "09:00 int=60 r=100 g=70 b=20", web_server: { sorting_group_id: program } }
-  - { platform: klink, group: led_program, slot: 3, name: "Board LED point 3", initial_value: "12:00 int=120 r=90 g=100 b=60", web_server: { sorting_group_id: program } }
-  - { platform: klink, group: led_program, slot: 4, name: "Board LED point 4", initial_value: "15:00 int=150 r=70 g=90 b=100", web_server: { sorting_group_id: program } }
-  - { platform: klink, group: led_program, slot: 5, name: "Board LED point 5", initial_value: "18:00 int=120 r=100 g=60 b=40", web_server: { sorting_group_id: program } }
-  - { platform: klink, group: led_program, slot: 6, name: "Board LED point 6", initial_value: "20:00 int=60 r=80 g=30 b=60", web_server: { sorting_group_id: program } }
-  - { platform: klink, group: led_program, slot: 7, name: "Board LED point 7", initial_value: "22:00 int=0 r=0 g=0 b=0", web_server: { sorting_group_id: program } }
-  - { platform: klink, group: led_program, slot: 8, name: "Board LED point 8", initial_value: "off", web_server: { sorting_group_id: program } }
-
-# Program editor: pick a point, then edit its time and values. Edits apply at once and are saved a
-# couple of seconds after the last change; editing a point turns it on.
-select:
-  - { platform: klink, group: led_program, type: mode, name: "Board LED mode", web_server: { sorting_group_id: controls } }
-  - { platform: klink, group: led_program, name: "Board LED program point", web_server: { sorting_group_id: program } }
-
-text_sensor:
-  - { platform: klink, group: led_program, type: status, name: "Board LED status", web_server: { sorting_group_id: controls } }
-
-datetime:
-  - { platform: klink, group: led_program, type: time, name: "Board LED point time", web_server: { sorting_group_id: program } }
-
-# The RGB model's channels: int (UI1), r/g/b (UI3-UI5). UI2 has no label for this model, so it is
-# not editable here.
-number:
-  - { platform: klink, group: led_program, point_channel: 1, name: "Board LED point INT (0-255)", entity_category: config, web_server: { sorting_group_id: program } }
-  - { platform: klink, group: led_program, point_channel: 3, name: "Board LED point R (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
-  - { platform: klink, group: led_program, point_channel: 4, name: "Board LED point G (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
-  - { platform: klink, group: led_program, point_channel: 5, name: "Board LED point B (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
-
-switch:
-  - platform: klink            # the selected point on or off
-    type: point_enabled
-    group: led_program
-    name: "Board LED point enabled"
-    web_server: { sorting_group_id: program }
+  # One program on that LED: `id` names it (and is used as every `group:` reference), `name` is the
+  # prefix of every entity, `lights` is the list of ESPHome lights it drives. The template also
+  # writes the `klink: programs:` entry: model rgb, time_id local_time, 5s update interval.
+  led_program: !include
+    file: ../common/program-light-rgb.yaml
+    vars: {id: led_program, name: "Board LED", lights: [board_led]}

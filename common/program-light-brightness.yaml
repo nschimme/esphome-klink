@@ -1,0 +1,75 @@
+# One daily program that drives ordinary ESPHome lights over no K-Link bus at all, with the same
+# entities as a bus group: the 8 point texts, the point editor, the Mode select and the Status
+# sensor. Include it once per program instead of copying the entity list and the `klink: programs:`
+# entry.
+#
+# Package vars:
+#   id               the yaml/C++ id of the program, also used as every `group:` reference
+#   name             the display name prefix of every entity, e.g. "Desk light"
+#   lights           a YAML LIST of the ESPHome light ids this program drives, e.g. [desk_light].
+#                    Keep it unquoted: a quoted "[desk_light]" would be a string, not a list.
+#   update_interval  optional, how often an unchanged value is re-asserted (same default as the
+#                    schema, 5s)
+#
+# Example (any plain dimmable light in your config, here `desk_light`):
+#   packages:
+#     desk: !include
+#       file: common/program-light-brightness.yaml
+#       vars: {id: desk_program, name: "Desk light", lights: [desk_light]}
+#
+# This file fixes the model to brightness: int (UI1) only, exactly the channels of a plain
+# dimmable light. All lights of one program should have the same shape; use one program per group
+# of lights, or several programs (ids must be unique).
+#
+# Entity names and ids are built from `name` and `id`: renaming a program changes stored values and
+# Home Assistant entity ids, so keep them stable for an existing program.
+#
+# No K-Link bus is needed for the program itself, but this file still expects the `klink:` hub from
+# common/base.yaml (the entities attach to it) and the `local_time` clock that file defines.
+substitutions:
+  update_interval: 5s
+
+klink:
+  programs:
+    - id: ${id}
+      name: "${name}"
+      model: brightness
+      lights: ${lights}
+      time_id: local_time
+      update_interval: ${update_interval}
+
+# The daily program: "HH:MM int=0-255" per point, or "off". A gentle day: dark at night, a little
+# light in the morning and evening, full brightness around midday. These are starting values; edits
+# made in Home Assistant are kept in flash and take precedence.
+text:
+  - { platform: klink, group: "${id}", slot: 1, name: "${name} point 1", initial_value: "08:00 int=0", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 2, name: "${name} point 2", initial_value: "09:00 int=40", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 3, name: "${name} point 3", initial_value: "11:00 int=100", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 4, name: "${name} point 4", initial_value: "14:00 int=130", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 5, name: "${name} point 5", initial_value: "17:00 int=100", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 6, name: "${name} point 6", initial_value: "19:00 int=40", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 7, name: "${name} point 7", initial_value: "20:30 int=0", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 8, name: "${name} point 8", initial_value: "off", web_server: { sorting_group_id: program } }
+
+# Program editor: pick a point, then edit its time and values. Edits apply at once and are saved a
+# couple of seconds after the last change; editing a point turns it on.
+select:
+  - { platform: klink, group: "${id}", type: mode, name: "${name} mode", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", name: "${name} program point", web_server: { sorting_group_id: program } }
+
+text_sensor:
+  - { platform: klink, group: "${id}", type: status, name: "${name} status", web_server: { sorting_group_id: controls } }
+
+datetime:
+  - { platform: klink, group: "${id}", type: time, name: "${name} point time", web_server: { sorting_group_id: program } }
+
+number:
+  # The brightness model's only channel: int (UI1), 0-255.
+  - { platform: klink, group: "${id}", point_channel: 1, name: "${name} point INT (0-255)", entity_category: config, web_server: { sorting_group_id: program } }
+
+switch:
+  - platform: klink            # the selected point on or off
+    type: point_enabled
+    group: "${id}"
+    name: "${name} point enabled"
+    web_server: { sorting_group_id: program }

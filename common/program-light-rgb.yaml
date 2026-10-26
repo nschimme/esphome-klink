@@ -1,0 +1,80 @@
+# One daily program that drives ordinary ESPHome lights over no K-Link bus at all, with the same
+# entities as a bus group: the 8 point texts, the point editor, the Mode select and the Status
+# sensor. Include it once per program instead of copying the entity list and the `klink: programs:`
+# entry.
+#
+# Package vars:
+#   id               the yaml/C++ id of the program, also used as every `group:` reference
+#   name             the display name prefix of every entity, e.g. "Board LED"
+#   lights           a YAML LIST of the ESPHome light ids this program drives, e.g. [board_led].
+#                    Keep it unquoted: a quoted "[board_led]" would be a string, not a list.
+#   update_interval  optional, how often an unchanged value is re-asserted (same default as the
+#                    schema, 5s)
+#
+# Example (the board LED, driving the on-board WS2812 from common/rgb-led.yaml):
+#   packages:
+#     led: !include
+#       file: common/program-light-rgb.yaml
+#       vars: {id: led_program, name: "Board LED", lights: [board_led]}
+#
+# This file fixes the model to rgb: int (UI1), r/g/b (UI3-UI5), exactly the channels of a light
+# with brightness and RGB but no white channel. A light that cannot do one of them simply ignores
+# that channel. All lights of one program should have the same shape; use one program per group of
+# lights, or several programs (ids must be unique).
+#
+# Entity names and ids are built from `name` and `id`: renaming a program changes stored values and
+# Home Assistant entity ids, so keep them stable for an existing program.
+#
+# No K-Link bus is needed for the program itself, but this file still expects the `klink:` hub from
+# common/base.yaml (the entities attach to it) and the `local_time` clock that file defines.
+substitutions:
+  update_interval: 5s
+
+klink:
+  programs:
+    - id: ${id}
+      name: "${name}"
+      model: rgb
+      lights: ${lights}
+      time_id: local_time
+      update_interval: ${update_interval}
+
+# The daily program: "HH:MM int=0-255 r=0-100 g=0-100 b=0-100" per point (any subset of channels,
+# the rest 0), or "off". A gentle day: dim warm mornings, a little daylight, a soft evening. These
+# are starting values; edits made in Home Assistant are kept in flash and take precedence.
+text:
+  - { platform: klink, group: "${id}", slot: 1, name: "${name} point 1", initial_value: "08:00 int=0 r=0 g=0 b=0", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 2, name: "${name} point 2", initial_value: "09:00 int=60 r=100 g=70 b=20", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 3, name: "${name} point 3", initial_value: "12:00 int=120 r=90 g=100 b=60", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 4, name: "${name} point 4", initial_value: "15:00 int=150 r=70 g=90 b=100", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 5, name: "${name} point 5", initial_value: "18:00 int=120 r=100 g=60 b=40", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 6, name: "${name} point 6", initial_value: "20:00 int=60 r=80 g=30 b=60", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 7, name: "${name} point 7", initial_value: "22:00 int=0 r=0 g=0 b=0", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 8, name: "${name} point 8", initial_value: "off", web_server: { sorting_group_id: program } }
+
+# Program editor: pick a point, then edit its time and values. Edits apply at once and are saved a
+# couple of seconds after the last change; editing a point turns it on.
+select:
+  - { platform: klink, group: "${id}", type: mode, name: "${name} mode", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", name: "${name} program point", web_server: { sorting_group_id: program } }
+
+text_sensor:
+  - { platform: klink, group: "${id}", type: status, name: "${name} status", web_server: { sorting_group_id: controls } }
+
+datetime:
+  - { platform: klink, group: "${id}", type: time, name: "${name} point time", web_server: { sorting_group_id: program } }
+
+number:
+  # The RGB model's channels: int (UI1), r/g/b (UI3-UI5). UI2 has no label for this model, so it is
+  # not editable here.
+  - { platform: klink, group: "${id}", point_channel: 1, name: "${name} point INT (0-255)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", point_channel: 3, name: "${name} point R (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", point_channel: 4, name: "${name} point G (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", point_channel: 5, name: "${name} point B (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+
+switch:
+  - platform: klink            # the selected point on or off
+    type: point_enabled
+    group: "${id}"
+    name: "${name} point enabled"
+    web_server: { sorting_group_id: program }

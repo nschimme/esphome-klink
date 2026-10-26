@@ -3,7 +3,8 @@
 An [ESPHome](https://esphome.io) custom component that connects **Kessil X-Series aquarium lights** to
 **Home Assistant**, using a cheap USB-C ESP32 board and a USB-C cable. It controls the lamps' intensity,
 color, and extra channels, and runs an editable 8-point daily program. You can use it from Home
-Assistant or from the esphome-klink web page the board serves itself, which also works offline.
+Assistant or from the esphome-klink web page the board serves itself, which also works offline. The
+same daily program can also run on ordinary ESPHome lights, with no K-Link bus at all.
 
 > ## Disclaimer
 >
@@ -25,6 +26,7 @@ Assistant or from the esphome-klink web page the board serves itself, which also
 | **Kessil A360X Tuna Sun** | **Tested.** Two fixtures in one group, controlled from an ESP32-C6: intensity, color, red, amber, finding lamps, the daily program. |
 | Program point editor, effects (Pulse, Color sweep, Sunrise, Sunset) | Built and flashed; **not yet verified end to end** against a lamp. |
 | Group **Mode** (Program / Manual / Off), status text and live preview | Compiles in CI; **new and not yet tested on lamps**. |
+| **Light programs** on ordinary ESPHome lights (no K-Link bus) | Compiles in CI; **new and not yet tested on hardware**. |
 | **esphome-klink web page** at `/klink` and the ESPHome device page | Compiles in CI; **new and not yet tested on a device or on lamps**. The page can also be run against a mock device, see [Contributing / development](#contributing--development). |
 | **Kessil A360XE Tuna Blue** | **Untested.** Included with Kessil's layout for the A360XE: Tuna Blue plus red, green and purple (violet + indigo). The channel order matches Kessil's controller screen (VI, R, G), but the mapping to the lamp's hardware has not been confirmed on a lamp. |
 | ESP32-C6 (USB-C) | **Tested.** |
@@ -336,6 +338,98 @@ controller screen (VI, R, G); how those channels map to the lamp itself is still
 
 The same controls and a visual program editor are on the [web pages](#web-pages).
 
+## Use the program on any ESPHome light
+
+A **light program** applies the same daily program to ordinary ESPHome lights instead of K-Link
+lamps: the eight points, the point editor, **Mode** (Program / Manual / Off), the **Status** text
+sensor, live preview and the curve editor on the web page all work as they do for a lamp group. It
+needs **no K-Link bus**: it drives the lights directly through ESPHome, so it also works while
+**Send to lights** is off (the dry run only affects bus frames), and it is not gated by it.
+
+Several lights can form one program. They all receive the same values, exactly like lamps in one
+group. A light that cannot do one of the program's channels simply ignores that channel; the other
+lights still get it. Give each program a model that matches the lights (see the channel table
+below), and use one model per program.
+
+The channel labels and values follow the light type:
+
+| Model | Channels (UI1-UI5) | Editable point numbers |
+|---|---|---|
+| `brightness` | int | INT (0-255) |
+| `ct` | int, ct | INT (0-255), CT (0-255) |
+| `rgb` | int, r, g, b | INT (0-255), R / G / B (0-100) |
+| `rgbw` | int, w, r, g, b | INT (0-255), W (0-255), R / G / B (0-100) |
+
+On `ct`, CT 0 is the warm end and 255 the cold end. The colours are percentages. A point text is
+`HH:MM int=… r=… g=… b=…` with any subset of the model's channels (the rest 0), or `off`.
+
+**Manual detection.** Changing a light from outside the program, in Home Assistant, another
+automation or its own switch, switches the program to **Manual**: the program stops writing and the
+light keeps what you set. Choosing **Program** in the Mode select hands control back and re-applies
+the program at the current time. Choosing **Off** turns the lights off.
+
+### The program entry
+
+Each program is one entry in `klink: programs:`:
+
+```yaml
+klink:
+  programs:
+    - id: desk_program          # yaml/C++ id, used as `group:` on the entities
+      name: "Desk light"        # display name prefix
+      model: brightness         # brightness | ct | rgb | rgbw
+      lights: [desk_light]      # one or more ESPHome light ids, driven together
+      time_id: local_time       # the clock from common/base.yaml
+      # slots: 8                # program points, default 8
+      # update_interval: 5s     # re-assert an unchanged value this often, 0 disables it
+      # transition: 5s          # fade between points, defaults to update_interval
+```
+
+Constraints: up to **64 programs**; they take the internal ids **101-164**, above the bus group ids.
+A program has one model, so all its lights should offer that model's channels. Program ids must be
+unique.
+
+### Ready-made templates
+
+Instead of writing that block and about twenty entity entries, include one template per program.
+Each file contains the whole program: the `klink: programs:` entry **and** the point texts, point
+editor, mode select and status sensor. The package vars are:
+
+| Var | Meaning |
+|---|---|
+| `id` | the yaml/C++ id of the program, also used in every entity id |
+| `name` | the display name prefix of every entity, e.g. `"Desk light"` |
+| `lights` | a **YAML list** of the ESPHome light ids, e.g. `[desk_light]`. Keep it unquoted: a quoted `"[desk_light]"` is a string, not a list. |
+| `update_interval` | optional, the refresh interval (default `5s`). A substitution of this name in your own config overrides it, so pass this var explicitly if you already use `update_interval`. |
+
+| Template | Model |
+|---|---|
+| `common/program-light-brightness.yaml` | `brightness` |
+| `common/program-light-ct.yaml` | `ct` |
+| `common/program-light-rgb.yaml` | `rgb` |
+| `common/program-light-rgbw.yaml` | `rgbw` |
+
+For example, a plain dimmable light and a tunable-white light, each with its own program:
+
+```yaml
+packages:
+  desk: !include
+    file: common/program-light-brightness.yaml
+    vars: {id: desk_program, name: "Desk light", lights: [desk_light]}
+  ceiling: !include
+    file: common/program-light-ct.yaml
+    vars: {id: ceiling_program, name: "Ceiling", lights: [ceiling, ceiling_2]}
+```
+
+Two includes of the same template work too (two program instances), as long as the `id` and the
+`name` differ. Entity names and ids are built from them, so renaming a program changes Home
+Assistant entity ids and stored values; keep them stable for an existing program.
+
+`examples/light-program.yaml` is a complete, validated config: it runs an `rgb` program on the
+board's own WS2812 (from `common/rgb-led.yaml`), with no lamp attached.
+
+The templates are new and have **not been tested on hardware** yet.
+
 ## Configuration
 
 Substitutions you can set in your own config:
@@ -353,6 +447,10 @@ templates `common/group-tuna-sun.yaml` and `common/group-tuna-blue.yaml`. Includ
 with the package vars `id`, `name` and `gid` to add another group (see
 [Several groups on one board](#several-groups-on-one-board)); custom groups use K-Link group ids
 3-25 and a group cannot mix lamp types.
+
+The templates `common/program-light-brightness.yaml`, `program-light-ct.yaml`, `program-light-rgb.yaml`
+and `program-light-rgbw.yaml` do the same for light programs on ordinary ESPHome lights; see
+[Use the program on any ESPHome light](#use-the-program-on-any-esphome-light).
 
 Options under `klink:`:
 
