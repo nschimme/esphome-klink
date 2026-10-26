@@ -5,7 +5,7 @@ from esphome.const import CONF_TYPE
 from esphome.core import CORE
 
 from . import klink_ns
-from .light import KLinkGroup
+from .light import ProgramHost
 
 DEPENDENCIES = ["klink"]
 
@@ -21,14 +21,14 @@ MODE_OPTIONS = ["Program", "Manual", "Off"]
 # edit, like the dots at the bottom of Kessil's own Quick Set screen. Options are "1" to the group's `slots`.
 POINT_SCHEMA = (
     select.select_schema(KLinkPointSelect, entity_category="config", icon="mdi:chart-timeline-variant")
-    .extend({cv.Required(CONF_GROUP): cv.use_id(KLinkGroup)})
+    .extend({cv.Required(CONF_GROUP): cv.use_id(ProgramHost)})
     .extend(cv.COMPONENT_SCHEMA)
 )
 
 # The group's operating mode: Program (runs the daily program), Manual (holds what you set) or Off.
 MODE_SCHEMA = (
     select.select_schema(KLinkModeSelect, icon="mdi:state-machine")
-    .extend({cv.Required(CONF_GROUP): cv.use_id(KLinkGroup)})
+    .extend({cv.Required(CONF_GROUP): cv.use_id(ProgramHost)})
     .extend(cv.COMPONENT_SCHEMA)
 )
 

@@ -4,7 +4,7 @@ from esphome.components import text
 from esphome.const import CONF_INITIAL_VALUE
 
 from . import klink_ns
-from .light import KLinkGroup
+from .light import ProgramHost
 
 DEPENDENCIES = ["klink"]
 
@@ -18,7 +18,7 @@ CONFIG_SCHEMA = (
     .extend(
         {
             # `output_id` of the klink light this slot belongs to.
-            cv.Required(CONF_GROUP): cv.use_id(KLinkGroup),
+            cv.Required(CONF_GROUP): cv.use_id(ProgramHost),
             cv.Required(CONF_SLOT): cv.int_range(1, 16),
             cv.Optional(CONF_INITIAL_VALUE, default="off"): cv.string,
         }

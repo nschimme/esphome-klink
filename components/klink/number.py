@@ -3,7 +3,7 @@ import esphome.config_validation as cv
 from esphome.components import number
 
 from . import klink_ns
-from .light import KLinkGroup
+from .light import ProgramHost
 
 DEPENDENCIES = ["klink"]
 
@@ -27,7 +27,7 @@ CONFIG_SCHEMA = cv.All(
     number.number_schema(KLinkChannelNumber, unit_of_measurement="%", icon="mdi:palette")
     .extend(
         {
-            cv.Required(CONF_GROUP): cv.use_id(KLinkGroup),
+            cv.Required(CONF_GROUP): cv.use_id(ProgramHost),
             # 2 is only meaningful for models without a color temperature (0-255); 3-5 are 0-100%
             cv.Optional(CONF_CHANNEL): cv.int_range(2, 5),
             # Point editor: instead of a manual level, edit this channel (1-5 = UI1-UI5) of the program

@@ -489,6 +489,7 @@ bool KLinkHub::identify_gid(uint8_t gid) {
 
 void KLinkGroup::setup() {
   this->hub_->register_group(this);
+  this->hub_->register_program(this);
   this->mode_pref_ =
       global_preferences->make_preference<uint8_t>(fnv1_hash("klink_mode_" + std::to_string(this->gid_)));
   uint8_t stored_mode = static_cast<uint8_t>(kk::Mode::PROGRAM);
@@ -657,11 +658,12 @@ bool KLinkGroup::set_slot_from_values(size_t index, uint16_t minute,
   return true;
 }
 
-bool KLinkGroup::copy_program_from(const KLinkGroup &other) {
-  if (this->model_ != other.model_ || this->slots_.size() != other.slots_.size())
+bool KLinkGroup::copy_program_from(const ProgramHost &other) {
+  if (std::strcmp(this->model_name().c_str(), other.model_name().c_str()) != 0 ||
+      this->slots_.size() != other.num_slots())
     return false;
   for (size_t i = 0; i < this->slots_.size(); i++) {
-    this->slots_[i] = other.slots_[i];
+    this->slots_[i] = other.point(i);
     this->slot_changed_(i);
   }
   return true;

@@ -4,7 +4,7 @@ from esphome.components import text_sensor
 from esphome.const import CONF_TYPE
 
 from . import CONF_KLINK_ID, KLinkHub, klink_ns
-from .light import KLinkGroup
+from .light import ProgramHost
 
 DEPENDENCIES = ["klink"]
 
@@ -25,7 +25,7 @@ HUB_SCHEMA = (
 # or the active effect.
 STATUS_SCHEMA = (
     text_sensor.text_sensor_schema(KLinkGroupStatus)
-    .extend({cv.Required(CONF_GROUP): cv.use_id(KLinkGroup)})
+    .extend({cv.Required(CONF_GROUP): cv.use_id(ProgramHost)})
     .extend(cv.polling_component_schema("1s"))
 )
 

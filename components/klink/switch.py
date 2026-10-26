@@ -4,7 +4,7 @@ from esphome.components import switch
 from esphome.const import CONF_TYPE
 
 from . import CONF_KLINK_ID, KLinkHub, klink_ns
-from .light import KLinkGroup
+from .light import ProgramHost
 
 DEPENDENCIES = ["klink"]
 
@@ -35,7 +35,7 @@ CONFIG_SCHEMA = cv.All(
         {
             cv.GenerateID(CONF_KLINK_ID): cv.use_id(KLinkHub),
             cv.Required(CONF_TYPE): cv.one_of(*KINDS, lower=True),
-            cv.Optional(CONF_GROUP): cv.use_id(KLinkGroup),
+            cv.Optional(CONF_GROUP): cv.use_id(ProgramHost),
         }
     )
     .extend(cv.COMPONENT_SCHEMA),

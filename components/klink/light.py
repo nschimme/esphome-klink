@@ -29,7 +29,8 @@ CONF_REFRESH_INTERVAL = "refresh_interval"
 CONF_INVERT_COLOR = "invert_color"
 CONF_MODEL = "model"
 
-KLinkGroup = klink_ns.class_("KLinkGroup", light.LightOutput, cg.Component)
+ProgramHost = klink_ns.class_("ProgramHost")
+KLinkGroup = klink_ns.class_("KLinkGroup", ProgramHost, light.LightOutput, cg.Component)
 KLinkEffect = klink_ns.class_("KLinkEffect", LightEffect)
 FxKind = klink_ns.enum("FxKind", is_class=True)
 GroupModel = klink_ns.enum("GroupModel", is_class=True)

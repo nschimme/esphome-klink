@@ -205,10 +205,10 @@ void KLinkWeb::handle_index(AsyncWebServerRequest *request) {
   request->send(response);
 }
 
-KLinkGroup *KLinkWeb::find_group(uint32_t gid) {
+ProgramHost *KLinkWeb::find_group(uint32_t gid) {
   if (this->hub_ == nullptr)
     return nullptr;
-  for (auto *group : this->hub_->groups())
+  for (auto *group : this->hub_->programs())
     if (group->gid() == gid)
       return group;
   return nullptr;
@@ -256,13 +256,15 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
   out.reserve(512);
   out += "{\"groups\":[";
   bool first_group = true;
-  for (auto *group : this->hub_->groups()) {
+  for (auto *group : this->hub_->programs()) {
     if (!first_group)
       out += ',';
     first_group = false;
 
     out += "{\"gid\":";
     out += std::to_string(group->gid());
+    out += ",\"kind\":";
+    append_quoted(out, group->kind());
     out += ",\"name\":";
     append_quoted(out, group->name());
     out += ",\"model\":";
@@ -356,7 +358,7 @@ void KLinkWeb::handle_mode(AsyncWebServerRequest *request) {
     send_error(request, 400, "gid must be 1-40");
     return;
   }
-  KLinkGroup *group = this->find_group(gid);
+  ProgramHost *group = this->find_group(gid);
   if (group == nullptr) {
     send_error(request, 404, "unknown group");
     return;
@@ -405,7 +407,7 @@ void KLinkWeb::handle_point(AsyncWebServerRequest *request) {
     send_error(request, 400, "gid must be 1-40");
     return;
   }
-  KLinkGroup *group = this->find_group(gid);
+  ProgramHost *group = this->find_group(gid);
   if (group == nullptr) {
     send_error(request, 404, "unknown group");
     return;
@@ -489,7 +491,7 @@ void KLinkWeb::handle_preview(AsyncWebServerRequest *request) {
     send_error(request, 400, "gid must be 1-40");
     return;
   }
-  KLinkGroup *group = this->find_group(gid);
+  ProgramHost *group = this->find_group(gid);
   if (group == nullptr) {
     send_error(request, 404, "unknown group");
     return;
@@ -525,7 +527,7 @@ void KLinkWeb::handle_preview_done(AsyncWebServerRequest *request) {
     send_error(request, 400, "gid must be 1-40");
     return;
   }
-  KLinkGroup *group = this->find_group(gid);
+  ProgramHost *group = this->find_group(gid);
   if (group == nullptr) {
     send_error(request, 404, "unknown group");
     return;
@@ -584,8 +586,8 @@ void KLinkWeb::handle_copy(AsyncWebServerRequest *request) {
     send_error(request, 400, "to must be 1-40");
     return;
   }
-  KLinkGroup *from_group = this->find_group(from);
-  KLinkGroup *to_group = this->find_group(to);
+  ProgramHost *from_group = this->find_group(from);
+  ProgramHost *to_group = this->find_group(to);
   if (from_group == nullptr || to_group == nullptr) {
     send_error(request, 404, "unknown group");
     return;

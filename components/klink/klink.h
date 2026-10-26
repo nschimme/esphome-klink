@@ -29,6 +29,7 @@
 #include "klink_inventory.h"
 #include "klink_mode.h"
 #include "klink_names.h"
+#include "klink_program.h"
 #include "klink_schedule.h"
 
 namespace esphome {
@@ -97,6 +98,7 @@ class KLinkHub : public Component, public uart::UARTDevice {
   bool commissioning() const { return commissioning_; }
 
   void register_group(KLinkGroup *group) { groups_.push_back(group); }
+  void register_program(ProgramHost *program) { programs_.push_back(program); }
   void write_group(uint8_t gid, const uint8_t channels[5]);
   void start_scan();
   void identify(uint32_t kid);
@@ -112,6 +114,7 @@ class KLinkHub : public Component, public uart::UARTDevice {
   size_t lamp_count() const { return inventory_.lamps().size(); }
   // Views for the web API.
   const std::vector<KLinkGroup *> &groups() const { return groups_; }
+  const std::vector<ProgramHost *> &programs() const { return programs_; }
   const std::vector<kessil::klink::LampRecord> &lamps() const { return inventory_.lamps(); }
   const kessil::klink::NameTable &names() const { return names_; }
   // Set or clear a lamp nickname (empty clears); false and `error` filled on invalid input.
@@ -166,6 +169,7 @@ class KLinkHub : public Component, public uart::UARTDevice {
   kessil::klink::NameTable names_;
   ESPPreferenceObject names_pref_;
   std::vector<KLinkGroup *> groups_;
+  std::vector<ProgramHost *> programs_;
 
   bool monitor_{false};
   int8_t dp_pin_{-1};
@@ -212,15 +216,16 @@ enum class GroupModel : uint8_t {
   GENERIC,    // any other model: raw channels
 };
 
-class KLinkGroup : public light::LightOutput, public Component {
+class KLinkGroup : public ProgramHost, public light::LightOutput, public Component {
  public:
+  const char *kind() const override { return "bus"; }
   void set_model(GroupModel model) { model_ = model; }
   GroupModel model() const { return model_; }
   // Only the Tuna Sun's UI2 is a color temperature; elsewhere the light is brightness-only and UI2
   // is a plain value set from a number entity.
   bool has_color_temperature() const { return model_ == GroupModel::TUNA_SUN; }
   // Names used for this model's channels in the schedule slot text (Kessil's own labels).
-  const kessil::klink::SlotLabels *slot_labels() const {
+  const kessil::klink::SlotLabels *slot_labels() const override {
     switch (model_) {
       case GroupModel::TUNA_SUN:
         return &kessil::klink::LABELS_TUNA_SUN;
@@ -252,27 +257,27 @@ class KLinkGroup : public light::LightOutput, public Component {
   light::LightTraits get_traits() override;
   void write_state(light::LightState *state) override;
 
-  size_t num_slots() const { return slots_.size(); }
+  size_t num_slots() const override { return slots_.size(); }
   // Point editor: one point at a time, like the dots on Kessil's own Quick Set screen. Editing a point
   // enables it, stores it through the slot's text entity (saved to flash shortly after the last edit)
   // and tells the editor entities to refresh.
-  size_t selected_point() const { return selected_; }
-  void select_point(size_t index);
-  const kessil::klink::SchedulePoint &point(size_t index) const { return slots_[index]; }
-  void edit_point_time(uint8_t hour, uint8_t minute);
-  void edit_point_channel(uint8_t index, uint8_t value);  // index 0-4 = UI1-UI5
-  void edit_point_enabled(bool enabled);
-  void add_on_editor_callback(std::function<void()> &&cb) { editor_cb_.add(std::move(cb)); }
-  void register_slot_text(size_t index, KLinkSlotText *text);
-  void set_slot(size_t index, const kessil::klink::SchedulePoint &point);
+  size_t selected_point() const override { return selected_; }
+  void select_point(size_t index) override;
+  const kessil::klink::SchedulePoint &point(size_t index) const override { return slots_[index]; }
+  void edit_point_time(uint8_t hour, uint8_t minute) override;
+  void edit_point_channel(uint8_t index, uint8_t value) override;  // index 0-4 = UI1-UI5
+  void edit_point_enabled(bool enabled) override;
+  void add_on_editor_callback(std::function<void()> &&cb) override { editor_cb_.add(std::move(cb)); }
+  void register_slot_text(size_t index, KLinkSlotText *text) override;
+  void set_slot(size_t index, const kessil::klink::SchedulePoint &point) override;
   // Web API: edit one slot (1-based in the API is passed as a 0-based index here), persist it
   // through its slot text and preview it. False when the index is out of range.
   bool set_slot_from_values(size_t index, uint16_t minute,
-                            const uint8_t channels[kessil::klink::NUM_CHANNELS], bool enabled);
+                            const uint8_t channels[kessil::klink::NUM_CHANNELS], bool enabled) override;
   // Web API: copy another group's whole program. Groups must have the same model and slot count.
-  bool copy_program_from(const KLinkGroup &other);
+  bool copy_program_from(const ProgramHost &other) override;
   // Web API: the light's name, or "Group <gid>" before the light has reported one.
-  std::string name() const {
+  std::string name() const override {
     if (this->state_ != nullptr) {
       std::string n = this->state_->get_name().str();
       if (!n.empty())
@@ -281,7 +286,7 @@ class KLinkGroup : public light::LightOutput, public Component {
     return "Group " + std::to_string(this->gid_);
   }
   // Web API: the model key used in YAML ("tuna_sun", "tuna_blue", "generic").
-  std::string model_name() const {
+  std::string model_name() const override {
     switch (this->model_) {
       case GroupModel::TUNA_SUN:
         return "tuna_sun";
@@ -292,7 +297,7 @@ class KLinkGroup : public light::LightOutput, public Component {
     }
   }
   // Web API: the current minute of day (0-1439) or -1 without a valid clock.
-  int now_minute() const {
+  int now_minute() const override {
     if (this->time_ == nullptr)
       return -1;
     ESPTime now = this->time_->now();
@@ -300,20 +305,20 @@ class KLinkGroup : public light::LightOutput, public Component {
       return -1;
     return static_cast<int>(now.hour) * 60 + static_cast<int>(now.minute);
   }
-  kessil::klink::Mode mode() const { return this->mode_.mode; }
-  void set_mode(kessil::klink::Mode mode);
-  void add_on_mode_callback(std::function<void()> &&cb) { this->mode_cb_.add(std::move(cb)); }
-  void preview_point(size_t slot);
-  void preview_minute(uint16_t minute_of_day);
-  void end_preview();
+  kessil::klink::Mode mode() const override { return this->mode_.mode; }
+  void set_mode(kessil::klink::Mode mode) override;
+  void add_on_mode_callback(std::function<void()> &&cb) override { this->mode_cb_.add(std::move(cb)); }
+  void preview_point(size_t slot) override;
+  void preview_minute(uint16_t minute_of_day) override;
+  void end_preview() override;
   // One line for the dashboard: what this group's schedule is doing right now.
-  std::string status_text();
-  uint8_t gid() const { return gid_; }
+  std::string status_text() override;
+  uint8_t gid() const override { return gid_; }
   // UI2 (0-255, models without a color temperature) and UI3-UI5 (percent) from the number entities.
   // A change takes manual control, like the light.
-  void set_extra(uint8_t channel, uint8_t value);
-  uint8_t extra(uint8_t channel) const { return extras_[channel - 3]; }
-  void set_extra_silent(uint8_t channel, uint8_t value) {
+  void set_extra(uint8_t channel, uint8_t value) override;
+  uint8_t extra(uint8_t channel) const override { return extras_[channel - 3]; }
+  void set_extra_silent(uint8_t channel, uint8_t value) override {
     if (channel == 2)
       manual_color_ = value;
     else if (channel >= 3 && channel <= 5)
@@ -367,7 +372,7 @@ class KLinkGroup : public light::LightOutput, public Component {
 // A 0-100% control for UI3, UI4 or UI5 of one group.
 class KLinkChannelNumber : public number::Number, public Component {
  public:
-  void set_group(KLinkGroup *group) { group_ = group; }
+  void set_group(ProgramHost *group) { group_ = group; }
   void set_channel(uint8_t channel) { channel_ = channel; }
   // Point editor mode: shows and edits channel `index` (0-4 = UI1-UI5) of the selected program point.
   void set_point_field(uint8_t index) {
@@ -381,7 +386,7 @@ class KLinkChannelNumber : public number::Number, public Component {
   void control(float value) override;
   void refresh_();
 
-  KLinkGroup *group_{nullptr};
+  ProgramHost *group_{nullptr};
   uint8_t channel_{4};
   bool point_mode_{false};
   ESPPreferenceObject pref_;
@@ -390,7 +395,7 @@ class KLinkChannelNumber : public number::Number, public Component {
 // The group's operating mode: Program, Manual or Off (option index = kessil::klink::Mode).
 class KLinkModeSelect : public select::Select, public Component {
  public:
-  void set_group(KLinkGroup *group) { group_ = group; }
+  void set_group(ProgramHost *group) { group_ = group; }
   void setup() override;
   void dump_config() override;
   // After the group, so the mode it restored from flash is what the select first shows.
@@ -398,33 +403,33 @@ class KLinkModeSelect : public select::Select, public Component {
 
  protected:
   void control(size_t index) override { this->group_->set_mode(static_cast<kessil::klink::Mode>(index)); }
-  KLinkGroup *group_{nullptr};
+  ProgramHost *group_{nullptr};
 };
 
 // Which program point the editor entities show and edit.
 class KLinkPointSelect : public select::Select, public Component {
  public:
-  void set_group(KLinkGroup *group) { group_ = group; }
+  void set_group(ProgramHost *group) { group_ = group; }
   void setup() override;
   void dump_config() override;
 
  protected:
   void control(size_t index) override { this->group_->select_point(index); }
-  KLinkGroup *group_{nullptr};
+  ProgramHost *group_{nullptr};
 };
 
 #ifdef USE_DATETIME_TIME
 // The selected program point's time of day.
 class KLinkPointTime : public datetime::TimeEntity, public Component {
  public:
-  void set_group(KLinkGroup *group) { group_ = group; }
+  void set_group(ProgramHost *group) { group_ = group; }
   void setup() override;
   void dump_config() override;
 
  protected:
   void control(const datetime::TimeCall &call) override;
   void refresh_();
-  KLinkGroup *group_{nullptr};
+  ProgramHost *group_{nullptr};
 };
 #endif
 
@@ -457,7 +462,7 @@ class KLinkEffect : public light::LightEffect {
 // One schedule slot, edited as text: "HH:MM u1 u2 u3 u4 u5" or "off".
 class KLinkSlotText : public text::Text, public Component {
  public:
-  void set_group(KLinkGroup *group) { group_ = group; }
+  void set_group(ProgramHost *group) { group_ = group; }
   void set_index(uint8_t index) { index_ = index; }
   void set_initial_value(const std::string &value) { initial_ = value; }
 
@@ -473,7 +478,7 @@ class KLinkSlotText : public text::Text, public Component {
   void control(const std::string &value) override;
   void apply_(const std::string &value, bool save);
 
-  KLinkGroup *group_{nullptr};
+  ProgramHost *group_{nullptr};
   uint8_t index_{0};
   std::string initial_{"off"};
   ESPPreferenceObject pref_;
@@ -485,7 +490,7 @@ class KLinkSwitch : public switch_::Switch, public Component {
  public:
   void set_kind(SwitchKind kind) { kind_ = kind; }
   void set_hub(KLinkHub *hub) { hub_ = hub; }
-  void set_group(KLinkGroup *group) { group_ = group; }
+  void set_group(ProgramHost *group) { group_ = group; }
 
   void setup() override;
   void dump_config() override;
@@ -496,7 +501,7 @@ class KLinkSwitch : public switch_::Switch, public Component {
 
   SwitchKind kind_{SwitchKind::WRITES};
   KLinkHub *hub_{nullptr};
-  KLinkGroup *group_{nullptr};
+  ProgramHost *group_{nullptr};
 };
 
 enum class ButtonKind : uint8_t { SCAN, IDENTIFY_NEXT, RETRY };
@@ -552,12 +557,12 @@ class KLinkStateSensor : public text_sensor::TextSensor, public PollingComponent
 // One line describing what this group is doing right now (see KLinkGroup::status_text).
 class KLinkGroupStatus : public text_sensor::TextSensor, public PollingComponent {
  public:
-  void set_group(KLinkGroup *group) { group_ = group; }
+  void set_group(ProgramHost *group) { group_ = group; }
   void update() override;
   void dump_config() override;
 
  protected:
-  KLinkGroup *group_{nullptr};
+  ProgramHost *group_{nullptr};
   std::string last_;
   bool have_last_{false};
 };
