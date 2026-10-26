@@ -5,6 +5,9 @@ substitutions:
   dm_pin: "19"
   dp_pin: "20"
 
+  # On-board RGB LED of the ESP32-S2-Saola-1; only used with common/rgb-led.yaml.
+  rgb_pin: "18"
+
 esp32:
   board: esp32-s2-saola-1
   framework:
