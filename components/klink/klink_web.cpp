@@ -268,6 +268,24 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
     append_quoted(out, mode_json_name(group->mode()));
     out += ",\"status\":";
     append_quoted(out, group->status_text());
+    // Channel names and limits for the program editor; null marks a channel the model does not have.
+    out += ",\"labels\":[";
+    for (size_t c = 0; c < kk::NUM_CHANNELS; c++) {
+      if (c)
+        out += ',';
+      const char *label = group->slot_labels()->name[c];
+      if (label == nullptr)
+        out += "null";
+      else
+        append_quoted(out, label);
+    }
+    out += "],\"max\":[";
+    for (size_t c = 0; c < kk::NUM_CHANNELS; c++) {
+      if (c)
+        out += ',';
+      out += std::to_string(kk::CHANNEL_MAX[c]);
+    }
+    out += ']';
     out += ",\"slots\":[";
     for (size_t i = 0; i < group->num_slots(); i++) {
       if (i)
@@ -434,6 +452,21 @@ void KLinkWeb::handle_point(AsyncWebServerRequest *request) {
       return;
     }
     p.channels[4] = static_cast<uint8_t>(value);
+  }
+  // Index form for any model: c1..c5 are UI1..UI5 (the page uses the group's labels and limits).
+  static const char *const CH_ARGS[kk::NUM_CHANNELS] = {"c1", "c2", "c3", "c4", "c5"};
+  for (size_t c = 0; c < kk::NUM_CHANNELS; c++) {
+    if (!request->hasArg(CH_ARGS[c]))
+      continue;
+    if (group->slot_labels()->name[c] == nullptr) {
+      send_error(request, 400, std::string("this model has no channel ") + CH_ARGS[c]);
+      return;
+    }
+    if (!parse_uint(arg_string(request, CH_ARGS[c]), kk::CHANNEL_MAX[c], value)) {
+      send_error(request, 400, std::string("invalid parameter: ") + CH_ARGS[c]);
+      return;
+    }
+    p.channels[c] = static_cast<uint8_t>(value);
   }
   if (request->hasArg("enabled")) {
     bool enabled;
