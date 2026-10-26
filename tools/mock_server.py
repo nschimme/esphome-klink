@@ -63,6 +63,11 @@ def point(minute, channels, enabled=True):
     return {"minute": minute, "ch": list(channels), "enabled": enabled}
 
 
+def copy_slots(slots):
+    """A deep copy of slot dicts, so edits (which mutate in place) never touch the original."""
+    return [point(p["minute"], p["ch"], p["enabled"]) for p in slots]
+
+
 def make_group(gid, name, model, labels, slots):
     return {
         "gid": gid,
@@ -75,6 +80,8 @@ def make_group(gid, name, model, labels, slots):
         "preview_until": 0.0,
         "selected": 0,
         "slots": slots,
+        # The shipped program, captured before any edit, for the page's "Default" preset.
+        "defaults": copy_slots(slots),
     }
 
 
@@ -372,6 +379,7 @@ def state_json():
                 "labels": group["labels"],
                 "max": group["max"],
                 "slots": group["slots"],
+                "defaults": group["defaults"],
                 "lamps": lamps,
                 "now_minute": minute,
                 "selected": group["selected"],

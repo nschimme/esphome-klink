@@ -615,7 +615,6 @@ function initTabs(){
 var NS='http://www.w3.org/2000/svg';
 var DASH=['','6 3','2 4','9 3 2 3','1 3'];
 var PRESETS=[
-  ['Sunrise-sunset',[[450,0,0],[600,100,90],[1020,100,90],[1200,0,0]]],
   ['Daytime plateau',[[479,0,0],[480,100,90],[1079,100,90],[1080,0,0]]],
   ['Always on',[[0,100,90]]],
   ['Moonlight',[[0,20,0]]]
@@ -1126,9 +1125,28 @@ function removePoint(i){
   toast('Point removed','ok','Undo',undo);
 }
 function askPreset(pre){
-  pg.pending=pre;
+  pg.pending={preset:pre};
   setText(pg.confirmText,'Replace the whole program with "'+pre[0]+'"?');
   pg.confirm.hidden=false;
+}
+/* The shipped program, as raw slot objects; null when the firmware does not report it. */
+function defaultSlots(g){
+  return g&&g.defaults&&g.defaults.length?cloneSlots(g.defaults):null;
+}
+function askDefault(){
+  if(!defaultSlots(pg.g))return;
+  pg.pending={};
+  setText(pg.confirmText,'Replace the whole program with "Default"?');
+  pg.confirm.hidden=false;
+}
+function applyDefault(){
+  var g=pg.g,d=defaultSlots(g);
+  if(!g||!d)return;
+  pushUndo();
+  toast('Applying preset…','ok');
+  writeSlots(d).then(function(ok){
+    if(ok)toast('Program reset to default','ok','Undo',undo);
+  });
 }
 function applyPreset(pre){
   var g=pg.g;
@@ -1404,6 +1422,10 @@ function buildProg(){
   rb.appendChild(pg.remove);
   mk('p','section-label',root,'Presets');
   var pr=mk('div','chips',root);
+  pg.defaultBtn=makeButton('Default','btn small');
+  pg.defaultBtn.setAttribute('title','Reset the program to the factory points');
+  pg.defaultBtn.addEventListener('click',function(){askDefault();});
+  pr.appendChild(pg.defaultBtn);
   PRESETS.forEach(function(pre){
     var b=makeButton(pre[0],'btn small');
     b.addEventListener('click',function(){askPreset(pre);});
@@ -1418,7 +1440,8 @@ function buildProg(){
   pg.pending=null;
   yes.addEventListener('click',function(){
     var p=pg.pending;pg.confirm.hidden=true;pg.pending=null;
-    if(p)applyPreset(p);
+    if(!p)return;
+    if(p.preset)applyPreset(p.preset);else applyDefault();
   });
   no.addEventListener('click',function(){pg.confirm.hidden=true;pg.pending=null;});
   pg.copy=mk('div','pbtnrow',root);
@@ -1609,6 +1632,13 @@ function syncToolbar(){
   if(same)pg.revertConfirm.hidden=true;
   var s=P.slots[P.sel];
   pg.removeBtn.disabled=!g||!s||!s.enabled;
+  var d=defaultSlots(g);
+  pg.defaultBtn.hidden=!d;
+  if(d){
+    var atDefault=slotsEqual(P.slots,d,g);
+    pg.defaultBtn.disabled=atDefault;
+    pg.defaultBtn.setAttribute('title',atDefault?'Already the default program':'Reset the program to the factory points');
+  }
 }
 function updateScrub(){
   var g=pg.g;

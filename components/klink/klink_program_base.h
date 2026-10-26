@@ -35,6 +35,7 @@ class ProgramBase : public ProgramHost {
   size_t num_slots() const override { return this->slots_.size(); }
   size_t selected_point() const override { return this->selected_; }
   const kessil::klink::SchedulePoint &point(size_t index) const override { return this->slots_[index]; }
+  bool default_point(size_t index, kessil::klink::SchedulePoint &out) const override;
   void select_point(size_t index) override;
   void add_on_editor_callback(std::function<void()> &&cb) override { this->editor_cb_.add(std::move(cb)); }
   void register_slot_text(size_t index, KLinkSlotText *text) override;

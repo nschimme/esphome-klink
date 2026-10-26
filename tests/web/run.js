@@ -249,6 +249,52 @@ async function scenarioRevert() {
   check(name + ': undo one request', server.pointRequests().length === 1, server.pointRequests().length);
 }
 
+async function scenarioDefaultPreset() {
+  var name = 'default preset';
+  var server = stub.makeServer();
+  var page = await newPage(server);
+  var def = buttonExact(page, 'Default');
+  check(name + ': Default present', !!def);
+  var chips = def && def.parentNode;
+  eq(name + ': Default is the first preset', chips && chips.children.map(function (b) { return b.textContent.trim(); }),
+    ['Default', 'Daytime plateau', 'Always on', 'Moonlight']);
+  check(name + ': Sunrise-sunset is gone', buttonExact(page, 'Sunrise-sunset') === null);
+  check(name + ': disabled while the program is the default', def && def.disabled === true);
+  check(name + ': disabled title', !!def && def.getAttribute('title') === 'Already the default program');
+
+  var defaults = stub.cloneSlots(server.group.defaults);
+  server.resetRequests();
+  page.click(buttonExact(page, 'Remove point'));
+  await stub.settle();
+  check(name + ': edited away from the default', server.group.slots[0].enabled === false);
+  def = buttonExact(page, 'Default');
+  check(name + ': enabled after an edit', !!def && def.disabled === false);
+
+  server.resetRequests();
+  page.click(def);
+  var txt = cardText(page.progRoot());
+  check(name + ': confirm row asks', txt.indexOf('Replace the whole program with "Default"?') >= 0, txt);
+  page.click(buttonExact(page, 'Yes'));
+  await stub.settle();
+  eq(name + ': defaults restored exactly', slots(server), defaults);
+  check(name + ': one request for the one changed slot', server.pointRequests().length === 1,
+    'got ' + server.pointRequests().length);
+  check(name + ': toast names the reset', page.toastText().indexOf('Program reset to default') >= 0, page.toastText());
+  check(name + ': toast offers Undo', page.toastText().indexOf('Undo') >= 0, page.toastText());
+  check(name + ': disabled again', buttonExact(page, 'Default').disabled === true);
+
+  server.resetRequests();
+  page.click(buttonExact(page, 'Undo'));
+  await stub.settle();
+  eq(name + ': undo brings the edit back', slots(server)[0], { minute: 480, ch: [30, 60, 0, 0, 0], enabled: false });
+  check(name + ': undo is one request', server.pointRequests().length === 1, server.pointRequests().length);
+
+  var bare = stub.makeServer();
+  delete bare.group.defaults;
+  var barePage = await newPage(bare);
+  check(name + ': hidden without defaults', buttonExact(barePage, 'Default').hidden === true);
+}
+
 async function scenarioOrphans() {
   var name = 'orphan groups';
   var server = stub.makeServer({
@@ -497,6 +543,7 @@ async function main() {
   await scenarioRemoveUndo();
   await scenarioCoalesce();
   await scenarioRevert();
+  await scenarioDefaultPreset();
   await scenarioOrphans();
   await scenarioPicker();
   await scenarioManyLamps();

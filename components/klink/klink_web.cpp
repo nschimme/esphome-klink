@@ -265,6 +265,21 @@ bool KLinkWeb::read_bool_arg(AsyncWebServerRequest *request, const char *name, b
 
 void KLinkWeb::send_ok(AsyncWebServerRequest *request) { send_json(request, 200, "{\"ok\":true}"); }
 
+// One slot in the state JSON: the same shape for "slots" and "defaults".
+static void append_slot_json(std::string &out, const kk::SchedulePoint &p) {
+  out += "{\"minute\":";
+  out += std::to_string(p.minute);
+  out += ",\"ch\":[";
+  for (size_t c = 0; c < kk::NUM_CHANNELS; c++) {
+    if (c)
+      out += ',';
+    out += std::to_string(p.channels[c]);
+  }
+  out += "],\"enabled\":";
+  out += p.enabled ? "true" : "false";
+  out += '}';
+}
+
 void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
   std::string out;
   out.reserve(512);
@@ -309,18 +324,16 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
     for (size_t i = 0; i < group->num_slots(); i++) {
       if (i)
         out += ',';
-      const kk::SchedulePoint &p = group->point(i);
-      out += "{\"minute\":";
-      out += std::to_string(p.minute);
-      out += ",\"ch\":[";
-      for (size_t c = 0; c < kk::NUM_CHANNELS; c++) {
-        if (c)
-          out += ',';
-        out += std::to_string(p.channels[c]);
-      }
-      out += "],\"enabled\":";
-      out += p.enabled ? "true" : "false";
-      out += '}';
+      append_slot_json(out, group->point(i));
+    }
+    // The shipped program, so the page can offer "Default" after any edit.
+    out += "],\"defaults\":[";
+    for (size_t i = 0; i < group->num_slots(); i++) {
+      if (i)
+        out += ',';
+      kk::SchedulePoint p;
+      group->default_point(i, p);
+      append_slot_json(out, p);
     }
     out += "],\"lamps\":[";
     bool first_lamp = true;

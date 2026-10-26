@@ -69,6 +69,20 @@ void ProgramBase::register_slot_text(size_t index, KLinkSlotText *text) {
   this->slot_texts_[index] = text;
 }
 
+bool ProgramBase::default_point(size_t index, kk::SchedulePoint &out) const {
+  out.minute = 0;
+  for (size_t c = 0; c < kk::NUM_CHANNELS; c++)
+    out.channels[c] = 0;
+  out.enabled = false;
+  if (index >= this->slot_texts_.size() || this->slot_texts_[index] == nullptr)
+    return false;
+  kk::SchedulePoint parsed;
+  if (!kk::parse_slot(this->slot_texts_[index]->initial_value(), parsed, this->slot_labels()))
+    return false;
+  out = parsed;
+  return true;
+}
+
 void ProgramBase::select_point(size_t index) {
   if (index >= this->slots_.size())
     return;

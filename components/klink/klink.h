@@ -406,6 +406,8 @@ class KLinkSlotText : public text::Text, public Component {
   void set_group(ProgramHost *group) { group_ = group; }
   void set_index(uint8_t index) { index_ = index; }
   void set_initial_value(const std::string &value) { initial_ = value; }
+  // The shipped value, for the page's "Default" preset (independent of what was stored since).
+  const std::string &initial_value() const { return initial_; }
 
   void setup() override;
   void dump_config() override;

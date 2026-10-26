@@ -92,6 +92,17 @@ class MockManyTests(unittest.TestCase):
             in_group = sorted(lamp["kid"] for lamp in state["lamps"] if lamp["gid"] == group["gid"])
             self.assertEqual(sorted(group["lamps"]), in_group)
 
+    def test_defaults_match_initial_slots(self):
+        mock_server.use_many()
+        state = mock_server.state_json()
+        for group in state["groups"]:
+            self.assertEqual(group["defaults"], group["slots"])
+        original = [dict(p, ch=list(p["ch"])) for p in state["groups"][0]["defaults"]]
+        mock_server.handle_point({"gid": ["1"], "slot": ["1"], "minute": ["1"]})
+        edited = mock_server.state_json()["groups"][0]
+        self.assertNotEqual(edited["slots"], edited["defaults"])
+        self.assertEqual(edited["defaults"], original, "an edit must not move the reported defaults")
+
     def test_many_assign_keeps_state_consistent(self):
         mock_server.use_many()
         mock_server.handle_assign({"kid": ["18000021"], "gid": ["3"]})

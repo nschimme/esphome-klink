@@ -289,8 +289,8 @@ The device serves two pages. Both work offline, straight from the board.
   - **Dashboard**: each group's mode and status; tap a group or a lamp to flash it so you can tell
     which is which.
   - **Program**: a visual day-curve editor. Drag points, watch the change preview on the lamps, use the
-    "now" marker and scrub through the day, apply presets, and copy a program to another group. **Done**
-    ends the preview.
+    "now" marker and scrub through the day, apply presets (Default, Daytime plateau, Always on and
+    Moonlight), and copy a program to another group. **Done** ends the preview.
   - **Settings**: the lamp list with nicknames, moving a lamp to another group, rescan, **Send to
     lights**, **Retry**.
 - **`http://<device>/`** is ESPHome's own device page (`web_server` version 3, `local: true`), with the

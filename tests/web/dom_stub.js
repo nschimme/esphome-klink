@@ -326,6 +326,9 @@ function makeServer(opts) {
     ]
   };
   var groups = opts.groups || [group];
+  groups.forEach(function (g) {
+    if (!g.defaults) g.defaults = cloneSlots(g.slots);
+  });
   var lamps = opts.lamps || [];
   var requests = [];
 
@@ -335,7 +338,7 @@ function makeServer(opts) {
         return {
           gid: g.gid, name: g.name, model: g.model, mode: g.mode || 'program',
           status: 'Program', labels: g.labels.slice(), max: g.max.slice(),
-          slots: cloneSlots(g.slots), lamps: lamps.filter(function (l) {
+          slots: cloneSlots(g.slots), defaults: g.defaults ? cloneSlots(g.defaults) : undefined, lamps: lamps.filter(function (l) {
             return l.gid === g.gid;
           }).map(function (l) { return l.kid; }),
           now_minute: g.now_minute == null ? 600 : g.now_minute,

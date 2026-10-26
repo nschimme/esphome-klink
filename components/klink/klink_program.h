@@ -27,6 +27,9 @@ class ProgramHost {
   virtual const kessil::klink::SlotLabels *slot_labels() const = 0;
   virtual size_t num_slots() const = 0;
   virtual const kessil::klink::SchedulePoint &point(size_t index) const = 0;
+  // The shipped ("factory") point for a slot, independent of edits stored since. False when there is
+  // no slot text for `index` or its initial value does not parse; `out` is then a disabled point.
+  virtual bool default_point(size_t index, kessil::klink::SchedulePoint &out) const = 0;
   virtual size_t selected_point() const = 0;
   virtual void select_point(size_t index) = 0;
   virtual void edit_point_time(uint8_t hour, uint8_t minute) = 0;
