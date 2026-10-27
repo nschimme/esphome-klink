@@ -59,7 +59,7 @@ class ProgramBase : public ProgramHost {
   int now_minute() const override;
   void update();  // schedule tick, run every few seconds from a timer
 
-  // Sun and moon programs: the schedule can come from a generated day instead of the user's points.
+  // Sky program: the schedule can come from a generated day instead of the user's points.
   // Generated points are never saved; the source is.
   void set_location_provider(const LocationProvider *provider) override { this->location_ = provider; }
   ProgramSource source() const override { return this->source_; }
@@ -94,7 +94,7 @@ class ProgramBase : public ProgramHost {
   // Kessil's own controller repeats group writes once a second, and whether lamps hold a level without
   // repeats is untested, so the bus group repeats; programs for ordinary lights do not.
   virtual bool repeat_held_value_() const { return false; }
-  // Channel layout of the generated sun and moon days.
+  // Channel layout of the generated Sky days.
   virtual kessil::klink::DynModel dyn_model_() const { return kessil::klink::DYN_GENERIC; }
   // Load the stored source; subclasses call this from setup() next to setup_program_().
   void setup_source_();

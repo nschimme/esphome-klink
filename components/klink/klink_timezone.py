@@ -1,4 +1,4 @@
-"""Time zone -> representative city, the last-resort location for the sun and moon programs.
+"""Time zone -> representative city, the last-resort location for the Sky program.
 
 Standard library only (like klink_colors.py), so it can be tested without ESPHome. The data is the zone.tab
 that ships with the tzdata package (ESPHome depends on it).
@@ -19,7 +19,7 @@ def iso6709(text):
 def timezone_location(name):
     """The representative city's (latitude, longitude) for an IANA time zone name, or None.
 
-    An approximate location is enough for the sun and moon programs; Home Assistant's zone.home or the
+    An approximate location is enough for the Sky program; Home Assistant's zone.home or the
     latitude and longitude entities give exact ones.
     """
     try:

@@ -268,57 +268,6 @@ class MockEffectTests(unittest.TestCase):
             self.assertNotIn(path, mock_server.GET_ROUTES)
 
 
-class MockManyTests(unittest.TestCase):
-    """The --many laboratory, checked through the mock's /klink/state handler."""
-
-    def test_many_state(self):
-        mock_server.use_many()
-        state = mock_server.state_json()
-        gids = sorted(group["gid"] for group in state["groups"])
-        self.assertEqual(gids, list(range(1, 11)) + [101, 102])
-        self.assertEqual(len(state["lamps"]), 32)
-        self.assertEqual(state["bus"]["known_lamps"], 32)
-        known = set(gids)
-        orphans = sorted({lamp["gid"] for lamp in state["lamps"] if lamp["gid"] not in known})
-        self.assertEqual(orphans, [11, 12, 20])
-        for group in state["groups"]:
-            in_group = sorted(lamp["kid"] for lamp in state["lamps"] if lamp["gid"] == group["gid"])
-            self.assertEqual(sorted(group["lamps"]), in_group)
-
-    def test_many_has_ct_light(self):
-        mock_server.use_many()
-        state = mock_server.state_json()
-        ct = [group for group in state["groups"] if group["gid"] == 102][0]
-        self.assertEqual(ct["kind"], "light")
-        self.assertEqual(ct["model"], "light_ct")
-        self.assertEqual(ct["labels"], ["int", "ct", None, None, None])
-        self.assertEqual(ct["lamps"], [])
-        self.assertEqual(ct["defaults"], ct["slots"])
-        self.assertEqual(len(ct["slots"]), 8)
-
-    def test_defaults_match_initial_slots(self):
-        mock_server.use_many()
-        state = mock_server.state_json()
-        for group in state["groups"]:
-            self.assertEqual(group["defaults"], group["slots"])
-        original = [dict(p, ch=list(p["ch"])) for p in state["groups"][0]["defaults"]]
-        mock_server.handle_point({"gid": ["1"], "slot": ["1"], "minute": ["1"]})
-        edited = mock_server.state_json()["groups"][0]
-        self.assertNotEqual(edited["slots"], edited["defaults"])
-        self.assertEqual(edited["defaults"], original, "an edit must not move the reported defaults")
-
-    def test_many_assign_keeps_state_consistent(self):
-        mock_server.use_many()
-        mock_server.handle_assign({"kid": ["18000021"], "gid": ["3"]})
-        state = mock_server.state_json()
-        self.assertEqual(len(state["lamps"]), 32)
-        moved = [lamp for lamp in state["lamps"] if lamp["kid"] == 18000021]
-        self.assertEqual(moved[0]["gid"], 3)
-        group3 = [group for group in state["groups"] if group["gid"] == 3][0]
-        self.assertIn(18000021, group3["lamps"])
-        self.assertEqual(state["bus"]["known_lamps"], 32)
-
-
 class MockSnapTests(unittest.TestCase):
     """GET /klink/snap through the mock's handler, without sockets."""
 

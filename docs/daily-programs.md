@@ -2,8 +2,8 @@
 
 A group runs a daily program: a short list of **points**, each with a time of day and values for the lamp's
 channels. The lamps move in straight lines between points, wrapping past midnight. Where the points come from is
-the group's **program source**: your own points, a computed sun day, or a computed moon night. On top of that you
-can scale the intensity for a new tank (acclimation) and let the weather dim the sun.
+the group's **program source**: your own points, or the **Sky** program (its Sun and Moon layers). On top of that
+you can scale the intensity for a new tank (acclimation) and let the weather dim the sun.
 
 ## My points
 
@@ -57,38 +57,44 @@ The page's **Default** button restores these.
 Suggestions to adjust, not rules. The shipped programs already follow the pattern most keepers describe: about 12 hours
 with a two-hour ramp at each end and a plateau at peak.
 
-- **Planted tank, Tuna Sun.** Use the **Sun** source if you like a day that follows the season, or **Fixed** day
+- **Planted tank, Tuna Sun.** Choose **Sky** with the **Sun** layer if you like a day that follows the season, or **Fixed** day
   length at the hours your plants need, with a ramp of about two hours. Kessil describes red and amber as for the look
   of the tank, so keep them modest if you want, or raise them for color.
 - **Reef tank, Tuna Blue.** Keepers commonly run violet near the peak intensity and a few percent of red and green,
   with a peak of six to eight hours, and raise violet slowly in a new tank. Switch on **Acclimation** for new corals.
-- **A night light.** On an RGB light program, use the **Moon** source. On a Tuna Sun, use a small **Night glow** (amber)
-  in the Sun settings.
+- **A night light.** On an RGB light program, choose **Sky** with only the **Moon** layer. On a Tuna Sun or Tuna Blue, use a small
+  **Night glow** (amber or violet) in the Sun settings; with Sun off, the Moon layer is the blue-only alternative.
 
 ## Sun and moon
 
-Choose **Sun** or **Moon** as the program source (the Program tab's switch, or the **Program source** select in
-Home Assistant). The curve is computed for today at your location, redrawn at the start of each day (the moon's
-night at local noon), and never saved: only the source and its settings are. Choose **Make an editable copy** on the
-Program tab to copy today's curve into My points, simplified to fit the slots.
+Choose **Sky** as the program source (the Program tab's switch, or the **Program source** select in Home
+Assistant). Sky has two layers, **Sun** and **Moon**, with a toggle for each on the Program tab. The curve is computed
+for today at your location, redrawn at the start of each day (the moon's night at local noon), and never saved: only
+the source and its settings are. Choose **Make an editable copy** on the Program tab to copy today's curve into My
+points, simplified to fit the slots.
 
-The Sun source works on every program. The Moon source needs blue light, so it is offered on a Tuna Blue and on
-RGB or RGBW light programs, and not on a Tuna Sun, tunable-white or brightness-only lights. Neither the Sun nor the
-Moon source is offered on a Refugium.
+The Sun layer works on every program. The Moon layer needs blue light, so it is offered on a Tuna Blue and on RGB or
+RGBW light programs, and not on a Tuna Sun, tunable-white or brightness-only lights. With both layers on, the sun runs
+by day and the moon is lifted into the dark hours, so one curve covers the whole day. Sun off gives a moon-only night
+light; Moon off gives a sun-only day. A Tuna Sun has no blue, so it has only the Sun layer, with the amber night glow.
+Sky is not offered on a Refugium.
 
 ### Sun
 
-The curve follows the real sun: a dim glow from astronomical dawn, red and amber (violet on a Tuna Blue) at
-sunrise, a climb to full intensity at solar noon, and the same in reverse in the evening, with a dark night. It is
-up to eleven points. Events that do not happen (the sun does not rise, or does not get dark) are left out.
+The curve follows the real sun: a dim glow from astronomical dawn, a climb to full intensity at solar noon, and the
+same in reverse in the evening. The extra channels follow the shipped My points curve: on a Tuna Sun red and amber
+are stronger at the edges and still present at the peak; on a Tuna Blue violet and the small red and green traces
+follow intensity, with a little extra violet at the edges. A Tuna Sun ends in a dark night with an optional amber
+floor; on a lamp that can make blue the moon is lifted into those dark hours. It is up to eleven sun points, plus the
+moon's three. Events that do not happen (the sun does not rise, or does not get dark) are left out.
 
 | Setting | Meaning |
 |---|---|
 | Peak brightness | Intensity at noon, in percent of full. Default 60 %, which is INT 153, the same peak as the shipped points. |
 | Day length | **Real sun**, or **Fixed** at 4 to 16 hours centered on solar noon (a constant photoperiod all year). |
 | Morning and evening ramp | Minutes from sunrise to near-peak intensity, and the same before sunset. Default 150 minutes; 0 follows the real sun, which climbs in under an hour. |
-| Sunrise and sunset glow | Strength of the red/amber (violet on a Tuna Blue) glow, in percent. Default 100. |
-| Night glow | Tuna Sun only, 0 to 10 %: a dim amber light through the night. Default 0. Amber is a very dim light, far dimmer than red, so it suits a night glow. |
+| Sunrise and sunset glow | Strength of the red and amber edge tint, in percent; on a Tuna Blue a little extra violet. Default 50, which gives the shipped curve's 10 % red and 30 % amber. |
+| Night glow | Tuna Sun and Tuna Blue, 0 to 10 %: a dim light through the night, amber on a Tuna Sun and violet on a Tuna Blue. Default 0. Amber is a very dim light, far dimmer than red, so it suits a night glow. |
 | Time shift | Minutes added to every point, -120 to 120. |
 
 On ordinary lights the sun is a warm-to-cool white (color temperature, white or RGB) with an orange glow at sunrise
@@ -96,8 +102,9 @@ and sunset.
 
 ### Moon
 
-The curve lights only the dark hours, from moonrise to moonset clipped to civil darkness, peaking in the middle.
-If the moon is not up while it is dark, the lamp stays off. Rise and set times are estimates, within about 15
+The night-only curve lights just the dark hours, from moonrise to moonset clipped to civil darkness, peaking in the
+middle. If the moon is not up while it is dark, the lamp stays off. Use it for a night light that stays dark by day;
+with the **Moon** layer on a blue-capable lamp, the Sky program already carries the moon at night. Rise and set times are estimates, within about 15
 minutes.
 
 | Setting | Meaning |
@@ -110,7 +117,7 @@ example a light program on a blue or RGB light.
 
 ### Location
 
-There is one location per device, so a Sun and a Moon program agree. It is the first of these that exists:
+There is one location per device, so the Sun and Moon layers agree. It is the first of these that exists:
 
 1. the **Latitude** and **Longitude** entities, if you set them;
 2. Home Assistant's home location (`zone.home`), read automatically;
@@ -118,13 +125,15 @@ There is one location per device, so a Sun and a Moon program agree. It is the f
 4. `latitude` and `longitude` in the `klink:` block;
 5. the representative city of your `timezone` (approximate, but enough for the sun to be about right).
 
-The web page shows which one is in use, rounded to 0.01 degrees. If none exists, the Sun and Moon sources stay off,
+The web page shows which one is in use, rounded to 0.01 degrees. If none exists, Sky stays off,
 the group keeps running My points, and the status says "Set a location".
 
 ### Previewing other days
 
 On the Program tab, date shortcuts (today, the equinoxes and the solstices, and a date picker) draw another day's
-curve so you can see how the year changes it. A preview is read-only and never changes what the lamps do.
+curve so you can see how the year changes it. Changing a sun or moon setting redraws today's curve and the
+previewed day, so you can judge its effect before you leave it. A preview is read-only and never changes what the
+lamps do. The settings have their own Undo, Redo and Revert all, and Ctrl+Z / Ctrl+Y work there too.
 
 ## Weather
 
@@ -138,7 +147,7 @@ packages:
 ```
 
 Only the weather **condition** is used, so any weather integration works. A condition that is unknown or unavailable
-counts as clear. Clouds take a share off the Sun source's intensity:
+counts as clear. Clouds take a share off the sun's intensity:
 
 | Condition | Cloud share |
 |---|---|
@@ -154,7 +163,7 @@ counts as clear. Clouds take a share off the Sun source's intensity:
 
 | Entity | Meaning |
 |---|---|
-| **Follow weather** | Off by default. The Sun source's intensity is reduced by the cloud share times **Max cloud dimming**, easing in and out over minutes so it never flickers. The status shows `clouds -N%`. |
+| **Follow weather** | Off by default. The sun's intensity is reduced by the cloud share times **Max cloud dimming**, easing in and out over minutes so it never flickers. The status shows `clouds -N%`. |
 | **Max cloud dimming** | 0 to 90 %, default 50. The most that is taken off at a cloud share of 1. |
 | **Storms from weather** | Off by default. When a thunderstorm (`lightning`, `lightning-rainy`) begins, the Storm effect starts on K-Link groups in Program mode that have it, never on light programs. At most once every 30 minutes, and never from the first value after a restart. |
 

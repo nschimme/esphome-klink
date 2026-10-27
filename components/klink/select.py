@@ -22,8 +22,6 @@ MODE_OPTIONS = ["Program", "Manual", "Off"]
 # Order matches the speed values KLinkEffect uses: 0 fast, 1 moderate, 2 slow.
 EFFECT_SPEED_OPTIONS = ["Fast", "Moderate", "Slow"]
 # Order matches BrightnessCurve: LIGHT, LINEAR, CIE.
-# Order matches kessil::klink ProgramSource: points, sun, moon.
-SOURCE_OPTIONS = ["My points", "Sun", "Moon"]
 BRIGHTNESS_CURVE_OPTIONS = ["Linear", "Even steps (CIE 1931)"]
 
 # Which program point the point editor entities of a group (time, enabled, the channel numbers) show and
@@ -59,7 +57,7 @@ BRIGHTNESS_CURVE_SCHEMA = (
     .extend(cv.COMPONENT_SCHEMA)
 )
 
-# Where a bus group's schedule comes from: its own points, or a day generated from the sun or moon.
+# Where a bus group's schedule comes from: its own points, or the Sky program (sun, moon, or both).
 SOURCE_SCHEMA = (
     select.select_schema(KLinkSourceSelect, icon="mdi:weather-sunny")
     .extend({cv.Required(CONF_GROUP): cv.use_id(ProgramHost)})
@@ -91,15 +89,8 @@ async def to_code(config):
         cg.add(var.set_group(group))
         return
     if config[CONF_TYPE] == "source":
-        # The moon needs blue: only a Tuna Blue (including an AP9X) or a light program that mixes color offers it.
-        moon = False
-        for light_conf in CORE.config.get("light", []):
-            if light_conf.get("output_id") == config[CONF_GROUP]:
-                moon = light_conf.get("model") == "tuna_blue"
-        for program_conf in (CORE.config.get("klink") or {}).get("programs", []) or []:
-            if program_conf.get("id") == config[CONF_GROUP]:
-                moon = program_conf.get("model") in ("rgb", "rgbw")
-        var = await select.new_select(config, options=SOURCE_OPTIONS if moon else SOURCE_OPTIONS[:2])
+        # Home Assistant only picks the program; the Sun and Moon layers are set on the device page.
+        var = await select.new_select(config, options=["My points", "Sky"])
         await cg.register_component(var, config)
         cg.add(var.set_group(group))
         return

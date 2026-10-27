@@ -41,8 +41,8 @@ effects reach the lamps at no more than 25 frames a second, and the built-in eff
 
 ## Program
 
-- **Program source** chooses where the schedule comes from: **My points**, **Sun** or **Moon**. A Tuna Sun and
-  lights that cannot make blue offer only My points and Sun; a Tuna Blue also offers Moon. See
+- **Program source** chooses **My points** or **Sky**. The Sun and Moon layers are set on the device page, where Sky
+  has a toggle for each; a lamp that cannot make blue only has the Sun layer. See
   [daily programs](daily-programs.md).
 - **Point 1 to 16** are text entities, one per program point, in the form `HH:MM int=51 clr=12 r=10 am=30`, or
   `off`. Points 9 to 16 are *off by default*. Edits made in Home Assistant are saved to flash and take precedence
@@ -86,11 +86,12 @@ Programs on ordinary lights have the acclimation entities too. See [daily progra
 | **Bus state** | What the chain guard is doing: `Leader: controlling`, `Leader: claiming…`, a conflict with a retry countdown, or `Follower: following the chain`. A diagnostic entity. |
 | **Known lamps**, **Bus timeouts** | Diagnostics. |
 | **Open esphome-klink** | A link to the device's [web page](web-pages.md). |
-| **Latitude**, **Longitude** | Your location for the Sun and Moon programs. Empty until you enter a value; they override Home Assistant's home location. |
+| **Latitude**, **Longitude** | Your location for the Sky program. Empty until you enter a value; they override Home Assistant's home location. |
 
 On a **follower**, a K-Link group light is read-only and shows the leader's value. Native ESPHome lights
 bound with `klink: followers:` behave like ordinary lights, but their state is driven by the group
-they follow. See [leader and follower](leader-follower.md).
+they follow: a direct Home Assistant change is replaced by the group's last value after a short delay.
+See [leader and follower](leader-follower.md).
 
 With [`common/weather.yaml`](daily-programs.md#weather) included: **Follow weather**, **Max cloud dimming** and
 **Storms from weather**.

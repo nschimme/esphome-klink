@@ -303,8 +303,8 @@ CONFIG_SCHEMA = cv.All(
                     cv.Required(CONF_NEGATIVE_PIN): cv.int_range(0, 48),
                 }
             ),
-            # Default location for the sun and moon programs, used until Home Assistant (zone.home) or the
-            # latitude and longitude entities give one. Without any location the Sun and Moon sources stay off.
+            # Default location for the Sky program, used until Home Assistant (zone.home) or the
+            # latitude and longitude entities give one. Without any location the Sky program stays off.
             # The device's time zone (the same name as the time component). Its representative city is the last
             # resort for the location, so Sun and Moon work with no setup at all (approximate).
             cv.Optional(CONF_TIMEZONE): cv.string,
@@ -446,6 +446,8 @@ async def to_code(config):
         cg.add(fvar.set_gid(follower[CONF_GID]))
         cg.add(fvar.set_model(GROUP_MODELS[follower[CONF_MODEL]]))
         cg.add(fvar.set_transition_ms(follower[CONF_TRANSITION]))
+        cg.add(fvar.set_key(str(follower[CONF_ID])))
+        cg.add(var.register_follower(fvar))
         for light_id in follower[CONF_LIGHTS]:
             cg.add(fvar.add_light(await cg.get_variable(light_id)))
         if _is_lamp(follower):

@@ -53,6 +53,12 @@ main{padding-top:16px;padding-bottom:8px}
 .seg button:last-child{border-right:0}
 .seg button.on{background:var(--accent);color:var(--accent-fg)}
 .seg>select{flex:1 1 auto;min-width:0;min-height:44px;border:0;border-radius:0;background:var(--card);color:var(--fg);padding:0 8px}
+.gselrow{display:flex;margin:12px 0;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--card)}
+.gselrow button{flex:0 0 48px;min-height:44px;border:0;background:none;color:var(--fg);font-size:1.4rem;font-weight:700;line-height:1}
+.gselrow button:first-child{border-right:1px solid var(--line)}
+.gselrow button:last-child{border-left:1px solid var(--line)}
+.gselrow button:disabled{opacity:.35}
+.gselrow select{flex:1 1 auto;min-width:0;min-height:44px;border:0;border-radius:0;background:var(--card);color:var(--fg);padding:0 10px;font-weight:600}
 .section-label{font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:14px 0 6px}
 .out{font-variant-numeric:tabular-nums;font-weight:600;overflow-wrap:anywhere}
 .out.muted{font-weight:400;color:var(--muted)}
@@ -79,6 +85,7 @@ main{padding-top:16px;padding-bottom:8px}
 .row-actions select{flex:0 1 auto;min-width:0;max-width:100%}
 .row-error{flex-basis:100%;color:var(--bad);font-size:.86rem}
 .row-edit{flex-basis:100%;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.row-edit label{font-size:.85rem;font-weight:600;color:var(--muted)}
 .lampgroup{margin-top:10px}
 .lampgroup h4{font-size:.76rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:0;padding:6px 0;border-bottom:1px solid var(--line)}
 #lamp-search{display:block;width:100%;margin:8px 0}
@@ -86,6 +93,19 @@ input[type=text],input[type=search],select{min-height:44px;min-width:0;max-width
 input[type=text],input[type=search]{flex:1 1 160px}
 .settings-block{margin-top:16px}
 .settings-block h3{font-size:1rem;margin-bottom:4px}
+.settings-heading{font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:26px 0 0}
+.settings-heading:first-of-type{margin-top:0}
+.settings-headingrow{display:flex;align-items:center;flex-wrap:wrap;gap:10px;margin-top:26px}
+.settings-headingrow .settings-heading{margin:0}
+.settings-headingrow select{flex:0 1 auto;min-height:36px;padding:4px 8px;max-width:100%}
+.settings-subheading{font-size:.8rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin:14px 0 4px}
+details.card>summary{display:flex;align-items:center;gap:8px;cursor:pointer;list-style:none;min-height:32px}
+details.card>summary::-webkit-details-marker{display:none}
+details.card>summary::after{content:'▾';margin-left:auto;color:var(--muted);font-size:1.1rem;transition:transform .15s}
+details.card[open]>summary::after{transform:rotate(180deg)}
+details.card>summary:focus-visible{outline:3px solid var(--focus);outline-offset:3px;border-radius:6px}
+.summary-title{font-size:1rem;font-weight:700}
+.summary-sub{font-size:.85rem;color:var(--muted);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .outopt{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-top:10px;min-width:0}
 .outopt label{flex:0 0 auto;font-size:.85rem;font-weight:600;color:var(--muted)}
 .outopt select{flex:1 1 180px}
@@ -102,9 +122,9 @@ input[type=text],input[type=search]{flex:1 1 160px}
 .sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 /* Program tab */
 #prog-root{display:grid;gap:12px;grid-template-columns:minmax(0,1fr)}
-#prog-root>.seg{margin:0}
+#prog-root>.seg,#prog-root>.gselrow{margin:0}
 .pwrap{display:grid;gap:12px;grid-template-columns:minmax(0,1fr);align-items:start}
-@media (min-width:900px){.pwrap{grid-template-columns:minmax(0,1fr) 300px;grid-template-rows:min-content 1fr}.pwrap>.panel{grid-column:2;grid-row:1 / span 2}.pwrap>.pre{grid-column:1;grid-row:2}}
+@media (min-width:900px){.pwrap{grid-template-columns:minmax(0,1fr) 300px;grid-template-rows:min-content 1fr}.pwrap>.panel,.pwrap>.sky{grid-column:2;grid-row:1 / span 2}.pwrap>.pre{grid-column:1;grid-row:2}}
 .chartbox{position:relative;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:6px;min-width:0}
 #prog-chart{height:220px;position:relative;touch-action:none;overflow:hidden}
 @media (min-width:900px){#prog-chart{height:320px}}
@@ -164,6 +184,13 @@ input[type=text],input[type=search]{flex:1 1 160px}
 .chan input[type=range]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:var(--card);border:2px solid var(--fg);box-sizing:border-box}
 .chan input[type=range]:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
 .chan input[type=number]{width:82px;min-height:44px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font-size:16px}
+/* Sun and moon settings that add a color show that color on their track, like the channel sliders. */
+.sky input[type=range].trk{-webkit-appearance:none;appearance:none;height:44px;background:transparent;padding:0}
+.sky input[type=range].trk::-webkit-slider-runnable-track{height:10px;border-radius:6px;background:var(--trk);border:1px solid var(--line)}
+.sky input[type=range].trk::-moz-range-track{height:10px;border-radius:6px;background:var(--trk);border:1px solid var(--line)}
+.sky input[type=range].trk::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;margin-top:-7px;border-radius:50%;background:var(--card);border:2px solid var(--fg);box-sizing:border-box}
+.sky input[type=range].trk::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:var(--card);border:2px solid var(--fg);box-sizing:border-box}
+.sky input[type=range].trk:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
 input[type=time]{min-height:44px;min-width:0;padding:6px 8px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);font-size:16px}
 .pbtnrow{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .ptools{display:flex;flex-wrap:wrap;gap:8px;min-width:0}
@@ -180,11 +207,11 @@ input[type=time]{min-height:44px;min-width:0;padding:6px 8px;border:1px solid va
 .daterow .chip.on{background:var(--accent);border-color:var(--accent);color:var(--accent-fg)}
 .daterow input[type=date]{min-height:38px;padding:4px 8px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);font-size:16px;max-width:100%}
 .sky-summary{font-weight:600;color:var(--fg)}
-.pwrap.ro{grid-template-columns:minmax(0,1fr)}
-.sky{margin-top:12px}
+.sky{margin-top:0}
+.sky-toggles{gap:14px}
+.toggle{display:flex;align-items:center;gap:6px;font-weight:600;min-height:44px}
+.toggle input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent)}
 .sky h3{font-size:1rem;margin-bottom:6px}
-.sky-more{margin-top:10px}
-.sky-more summary{cursor:pointer;font-weight:600;color:var(--muted);font-size:.85rem;padding:6px 0}
 .outopt input[type=checkbox]{width:22px;height:22px;accent-color:var(--accent)}
 .confirm{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--neutral-bg);font-size:.92rem}
 .confirm span{flex:1 1 160px}

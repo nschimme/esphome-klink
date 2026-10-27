@@ -27,7 +27,7 @@ Leader (ESP32) ── K-Link pair ──┬── Kessil lamp
 A follower is not a quiet leader: it never puts a beacon, a request or a group write on the bus. It
 only answers requests addressed to it. With `lamp: false` on every `followers:` entry (or no entries
 at all) it transmits nothing at all. It has no **Send to lights** switch or **Retry** button, and its
-`/klink` page greys out the leader-only parts (Find lamps, flashing and moving lamps, Send to lights);
+`/klink` page greys out the leader-only parts (Scan for lamps, flashing and moving lamps, Send to lights);
 do those on the leader.
 
 ## Quickstart
@@ -129,6 +129,12 @@ The follower derives the light class from the lights (RGB/RGBW, CT, or brightnes
 source model's color curve and overlays to it. A group with no lamps works as a **bus channel**: the
 leader still writes `1F`, and every follower on that GID shows it.
 
+The follower's lights are found and flashed from the page's **Follower** card, which never sends a
+bus frame. You can also tap Identify on a lamp row when the leader lists the follower's lamp. If Home
+Assistant (or a local automation) changes a bound light, the follower puts the group's last value
+back after a short delay, so the program wins again; the YAML `transition:` only shapes that local
+fade. Identical on a leader's own `followers:` lights.
+
 See [DIY lights](diy-lights.md) for refugium and planted-strip builds.
 
 ## Lamp mode
@@ -194,8 +200,9 @@ status (`35`) are answered only for its own KID, and the two requests without a 
 acknowledged. Set GID (`1B`) stores the new group, which survives a reboot, and the entry's lights
 follow that group.
 
-Identify on a follower lamp needs a `34` probe heard just before the `17` find. The follower then dips
-the light itself for about half a second and restores it, so no reply frame is involved. A bare `17`
+Identify on a follower lamp needs a `34` probe heard just before the `17` find. The follower then
+dips the light (or briefly lights it when it is off) for about half a second and restores it, so no
+reply frame is involved. A bare `17`
 without a recent probe does nothing, as on a real lamp. Like any lamp it holds its last value while
 the leader's sends are off or while the leader is claiming or in conflict.
 
@@ -217,7 +224,7 @@ the closest real-world model: a controller with its own lamp that appears as a t
   "firmware" is the klink project version.
 - Assignment on the web Settings tab follows the usual rules: a type-compatible group, with custom
   ids 3-25 or its model's default.
-- Identify dips the light for about half a second, with no bus frames.
+- Identify flashes the light for about half a second, with no bus frames.
 - The lights follow their group because the leader's own writes are applied locally.
 - The assigned GID is stored and wins over `gid:` after a reboot. The record is local to this
   device, so a rescan cannot leave a stale bus entry behind.

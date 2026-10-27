@@ -74,16 +74,16 @@ void ProgramBase::setup_source_() {
   if (!this->has_sources())
     return;
   this->generated_.reserve(16);
-  this->source_pref_ = global_preferences->make_preference<uint8_t>(fnv1_hash("klink_src_") + this->preference_key());
+  this->source_pref_ =
+      global_preferences->make_preference<uint8_t>(fnv1_hash("klink_src_v2_") + this->preference_key());
   uint8_t stored = 0;
-  if (this->source_pref_.load(&stored) && stored <= static_cast<uint8_t>(ProgramSource::MOON) &&
-      (stored != static_cast<uint8_t>(ProgramSource::MOON) || this->can_moon()))
+  if (this->source_pref_.load(&stored) && stored <= static_cast<uint8_t>(ProgramSource::SKY))
     this->source_ = static_cast<ProgramSource>(stored);
   this->sky_pref_ = global_preferences->make_preference<SkySettings>(fnv1_hash("klink_sky_") + this->preference_key());
   SkySettings sky;
-  if (this->sky_pref_.load(&sky) && sky.peak <= 100 && (sky.hours == 0 || (sky.hours >= 4 && sky.hours <= 16)) &&
-      sky.glow <= 100 && sky.amber <= 10 && sky.ramp <= 24 && sky.shift >= -120 && sky.shift <= 120 && sky.moon <= 100 &&
-      sky.phase <= 1)
+  if (this->sky_pref_.load(&sky) && sky.layers >= 1 && sky.layers <= 3 && sky.peak <= 100 &&
+      (sky.hours == 0 || (sky.hours >= 4 && sky.hours <= 16)) && sky.glow <= 100 && sky.amber <= 10 && sky.ramp <= 24 &&
+      sky.shift >= -120 && sky.shift <= 120 && sky.moon <= 100 && sky.phase <= 1)
     this->sky_ = sky;
   this->apply_sky_();
 }
@@ -104,6 +104,8 @@ void ProgramBase::apply_sky_() {
 
 void ProgramBase::set_sky_settings(const SkySettings &settings) {
   SkySettings s = settings;
+  if (s.layers < 1) s.layers = 1;
+  if (s.layers > 3) s.layers = 3;
   if (s.peak > 100) s.peak = 100;
   if (s.hours != 0) s.hours = s.hours < 4 ? 4 : (s.hours > 16 ? 16 : s.hours);
   if (s.glow > 100) s.glow = 100;
@@ -127,12 +129,6 @@ void ProgramBase::set_sky_settings(const SkySettings &settings) {
 void ProgramBase::set_source(ProgramSource source) {
   if (!this->has_sources() || source == this->source_)
     return;
-  if (source == ProgramSource::MOON && !this->can_moon()) {
-    ESP_LOGW(TAG, "The moon needs a light that makes blue: this program stays on %s",
-             this->source_ == ProgramSource::SUN ? "the sun" : "My points");
-    this->source_cb_.call();  // snap a select back to the real source
-    return;
-  }
   this->source_ = source;
   uint8_t stored = static_cast<uint8_t>(source);
   this->source_pref_.save(&stored);
@@ -175,9 +171,11 @@ void ProgramBase::refresh_generated_() {
     this->source_note_ = "waiting for clock";
     return;
   }
-  // The key: the calendar day; for the moon the night that started at the last local noon.
+  // The key: the calendar day. Sky is anchored to the night that started at the last local noon, so
+  // the moon's hours stay together across midnight.
+  const bool night_anchored = this->source_ == ProgramSource::SKY;
   ESPTime anchor = now;
-  if (this->source_ == ProgramSource::MOON && now.hour < 12)
+  if (night_anchored && now.hour < 12)
     anchor = ESPTime::from_epoch_local(now.timestamp - 24 * 3600);
   const int key = anchor.year * 10000 + anchor.month * 100 + anchor.day_of_month;
   if (this->generated_ok_ && key == this->generated_key_ && this->source_ == this->generated_source_ &&
@@ -198,8 +196,8 @@ void ProgramBase::refresh_generated_() {
   this->generated_lat_ = lat;
   this->generated_lon_ = lon;
   this->source_note_.clear();
-  ESP_LOGI(TAG, "Generated %s day for %04d-%02d-%02d: %u points in %u ms", this->source_ == ProgramSource::SUN ? "sun" : "moon",
-           anchor.year, anchor.month, anchor.day_of_month, static_cast<unsigned>(this->generated_.size()),
+  ESP_LOGI(TAG, "Generated Sky day for %04d-%02d-%02d: %u points in %u ms", anchor.year, anchor.month,
+           anchor.day_of_month, static_cast<unsigned>(this->generated_.size()),
            static_cast<unsigned>((micros() - started) / 1000));
 }
 
@@ -207,27 +205,47 @@ void ProgramBase::refresh_generated_() {
 // settings it reads, so the HTTP task may call it on a copy.
 std::vector<kk::SchedulePoint> ProgramBase::build_day_(ProgramSource source, int y, int m, int d, int tz, double lat,
                                                        double lon, std::string *summary) const {
-  char buf[200];
-  if (source == ProgramSource::SUN) {
-    kk::SunDay day = kk::sun_day(y, m, d, lat, lon, tz);
-    if (this->sky_.hours != 0)
-      day = kk::fixed_photoperiod(day, this->sky_.hours);
+  if (source != ProgramSource::SKY)
+    return {};
+  char buf[320];
+  const bool sun_on = (this->sky_.layers & 1) != 0;
+  const bool moon_on = (this->sky_.layers & 2) != 0 && this->can_moon();
+  if (!sun_on && !moon_on)
+    return {};
+  if (!sun_on) {
+    const kk::MoonNight night = kk::moon_night(y, m, d, lat, lon, tz);
     if (summary != nullptr) {
-      const int length = (day.sunrise >= 0 && day.sunset >= 0) ? day.sunset - day.sunrise : (day.always_up ? 1440 : 0);
-      std::snprintf(buf, sizeof(buf),
-                    "{\"sunrise\":%d,\"noon\":%d,\"sunset\":%d,\"length\":%d,\"always_up\":%s}", day.sunrise, day.noon,
-                    day.sunset, length, day.always_up ? "true" : "false");
+      std::snprintf(buf, sizeof(buf), "{\"rise\":%d,\"set\":%d,\"illumination\":%.2f}", night.rise, night.set,
+                    night.illumination);
+      *summary = buf;
+    }
+    return kk::moon_points(night, this->moon_params_, this->dyn_model_());
+  }
+  kk::SunDay day = kk::sun_day(y, m, d, lat, lon, tz);
+  if (this->sky_.hours != 0)
+    day = kk::fixed_photoperiod(day, this->sky_.hours);
+  const int length = (day.sunrise >= 0 && day.sunset >= 0) ? day.sunset - day.sunrise : (day.always_up ? 1440 : 0);
+  if (!moon_on) {
+    if (summary != nullptr) {
+      std::snprintf(buf, sizeof(buf), "{\"sunrise\":%d,\"noon\":%d,\"sunset\":%d,\"length\":%d,\"always_up\":%s}",
+                    day.sunrise, day.noon, day.sunset, length, day.always_up ? "true" : "false");
       *summary = buf;
     }
     return kk::sun_points(day, this->sun_params_, this->dyn_model_());
   }
-  kk::MoonNight night = kk::moon_night(y, m, d, lat, lon, tz);
+  /* Sun + Moon: the sun by day and the moon lifted into the dark hours of the same day. */
+  const kk::MoonNight night = kk::moon_night(y, m, d, lat, lon, tz);
   if (summary != nullptr) {
-    std::snprintf(buf, sizeof(buf), "{\"rise\":%d,\"set\":%d,\"illumination\":%.2f}", night.rise, night.set,
+    std::snprintf(buf, sizeof(buf),
+                  "{\"sunrise\":%d,\"noon\":%d,\"sunset\":%d,\"length\":%d,\"always_up\":%s,"
+                  "\"moon\":{\"rise\":%d,\"set\":%d,\"illumination\":%.2f}}",
+                  day.sunrise, day.noon, day.sunset, length, day.always_up ? "true" : "false", night.rise, night.set,
                   night.illumination);
     *summary = buf;
   }
-  return kk::moon_points(night, this->moon_params_, this->dyn_model_());
+  if (night.rise >= 0 && night.set >= 0 && this->moon_params_.max_int > 0)
+    return kk::sun_moon_points(day, night, this->sun_params_, this->moon_params_, this->dyn_model_());
+  return kk::sun_points(day, this->sun_params_, this->dyn_model_());
 }
 
 // The UTC offset in minutes at local noon of a date (so a date in the other half of the year gets its own).
@@ -247,7 +265,7 @@ int ProgramBase::utc_offset_for_(int year, int month, int day) const {
 bool ProgramBase::generate_day(ProgramSource source, int year, int month, int day,
                                std::vector<kk::SchedulePoint> &points, std::string &summary) const {
   double lat = 0.0, lon = 0.0;
-  if (source == ProgramSource::POINTS || !this->has_sources() || this->location_ == nullptr ||
+  if (source != ProgramSource::SKY || !this->has_sources() || this->location_ == nullptr ||
       !this->location_->location(lat, lon))
     return false;
   points = this->build_day_(source, year, month, day, this->utc_offset_for_(year, month, day), lat, lon, &summary);
@@ -482,7 +500,7 @@ std::string ProgramBase::status_text() {
         return "Program · no points enabled";
       // Every channel the model has, by its own label: "INT 42% CLR 26% R 0% AM 0%", "INT 53% R 90% G 100% B 60%".
       char buf[128];
-      const char *name = this->generated_ok_ ? (this->source_ == ProgramSource::SUN ? "Sun" : "Moon") : "Program";
+      const char *name = this->generated_ok_ ? "Sky" : "Program";
       int len = std::snprintf(buf, sizeof(buf), "%s · %02u:%02u", name, static_cast<unsigned>(now.hour),
                               static_cast<unsigned>(now.minute));
       const kk::SlotLabels *labels = this->slot_labels();
@@ -497,7 +515,8 @@ std::string ProgramBase::status_text() {
         label[n] = '\0';
         len += std::snprintf(buf + len, sizeof(buf) - len, " · %s %u%%", label, value);
       }
-      if (this->generated_ok_ && this->source_ == ProgramSource::SUN && this->dim_ >= 0.01f && len > 0 &&
+      if (this->generated_ok_ && this->source_ == ProgramSource::SKY && this->dim_ >= 0.01f &&
+          len > 0 &&
           static_cast<size_t>(len) < sizeof(buf)) {
         len += std::snprintf(buf + len, sizeof(buf) - len, " · clouds -%u%%", static_cast<unsigned>(std::lround(this->dim_ * 100.0f)));
       }
@@ -575,7 +594,7 @@ void ProgramBase::update() {
         return;  // nothing enabled
       // Clouds take a share off the sun's intensity, easing in and out over minutes so it never flickers.
       this->dim_ = kk::weather_ease(this->dim_, this->location_ != nullptr ? this->location_->weather_dimming() : 0.0f, 0.002f);
-      if (this->generated_ok_ && this->source_ == ProgramSource::SUN && this->dim_ > 0.001f)
+      if (this->generated_ok_ && this->source_ == ProgramSource::SKY && this->dim_ > 0.001f)
         channels[0] = static_cast<uint8_t>(std::lround(channels[0] * (1.0f - this->dim_)));
       if (this->acc_.on)
         channels[0] = static_cast<uint8_t>(std::lround(channels[0] * kk::acclimation_scale(this->acc_, static_cast<uint32_t>(now.timestamp))));

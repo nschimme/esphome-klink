@@ -3,8 +3,8 @@
 /*KCOL*/
 var API='/klink';
 var TABS=['dashboard','program','settings'];
-var state=null,offline=false,fetching=false,again=false;
-var busy={},lastMode={},cards={},ocards={},rows={},lampSecs={},lampQuery='',editing={},rowError={},outCards={},accCards={};
+var state=null,offline=false,fetching=false,again=false,SET={gid:0};
+var busy={},lastMode={},cards={},ocards={},rows={},lampSecs={},lampQuery='',editing={},rowError={},outCards={},accCards={},followerCards={};
 /* Effect speed is a number in the API and a word on the wire. */
 var SPEEDS=['fast','moderate','slow'];
 var DURS=[['0','Until stopped'],['0.5','0.5 min'],['1','1 min'],['2','2 min'],['3','3 min'],['4','4 min'],['5','5 min']];
@@ -114,7 +114,7 @@ function interp(slots,minute){
 }
 function computeOutput(g,minute){
   var m=minute===undefined?g.now_minute:minute;
-  /* With Sun or Moon as the source the lamps follow today's generated day, not My points. */
+  /* With Sky as the source the lamps follow today's generated day, not My points. */
   var out=interp(genOn(g)&&g.generated&&g.generated.length?g.generated:g.slots,m);
   if(!out) return null;
   for(var i=0;i<5;i++){
@@ -180,6 +180,11 @@ function renderHeader(){
   }
   var follower=!!(state&&state.bus.role==='follower');
   byId('writes-banner').hidden=!state||follower||!!state.bus.writes||(gs.length>0&&lightOnly);
+  /* A follower has no bus lamp list and never scans; its Follower cards are the useful ones. */
+  byId('lamps-card').hidden=follower;
+  byId('find-lamps-card').hidden=follower;
+  byId('writes-block').hidden=follower;
+  byId('bus-card').hidden=follower;
   if(state&&anyLight&&!lightOnly){
     setText(byId('writes-text'),'Lamps on the K-Link bus are not being sent to yet. Light programs are still controlled here.');
   }
@@ -188,8 +193,6 @@ function renderHeader(){
     setText(byId('writes-toggle'),w?'Turn off':'Turn on');
     byId('retry-btn').hidden=follower||!/conflict/i.test(state.bus.state||'');
     updateBusy();
-    setText(byId('bus-text'),state.bus.state||'');
-    setText(byId('bus-count'),String(state.bus.known_lamps||0));
   }
 }
 function makeCard(g){
@@ -442,11 +445,18 @@ function makeOrphanCard(gid){
     act('find-o-'+gid,API+'/identify',{gid:gid},'Flashing the lamps in Group '+gid,null);
   });
   var count=document.createElement('span');count.className='lamps';
-  rowline.appendChild(find);rowline.appendChild(count);
+  var manage=makeButton('Manage lamps','btn small');
+  manage.addEventListener('click',function(){
+    if(location.hash!=='#settings') location.hash='settings';
+    showTab('settings');
+    var card=byId('lamps-card');
+    if(card&&card.scrollIntoView) card.scrollIntoView({behavior:'smooth',block:'start'});
+  });
+  rowline.appendChild(find);rowline.appendChild(manage);rowline.appendChild(count);
   card.appendChild(rowline);
   var chips=document.createElement('div');chips.className='chips';card.appendChild(chips);
   var hint=document.createElement('p');hint.className='hint';
-  hint.textContent='Add a program for it in your config, see the documentation (light programs)';
+  hint.textContent='Add a group for this GID or move the lamp in Settings > Lamps';
   card.appendChild(hint);
   byId('groups').appendChild(card);
   return {el:card,name:h2,status:status,count:count,chips:chips,chipEls:{}};
@@ -492,6 +502,36 @@ function orderCards(list){
   if(!need) return;
   for(i=0;i<list.length;i++) if(list[i].parentNode===container) container.appendChild(list[i]);
 }
+function makeFollowerCard(l){
+  var card=document.createElement('article');card.className='card';
+  var head=document.createElement('div');head.className='card-head';
+  var h2=document.createElement('h2');
+  var tag=document.createElement('span');tag.className='tag';tag.textContent='Follower';
+  head.appendChild(h2);head.appendChild(tag);
+  var status=document.createElement('p');status.className='status';
+  var rowline=document.createElement('div');rowline.className='rowline';
+  var find=makeButton('Find these lights','btn');
+  find.setAttribute('data-busy','flash-'+l.id);
+  find.addEventListener('click',function(){
+    act('flash-'+l.id,API+'/identify',{follower:l.id},'Dipping '+(l.name||'the follower lights'),null);
+  });
+  rowline.appendChild(find);
+  card.appendChild(head);card.appendChild(status);card.appendChild(rowline);
+  return {el:card,name:h2,status:status,find:find};
+}
+function updateFollowerCard(l,c){
+  setText(c.name,l.name||('Group '+l.gid));
+  var lights=l.lights&&l.lights.length?l.lights.join(', '):'';
+  setText(c.status,'Follows group '+l.gid+' · '+l.model+(l.target?' → '+l.target:'')+(lights?' · '+lights:''));
+  var finding=!!busy['flash-'+l.id];
+  c.find.textContent='';
+  if(finding){
+    var sp=document.createElement('span');sp.className='spin';sp.setAttribute('aria-hidden','true');
+    c.find.appendChild(sp);c.find.appendChild(document.createTextNode('Finding…'));
+  }else{
+    c.find.appendChild(document.createTextNode('Find these lights'));
+  }
+}
 function renderDashboard(){
   var gs=state.groups||[],seen={},i,g;
   var container=byId('groups');
@@ -519,13 +559,32 @@ function renderDashboard(){
       delete ocards[ogid];
     }
   }
+  /* Follower lights (`klink: followers:`). A leader's lamp entries are already found through
+     their group's lamps, so show those only when they are plain followers or the board is a follower. */
+  var locals=state.followers||[],shownLocals=[],seenLocals={},localKid={};
+  for(i=0;i<lamps.length;i++) localKid[lamps[i].kid]=true;
+  for(i=0;i<locals.length;i++){
+    if(locals[i].kid&&localKid[locals[i].kid]) continue;
+    shownLocals.push(locals[i]);
+    seenLocals[locals[i].id]=true;
+    var lc=followerCards[locals[i].id];
+    if(!lc){lc=makeFollowerCard(locals[i]);followerCards[locals[i].id]=lc;container.appendChild(lc.el);}
+    updateFollowerCard(locals[i],lc);
+  }
+  for(var lid in followerCards){
+    if(!seenLocals[lid]){
+      if(followerCards[lid].el.parentNode) followerCards[lid].el.parentNode.removeChild(followerCards[lid].el);
+      delete followerCards[lid];
+    }
+  }
   var order=[];
   for(i=0;i<gs.length;i++) if(cards[gs[i].gid]) order.push(cards[gs[i].gid].el);
   for(i=0;i<orphangids.length;i++) if(ocards[orphangids[i]]) order.push(ocards[orphangids[i]].el);
+  for(i=0;i<shownLocals.length;i++) if(followerCards[shownLocals[i].id]) order.push(followerCards[shownLocals[i].id].el);
   orderCards(order);
   var hint=null;
   for(i=0;i<container.children.length;i++) if(container.children[i].className==='hint'){hint=container.children[i];break;}
-  if(gs.length||orphangids.length){
+  if(gs.length||orphangids.length||shownLocals.length){
     if(hint) container.removeChild(hint);
   }else{
     if(!hint){
@@ -548,21 +607,23 @@ function makeRow(lamp){
   idBtn.addEventListener('click',function(){
     act('id-'+lamp.kid,API+'/identify',{kid:lamp.kid},'Flashing '+lampLabel(lamp.kid),null);
   });
-  var renameBtn=makeButton('Rename','btn small');
+  var renameBtn=makeButton('Edit','btn small');
   actions.appendChild(idBtn);actions.appendChild(renameBtn);
 
   var edit=document.createElement('div');edit.className='row-edit';edit.hidden=true;
   var input=document.createElement('input');input.type='text';input.maxLength=24;
-  input.setAttribute('aria-label','Lamp nickname');
+  input.setAttribute('aria-label','Lamp nickname');input.placeholder='Nickname';
   var saveBtn=makeButton('Save','btn small primary');saveBtn.setAttribute('data-busy','name-'+lamp.kid);
   var cancelBtn=makeButton('Cancel','btn small');
   edit.appendChild(input);edit.appendChild(saveBtn);edit.appendChild(cancelBtn);
 
   var select=document.createElement('select');
+  select.id='lamp-group-'+lamp.kid;
   select.setAttribute('aria-label','Group for '+lampLabel(lamp.kid));
+  var gl=document.createElement('label');gl.textContent='Group';gl.setAttribute('for',select.id);
   var moveBtn=makeButton('Move','btn small');
   moveBtn.setAttribute('data-busy','assign-'+lamp.kid);
-  actions.appendChild(select);actions.appendChild(moveBtn);
+  edit.appendChild(gl);edit.appendChild(select);edit.appendChild(moveBtn);
 
   var err=document.createElement('div');err.className='row-error';err.hidden=true;
   err.setAttribute('role','status');
@@ -577,12 +638,16 @@ function makeRow(lamp){
     editing[lamp.kid]=true;
     refs.nickname=lampName(lamp.kid);
     input.value=refs.nickname;
+    refs.dirty=false;
+    select.value=String(lamp.gid);
     edit.hidden=false;
     input.focus();
     input.select();
   }
   function closeEdit(){
     editing[lamp.kid]=false;
+    refs.dirty=false;
+    select.value=String(lamp.gid);
     edit.hidden=true;
   }
   function saveName(){
@@ -605,7 +670,7 @@ function makeRow(lamp){
   moveBtn.addEventListener('click',function(){
     act('assign-'+lamp.kid,API+'/assign',{kid:lamp.kid,gid:parseInt(select.value,10)},null,function(e){
       if(e){setRowError(lamp.kid,e.message);}
-      else{setRowError(lamp.kid,'');refs.dirty=false;toast('Lamp moved','ok');}
+      else{setRowError(lamp.kid,'');toast('Lamp moved','ok');closeEdit();}
     });
   });
   return refs;
@@ -695,9 +760,11 @@ function softText(v){return v>0?v+' s':'Off';}
 /* Light behavior: one card per bus group, with the per-group output options. */
 function makeOutputCard(g){
   var gid=g.gid;
-  var el=document.createElement('div');el.className='card settings-block';el.id='output-'+gid;
-  var h=document.createElement('h3');h.textContent='Light behavior';
-  var group=document.createElement('p');group.className='hint';group.id='output-group-'+gid;
+  var el=document.createElement('details');el.className='card settings-block';el.id='output-'+gid;
+  var sum=document.createElement('summary');
+  var h=document.createElement('span');h.className='summary-title';h.textContent='Light behavior';
+  var group=document.createElement('span');group.className='summary-sub';group.id='output-group-'+gid;
+  sum.appendChild(h);sum.appendChild(group);
   var curveRow=document.createElement('div');curveRow.className='outopt';
   fieldLabel('Brightness curve','output-curve-'+gid,curveRow);
   var curve=document.createElement('select');curve.id='output-curve-'+gid;
@@ -720,9 +787,13 @@ function makeOutputCard(g){
   softRow.appendChild(soft);softRow.appendChild(softVal);
   var softHint=document.createElement('p');softHint.className='hint';softHint.id='output-soft-start-hint-'+gid;
   softHint.textContent='Every time the controller starts, the lamps fade in from dark over this time instead of jumping to the current level.';
-  el.appendChild(h);el.appendChild(group);el.appendChild(curveRow);el.appendChild(curveHint);
+  el.appendChild(sum);
+  el.appendChild(curveRow);el.appendChild(curveHint);
   el.appendChild(secRow);el.appendChild(secHint);
   el.appendChild(softRow);el.appendChild(softHint);
+  /* On a follower the transition and soft start belong to the chain leader; only the brightness
+     mapping is local to the read-only group light. */
+  if(isFollower()){secRow.hidden=true;secHint.hidden=true;softRow.hidden=true;softHint.hidden=true;}
 
   curve.addEventListener('change',function(){
     act('out-curve-'+gid,API+'/output',{gid:gid,curve:parseInt(curve.value,10)},null,null);
@@ -762,15 +833,44 @@ function syncOutput(g,c){
   setText(c.softValue,softText(sv));
   c.soft.setAttribute('aria-valuetext',softText(sv));
 }
+/* One group at a time: the same selector drives Light behavior and Acclimation, so the page never
+   repeats a card for every group. */
+function renderSettingsPicker(){
+  var row=byId('group-settings-heading'),sel=byId('settings-gid');
+  var gs=(state&&state.groups)||[],i,g,have=false,sig='';
+  if(!row||!sel)return;
+  row.hidden=!gs.length;
+  if(!gs.length){SET.gid=0;return;}
+  for(i=0;i<gs.length;i++) sig+=gs[i].gid+':'+(gs[i].name||'')+':'+(gs[i].kind||'')+'|';
+  if(sel.getAttribute('data-sig')!==sig){
+    sel.textContent='';
+    for(i=0;i<gs.length;i++){
+      g=gs[i];
+      var o=document.createElement('option');
+      o.value=String(g.gid);
+      o.textContent=(g.name||('Group '+g.gid))+(g.kind==='light'?' (light program)':'');
+      sel.appendChild(o);
+    }
+    sel.setAttribute('data-sig',sig);
+  }
+  for(i=0;i<gs.length;i++) if(gs[i].gid===SET.gid)have=true;
+  if(!have){
+    SET.gid=P.gid;
+    for(i=0;i<gs.length;i++) if(gs[i].gid===SET.gid)have=true;
+    if(!have) SET.gid=gs[0].gid;
+  }
+  sel.hidden=gs.length<=1;
+  if(document.activeElement!==sel) sel.value=String(SET.gid);
+}
 function renderOutputs(){
   var container=byId('outputs'),groups=(state&&state.groups)||[],seen={},i,g,c;
   if(!container)return;
   for(i=0;i<groups.length;i++){
     g=groups[i];
-    if(!g.output)continue;
+    if(g.gid!==SET.gid||!g.output)continue;
     seen[g.gid]=true;
     c=outCards[g.gid];
-    if(!c){c=makeOutputCard(g);outCards[g.gid]=c;container.appendChild(c.el);}
+    if(!c){c=makeOutputCard(g);outCards[g.gid]=c;container.appendChild(c.el);c.el.open=true;}
     syncOutput(g,c);
   }
   for(var gid in outCards){
@@ -803,9 +903,11 @@ function accStatus(a){
 }
 function makeAccCard(g){
   var gid=g.gid;
-  var el=document.createElement('div');el.className='card settings-block';el.id='acc-card-'+gid;
-  var h=document.createElement('h3');h.textContent='Acclimation';
-  var group=document.createElement('p');group.className='hint';group.id='acc-group-'+gid;
+  var el=document.createElement('details');el.className='card settings-block';el.id='acc-card-'+gid;
+  var sum=document.createElement('summary');
+  var h=document.createElement('span');h.className='summary-title';h.textContent='Acclimation';
+  var group=document.createElement('span');group.className='summary-sub';group.id='acc-group-'+gid;
+  sum.appendChild(h);sum.appendChild(group);
   var onRow=document.createElement('div');onRow.className='outopt';
   var on=document.createElement('input');on.type='checkbox';on.id='acc-on-'+gid;
   var onLabel=document.createElement('label');onLabel.setAttribute('for',on.id);
@@ -826,7 +928,8 @@ function makeAccCard(g){
   var status=document.createElement('p');status.className='out acc-status';status.id='acc-status-'+gid;
   var hint=document.createElement('p');hint.className='hint';hint.id='acc-hint-'+gid;
   hint.textContent='For a new tank or new corals: the whole program starts at a lower intensity and rises to full over the days you choose. It switches itself off when it gets there.';
-  el.appendChild(h);el.appendChild(group);el.appendChild(onRow);
+  el.appendChild(sum);
+  el.appendChild(onRow);
   el.appendChild(startRow);el.appendChild(daysRow);el.appendChild(status);el.appendChild(hint);
   on.addEventListener('change',function(){
     act('acc-on-'+gid,API+'/acclimation',{gid:gid,on:on.checked?1:0},null,null);
@@ -873,10 +976,12 @@ function renderAcc(){
   if(!container)return;
   for(i=0;i<groups.length;i++){
     g=groups[i];
-    if(!g.acclimation)continue;
+    if(g.gid!==SET.gid||!g.acclimation)continue;
+    /* A follower's bus group is a read-only view: acclimation is the leader's program. */
+    if(isFollower()&&g.kind!=='light')continue;
     seen[g.gid]=true;
     c=accCards[g.gid];
-    if(!c){c=makeAccCard(g);accCards[g.gid]=c;container.appendChild(c.el);}
+    if(!c){c=makeAccCard(g);accCards[g.gid]=c;container.appendChild(c.el);c.el.open=true;}
     syncAcc(g,c);
   }
   for(var gid in accCards){
@@ -931,11 +1036,18 @@ function renderGroupNames(){
   }
 }
 function renderSettings(){
+  renderSettingsPicker();
   renderGroupNames();
   renderOutputs();
   renderAcc();
   var ll=byId('location-line');
   if(ll)setText(ll,state&&state.location?locationText(state.location):'No location known yet.');
+  var sn=byId('scan-note');
+  if(sn)setText(sn,state&&/scanning/i.test(state.bus&&state.bus.state||'')?
+    'Scanning the K-Link bus…':
+    'Finds lamps and follower boards on the bus. Use Identify to flash one.');
+  var ns=byId('names-summary');
+  if(ns)setText(ns,state&&state.location?state.location.source+' · '+state.location.lat+', '+state.location.lon:'No location');
   var ls=(state.lamps||[]).slice(),seen={},i;
   ls.sort(function(a,b){return a.gid-b.gid||a.kid-b.kid;});
   var container=byId('lamps');
@@ -974,7 +1086,7 @@ function renderSettings(){
   search.hidden=ls.length<=8;
   if(search.hidden&&lampQuery){lampQuery='';search.value='';}
   applyLampFilter();
-  setText(byId('lamps-hint'),ls.length?'Known lamps on the bus.':'No lamps known yet. Find lamps runs a scan.');
+  setText(byId('lamps-hint'),ls.length?(ls.length===1?'1 lamp on the bus.':ls.length+' lamps on the bus.'):'No lamps known yet.');
 }
 function render(){
   renderHeader();
@@ -1032,8 +1144,9 @@ var PRESETS=[
   ['Daytime plateau',[[479,0,0],[480,100,90],[1079,100,90],[1080,0,0]]],
   ['Always on',[[0,100,90]]]
 ];
-/* Sun and moon program state: which day is on screen and the downloaded days by key. */
-var G={mode:'today',date:'',cache:{},loading:'',seq:0,seen:''};
+/* Sky program state: which day is on screen and the downloaded days by key. */
+var SKY_KEYS=['layers','peak','hours','glow','amber','ramp','shift','moon','phase'];
+var G={mode:'today',date:'',cache:{},loading:'',seq:0,seen:'',skyPending:{}};
 var P={gid:loadGid(),slots:[],sel:0,ch:0,scrub:-1,drag:false,dirty:0,
   dev:{},hist:{},arm:false,guide:null,basesInit:false,ro:false};
 /* Color-wheel editor state. The snap request chain is separate from the point-preview chain. */
@@ -1058,8 +1171,8 @@ function se(tag,attrs,parent){
 }
 function cl(v,a,b){return v<a?a:v>b?b:v;}
 function hhmm(m){return m<0?'--:--':('0'+Math.floor(m/60)).slice(-2)+':'+('0'+m%60).slice(-2);}
-/* ---- sun and moon program sources ---- */
-var SRC_NAMES=['points','sun','moon'];
+/* ---- Sky program: sun and moon layers ---- */
+var SRC_NAMES=['points','sky'];
 var DATE_CHIPS=[['Mar 20',3,20],['Jun 21',6,21],['Sep 22',9,22],['Dec 21',12,21]];
 function pad2(v){return ('0'+v).slice(-2);}
 function dateStr(d){return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate());}
@@ -1067,9 +1180,50 @@ function todayStr(){return dateStr(new Date());}
 function chipDate(month,day){return new Date().getFullYear()+'-'+pad2(month)+'-'+pad2(day);}
 function hasSource(g){return !!g&&g.source!==undefined&&g.source!==null;}
 function genOn(g){return hasSource(g)&&g.source!==0;}
+/* A lamp that can make blue can show the Sky program's Moon layer. */
+function groupCanMoon(g){
+  if(g&&typeof g.can_moon==='boolean')return g.can_moon;
+  return !!g&&(g.model==='tuna_blue'||g.model==='light_rgb'||g.model==='light_rgbw');
+}
 function sourceName(n){return SRC_NAMES[n]||'points';}
 function genKey(g,date){return g.gid+'/'+sourceName(g.source)+'/'+date;}
 function genDate(){return G.mode==='date'&&G.date?G.date:todayStr();}
+/* The settings as the user sees them: the last poll, with writes that are still on their way on top. */
+function skyShown(g){
+  var s={},base=g&&g.sky||{},i,k;
+  for(i=0;i<SKY_KEYS.length;i++){k=SKY_KEYS[i];s[k]=base[k];}
+  for(var pk in G.skyPending){
+    if(!Object.prototype.hasOwnProperty.call(G.skyPending,pk))continue;
+    var cut=pk.indexOf(':');
+    if(parseInt(pk.slice(0,cut),10)!==g.gid)continue;
+    s[pk.slice(cut+1)]=G.skyPending[pk];
+  }
+  return s;
+}
+function skyClone(s){
+  var out={},i;
+  for(i=0;i<SKY_KEYS.length;i++)out[SKY_KEYS[i]]=s?s[SKY_KEYS[i]]:undefined;
+  return out;
+}
+function skySnapshot(g){return skyClone(skyShown(g));}
+function sameSky(a,b){
+  if(!a||!b)return true;
+  for(var i=0;i<SKY_KEYS.length;i++)if(a[SKY_KEYS[i]]!==b[SKY_KEYS[i]])return false;
+  return true;
+}
+/* Drop writes the poll has confirmed. Once the device shows every pending value, the device has rebuilt
+   the day too, so the downloaded previews are stale and are fetched again. */
+function settleSky(g){
+  var gid=g.gid,done=false,left=0,pk,cut;
+  for(pk in G.skyPending){
+    if(!Object.prototype.hasOwnProperty.call(G.skyPending,pk))continue;
+    cut=pk.indexOf(':');
+    if(parseInt(pk.slice(0,cut),10)!==gid)continue;
+    if(g.sky&&g.sky[pk.slice(cut+1)]===G.skyPending[pk]){delete G.skyPending[pk];done=true;}
+    else left++;
+  }
+  if(done&&!left){G.cache={};G.loading='';G.seq++;}
+}
 function genPoints(g){
   if(!genOn(g))return [];
   var e=G.cache[genKey(g,genDate())];
@@ -1114,6 +1268,14 @@ function sunSummaryText(s){
   if(s.always_up)return 'The sun stays up all day';
   if(!s.length)return 'The sun does not rise';
   return 'Sunrise '+hhmm(s.sunrise)+' · sunset '+hhmm(s.sunset)+' · '+sumDuration(s.length);
+}
+/* Sky carries the sun, the moon, or both; show whichever halves of the day it has. */
+function skySummaryText(s){
+  if(!s)return '';
+  var hasSun=s.sunrise!==undefined||s.sunset!==undefined||s.always_up!==undefined;
+  var sun=hasSun?sunSummaryText(s):'';
+  var moon=s.moon?moonSummaryText(s.moon):(hasSun?'':moonSummaryText(s));
+  return sun&&moon?sun+' · '+moon:(sun||moon);
 }
 function moonSummaryText(s){
   if(!s)return '';
@@ -1459,7 +1621,8 @@ function lerp(a,b,e,s){var d=(b-a)*e;return a+(d>=0?Math.floor(d/s):-Math.floor(
 function hist(gid){
   gid=gid==null?P.gid:gid;
   var h=P.hist[gid];
-  if(!h)h=P.hist[gid]={undo:[],redo:[],base:null,last:null};
+  if(!h)h=P.hist[gid]={undo:[],redo:[],base:null,last:null,
+    skyUndo:[],skyRedo:[],skyBase:null,skyLast:null};
   return h;
 }
 function slotDiff(a,b,g){
@@ -1475,7 +1638,11 @@ function slotsEqual(a,b,g){
 }
 function setBases(s){
   if(!s||!s.groups)return;
-  for(var i=0;i<s.groups.length;i++)hist(s.groups[i].gid).base=cloneSlots(s.groups[i].slots);
+  for(var i=0;i<s.groups.length;i++){
+    var g=s.groups[i];
+    hist(g.gid).base=cloneSlots(g.slots);
+    if(g.sky)hist(g.gid).skyBase=skySnapshot(g);
+  }
 }
 /* Remember what the device holds, from a state poll or from a write that succeeded. */
 function applyDev(gid,slot,params){
@@ -1861,10 +2028,14 @@ function buildProg(){
   var root=byId('prog-root');
   root.textContent='';
   pg={};
-  pg.gseg=mk('div','seg',root);
+  pg.gseg=mk('div','gselrow',root);
   pg.gseg.setAttribute('role','group');
   pg.gseg.setAttribute('aria-label','Lamp group');
   pg.gseg.hidden=true;
+  mk('p','hint',root,'Lamps are managed in Settings > Lamps, not here.');
+  pg.orphanHint=mk('p','hint',root);
+  pg.orphanHint.id='prog-orphans';
+  pg.orphanHint.hidden=true;
   /* The source is a segmented control in the same shape as the effect speed row. */
   pg.srcSeg=mk('div','seg fxseg',root);
   pg.srcSeg.id='prog-source';
@@ -1872,13 +2043,18 @@ function buildProg(){
   pg.srcSeg.setAttribute('aria-label','Program source');
   pg.srcSeg.hidden=true;
   pg.srcBtns=[];
-  ['My points','Sun','Moon'].forEach(function(label,idx){
-    var b=makeButton(label,'');
-    b.id='prog-source-'+SRC_NAMES[idx];
+  [['My points','points'],['Sky','sky']].forEach(function(item){
+    var b=makeButton(item[0],'');
+    b.id='prog-source-'+item[1];
     b.setAttribute('aria-pressed','false');
     b.addEventListener('click',function(){
       if(!pg.g)return;
-      act('source-'+pg.g.gid,API+'/source',{gid:pg.g.gid,source:SRC_NAMES[idx]},null,null);
+      if(item[1]==='points')
+        postSource('points');
+      else if(pg.g.source!==0)
+        return;
+      else
+        postSource('sky');
     });
     pg.srcSeg.appendChild(b);pg.srcBtns.push(b);
   });
@@ -2138,14 +2314,44 @@ function buildProg(){
     fieldLabel(label,id,row);
     var sl=mk('input',null,row);
     sl.type='range';sl.id=id;sl.min=String(min);sl.max=String(max);sl.step='1';
+    /* The color-bearing settings carry their own tint on the track, like the channel sliders. */
+    if(id==='sky-peak'||id==='sky-glow'||id==='sky-amber'||id==='sky-moon')sl.className='trk';
     var val=mk('span','outval',row);val.id=id+'-value';
     var h=mk('p','hint',parent,hint);
     return {row:row,sl:sl,val:val,hint:h};
   }
-  pg.sky=mk('div','card settings-block sky',root);
+  pg.sky=mk('div','panel sky',wrap);
   pg.sky.id='prog-sky';
   pg.sky.hidden=true;
-  mk('h3',null,pg.sky,'Sun and moon');
+  mk('h3',null,pg.sky,'Sky');
+  var skyToggleRow=mk('div','pbtnrow sky-toggles',pg.sky);
+  var sunToggle=mk('label','toggle',skyToggleRow);
+  pg.sunOn=mk('input',null,sunToggle);
+  pg.sunOn.type='checkbox';pg.sunOn.id='sky-sun-on';
+  sunToggle.appendChild(document.createTextNode(' Sun'));
+  var moonToggle=mk('label','toggle',skyToggleRow);
+  pg.moonLabel=moonToggle;
+  pg.moonOn=mk('input',null,moonToggle);
+  pg.moonOn.type='checkbox';pg.moonOn.id='sky-moon-on';
+  moonToggle.appendChild(document.createTextNode(' Moon'));
+  function skySetSource(){
+    var g=pg.g;
+    if(!g)return;
+    var sun=pg.sunOn.checked,moon=groupCanMoon(g)&&pg.moonOn.checked;
+    var layers=(sun?1:0)|(moon?2:0);
+    var shown=skyShown(g).layers,current=shown==null?3:(shown|0);
+    if(layers===current)return;
+    skyPost('layers',layers);
+  }
+  function skyToggleOff(cb){
+    /* Leaving both off would be no program at all; put the layer the user just cleared back. */
+    if(pg.sunOn.checked||pg.moonOn.checked)return false;
+    cb.checked=true;
+    toast('Turn on the Sun or the Moon, or choose My points.','err');
+    return true;
+  }
+  pg.sunOn.addEventListener('change',function(){if(!skyToggleOff(pg.sunOn))skySetSource();});
+  pg.moonOn.addEventListener('change',function(){if(!skyToggleOff(pg.moonOn))skySetSource();});
   pg.locLine=mk('p','hint',pg.sky);
   pg.locLine.id='prog-location';
   pg.locBtn=makeButton('Set a location in Settings to use the sun or moon.','btn small');
@@ -2193,11 +2399,6 @@ function buildProg(){
   pg.amber=skyRange(pg.sunSec,'sky-amber','Night glow',0,10,'A dim amber light through the night.');
   pg.amber.sl.addEventListener('input',function(){setText(pg.amber.val,pg.amber.sl.value+'%');});
   pg.amber.sl.addEventListener('change',function(){skyPost('amber',parseInt(pg.amber.sl.value,10)||0);});
-  pg.more=mk('details','sky-more',pg.sunSec);
-  mk('summary',null,pg.more,'More');
-  pg.shift=skyRange(pg.more,'sky-shift','Time shift',-120,120,'Moves the whole day earlier or later, in minutes.');
-  pg.shift.sl.addEventListener('input',function(){setText(pg.shift.val,shiftText(parseInt(pg.shift.sl.value,10)||0));});
-  pg.shift.sl.addEventListener('change',function(){skyPost('shift',parseInt(pg.shift.sl.value,10)||0);});
   pg.moonSec=mk('div',null,pg.sky);
   pg.moon=skyRange(pg.moonSec,'sky-moon','Maximum moonlight',0,100,'The brightest the moon program gets.');
   pg.moon.sl.addEventListener('input',function(){setText(pg.moon.val,pg.moon.sl.value+'%');});
@@ -2207,7 +2408,26 @@ function buildProg(){
   pg.phase=mk('input',null,phaseRow);
   pg.phase.type='checkbox';pg.phase.id='sky-phase';
   pg.phase.addEventListener('change',function(){skyPost('phase',pg.phase.checked?1:0);});
-  mk('p','hint',pg.moonSec,"The moon lights only at night; the lamp stays off by day. Use it on a night light.");
+  pg.moonHint=mk('p','hint',pg.moonSec,"The moon lights only at night; the lamp stays off by day. Use it on a night light.");
+  /* Time shift moves the whole day, so it is shared by both layers and always visible. */
+  pg.timeSec=mk('div',null,pg.sky);
+  pg.shift=skyRange(pg.timeSec,'sky-shift','Time shift',-120,120,'Moves the whole day earlier or later, in minutes.');
+  pg.shift.sl.addEventListener('input',function(){setText(pg.shift.val,shiftText(parseInt(pg.shift.sl.value,10)||0));});
+  pg.shift.sl.addEventListener('change',function(){skyPost('shift',parseInt(pg.shift.sl.value,10)||0);});
+  var skyHistRow=mk('div','pbtnrow',pg.sky);
+  pg.skyUndoBtn=makeButton('Undo','btn small');
+  pg.skyUndoBtn.id='prog-sky-undo';
+  pg.skyUndoBtn.setAttribute('aria-label','Undo the last sun or moon setting');
+  pg.skyRedoBtn=makeButton('Redo','btn small');
+  pg.skyRedoBtn.id='prog-sky-redo';
+  pg.skyRedoBtn.setAttribute('aria-label','Redo the last sun or moon setting');
+  pg.skyRevertBtn=makeButton('Revert all','btn small danger');
+  pg.skyRevertBtn.id='prog-sky-revert';
+  pg.skyRevertBtn.setAttribute('aria-label','Revert the sun and moon settings to how they were when you opened this tab');
+  pg.skyUndoBtn.addEventListener('click',skyUndo);
+  pg.skyRedoBtn.addEventListener('click',skyRedo);
+  pg.skyRevertBtn.addEventListener('click',skyRevert);
+  skyHistRow.appendChild(pg.skyUndoBtn);skyHistRow.appendChild(pg.skyRedoBtn);skyHistRow.appendChild(pg.skyRevertBtn);
   var copyRow=mk('div','pbtnrow',pg.sky);
   pg.copyBtn=makeButton('Make an editable copy','btn small');
   pg.copyBtn.id='prog-copy';
@@ -2323,11 +2543,110 @@ function rampText(v){
   if(!h)return m+' min';
   return m?h+' h '+m+' min':h+' h';
 }
+/* The color a setting produces, as a range track: dark at the low end, the light it adds at the high end. */
+function skyTrack(g,key){
+  if(key==='peak') return 'linear-gradient(to right,#1b232b,#ffffff)';
+  if(key==='glow') return g.model==='tuna_blue'?
+    'linear-gradient(to right,#1b232b,#8a2be2)':'linear-gradient(to right,#1b232b,#ff8a3c)';
+  if(key==='amber') return g.model==='tuna_blue'?
+    'linear-gradient(to right,#1b232b,#8a2be2)':'linear-gradient(to right,#1b232b,#ffaa00)';
+  if(key==='moon') return 'linear-gradient(to right,#1b232b,#4a6bff)';
+  return '';
+}
+function skyKey(gid,key){return gid+':'+key;}
+function skyPendingClear(gid,settings){
+  for(var k in settings)if(Object.prototype.hasOwnProperty.call(settings,k))delete G.skyPending[skyKey(gid,k)];
+}
+/* Send any subset of the settings, holding the written values on screen until the poll confirms them. */
+function skySend(gid,settings,okMsg,after){
+  if(busy['sky-all-'+gid])return;
+  var p={gid:gid},k,sent=false;
+  for(var i=0;i<SKY_KEYS.length;i++){
+    k=SKY_KEYS[i];
+    if(!Object.prototype.hasOwnProperty.call(settings,k))continue;
+    p[k]=settings[k];sent=true;
+    G.skyPending[skyKey(gid,k)]=settings[k];
+  }
+  if(!sent){if(after)after(null);return;}
+  act('sky-all-'+gid,API+'/sky',p,okMsg,function(err){
+    if(err){skyPendingClear(gid,settings);if(after)after(err);return;}
+    /* The device applies state changes on its main loop; ask again shortly so the new day is shown at once. */
+    setTimeout(function(){if(pg&&pg.g&&pg.g.gid===gid)refresh();},300);
+    if(after)after(null);
+  });
+}
+function pushSkyUndo(gid,key,from,to){
+  var h=hist(gid),now=Date.now();
+  if(h.skyLast&&h.skyLast.key===key&&now-h.skyLast.t<1000){
+    h.skyLast.to=to;h.skyLast.t=now;
+  }else{
+    var e={key:key,from:from,to:to,t:now};
+    h.skyUndo.push(e);
+    if(h.skyUndo.length>50)h.skyUndo.shift();
+    h.skyLast=e;
+  }
+  h.skyRedo=[];
+  syncSkyToolbar();
+}
+function postSource(source){
+  if(!pg||!pg.g)return;
+  var gid=pg.g.gid;
+  act('source-'+gid,API+'/source',{gid:gid,source:source},null,function(err){
+    if(!err)setTimeout(function(){if(pg&&pg.g&&pg.g.gid===gid)refresh();},300);
+  });
+}
 function skyPost(key,val){
   if(!pg||!pg.g)return;
-  var p={gid:pg.g.gid};
+  var gid=pg.g.gid;
+  if(busy['sky-'+key+'-'+gid])return;
+  var from=skyShown(pg.g)[key],p={gid:gid};
   p[key]=val;
-  act('sky-'+key+'-'+pg.g.gid,API+'/sky',p,null,null);
+  G.skyPending[skyKey(gid,key)]=val;
+  act('sky-'+key+'-'+gid,API+'/sky',p,null,function(err){
+    if(err){delete G.skyPending[skyKey(gid,key)];return;}
+    pushSkyUndo(gid,key,from,val);
+    setTimeout(function(){if(pg&&pg.g&&pg.g.gid===gid)refresh();},300);
+  });
+}
+function skyUndo(){
+  var h=hist();
+  if(!pg||!pg.g||!h.skyUndo.length||busy['sky-all-'+pg.g.gid])return;
+  var e=h.skyUndo.pop(),set={};
+  h.skyRedo.push(e);h.skyLast=null;
+  if(e.full)set=e.from;
+  else set[e.key]=e.from;
+  skySend(pg.g.gid,set,'Setting undone');
+  syncSkyToolbar();
+}
+function skyRedo(){
+  var h=hist();
+  if(!pg||!pg.g||!h.skyRedo.length||busy['sky-all-'+pg.g.gid])return;
+  var e=h.skyRedo.pop(),set={};
+  h.skyUndo.push(e);h.skyLast=null;
+  if(e.full)set=e.to;
+  else set[e.key]=e.to;
+  skySend(pg.g.gid,set,'Setting redone');
+  syncSkyToolbar();
+}
+function skyRevert(){
+  var h=hist(),g=pg&&pg.g;
+  if(!g||!h.skyBase||busy['sky-all-'+g.gid])return;
+  var before=skySnapshot(g);
+  if(sameSky(before,h.skyBase))return;
+  var to=skyClone(h.skyBase);
+  h.skyUndo.push({full:true,from:before,to:to,t:Date.now()});
+  if(h.skyUndo.length>50)h.skyUndo.shift();
+  h.skyRedo=[];h.skyLast=null;
+  skySend(g.gid,to,'Sky settings reverted');
+  syncSkyToolbar();
+}
+function syncSkyToolbar(){
+  if(!pg||!pg.g||!pg.skyUndoBtn)return;
+  var h=hist(),same=!h.skyBase||sameSky(skySnapshot(pg.g),h.skyBase);
+  pg.skyUndoBtn.disabled=!h.skyUndo.length;
+  pg.skyRedoBtn.disabled=!h.skyRedo.length;
+  pg.skyRevertBtn.hidden=same;
+  pg.skyRevertBtn.disabled=same;
 }
 function pickDate(date){
   if(!date)return;
@@ -2335,17 +2654,17 @@ function pickDate(date){
   if(pg)genPaint();
 }
 function syncSource(g){
-  var has=hasSource(g);
+  var has=hasSource(g),sky=has&&g.source!==0;
   pg.srcSeg.hidden=!has;
-  /* The moon needs blue light: the device lists the sources this program can run. */
-  var avail=(has&&g.sources)||[0,1,2];
   for(var i=0;i<pg.srcBtns.length;i++){
-    pg.srcBtns[i].hidden=avail.indexOf(i)<0;
-    var on=has&&i===g.source;
+    pg.srcBtns[i].hidden=!has;
+    var on=has&&(i===0?g.source===0:sky);
     pg.srcBtns[i].className=on?'on':'';
     pg.srcBtns[i].setAttribute('aria-pressed',on?'true':'false');
   }
-  var seen=has?g.gid+'/'+g.source:'-';
+  setText(pg.srcBtns[1],'Sky');
+  /* Toggling the Sun or Moon layers inside Sky keeps the previewed day; leaving Sky resets it. */
+  var seen=has?g.gid+'/'+(sky?'sky':'points'):'-';
   if(G.seen!==seen){
     G.seen=seen;G.mode='today';G.date='';G.cache={};G.loading='';G.seq++;
     P.sel=0;P.scrub=-1;P.arm=false;P.drag=false;
@@ -2358,8 +2677,17 @@ function syncGenUi(g){
   pg.previewNote.hidden=!(ro&&G.mode==='date');
   pg.summary.hidden=!ro;
   pg.sky.hidden=!ro;
-  pg.sunSec.hidden=g.source!==1;
-  pg.moonSec.hidden=g.source!==2;
+  var s2=skyShown(g);
+  var canMoon=groupCanMoon(g),layers=s2.layers==null?3:(s2.layers|0);
+  var sunOn=ro&&(layers&1)!==0,moonOn=ro&&canMoon&&(layers&2)!==0;
+  pg.sunOn.checked=sunOn;
+  pg.moonOn.checked=moonOn;
+  pg.moonLabel.hidden=!canMoon;
+  pg.sunSec.hidden=!sunOn;
+  pg.moonSec.hidden=!moonOn;
+  setText(pg.moonHint,sunOn?
+    "The moon is added over the sun's dark hours, on top of any night glow. Set Maximum moonlight to 0 to leave it out.":
+    'The moon lights only at night; the lamp stays off by day. Use it on a night light.');
   for(var i=0;i<pg.dateBtns.length;i++){
     var b=pg.dateBtns[i],d=b.getAttribute('data-date');
     var on=i===0?G.mode==='today':(G.mode==='date'&&G.date===d);
@@ -2368,9 +2696,13 @@ function syncGenUi(g){
   }
   if(document.activeElement!==pg.dateInput)pg.dateInput.value=G.mode==='date'?G.date:'';
   var s=genSummary(g);
-  setText(pg.summary,g.source===1?sunSummaryText(s):g.source===2?moonSummaryText(s):'');
+  setText(pg.summary,ro?skySummaryText(s):'');
+  syncSkyToolbar();
   if(!ro)return;
-  var s2=g.sky||{};
+  pg.peak.sl.style.setProperty('--trk',skyTrack(g,'peak'));
+  pg.glow.sl.style.setProperty('--trk',skyTrack(g,'glow'));
+  pg.amber.sl.style.setProperty('--trk',skyTrack(g,'amber'));
+  pg.moon.sl.style.setProperty('--trk',skyTrack(g,'moon'));
   /* Settings follow the poll, but never pull a control out from under the user's fingers. */
   if(document.activeElement!==pg.peak.sl)pg.peak.sl.value=String(s2.peak);
   setText(pg.peak.val,s2.peak+'%');
@@ -2382,9 +2714,15 @@ function syncGenUi(g){
   if(document.activeElement!==pg.ramp.sl)pg.ramp.sl.value=String(ramp);
   setText(pg.ramp.val,rampText(ramp));
   pg.ramp.sl.setAttribute('aria-valuetext',rampText(ramp));
-  var tuna=g.model==='tuna_sun';
-  pg.amber.row.hidden=!tuna;
-  pg.amber.hint.hidden=!tuna;
+  var tuna=g.model==='tuna_sun',blue=g.model==='tuna_blue',nightGlow=tuna||blue;
+  pg.amber.row.hidden=!nightGlow;
+  pg.amber.hint.hidden=!nightGlow;
+  setText(pg.amber.hint,tuna?'A dim amber light through the night.':
+    blue?'A dim violet light through the night.':'');
+  setText(pg.glow.hint,tuna?
+    'How strong the red and amber are at the start and end of the day. The shipped curve uses 10 % red and 30 % amber.':
+    blue?'A little extra violet at the start and end of the day; violet otherwise follows intensity.':
+    'How strong the warm color is at the start and end of the day.');
   if(document.activeElement!==pg.amber.sl)pg.amber.sl.value=String(s2.amber);
   setText(pg.amber.val,s2.amber+'%');
   pg.amber.sl.setAttribute('aria-valuetext',s2.amber+'%');
@@ -2450,47 +2788,45 @@ function genPaint(){
   updateScrub();
   draw();
 }
+function stepGroup(delta){
+  var gs=(pg&&pg.groups)||[],idx=-1,i;
+  for(i=0;i<gs.length;i++)if(gs[i].gid===P.gid)idx=i;
+  var next=idx+delta;
+  if(next<0||next>=gs.length)return;
+  chooseGroup(gs[next].gid);
+}
 function syncGroups(gs,g){
-  var sig=[],i,useSelect=gs.length>3;
+  var sig=[],i;
   for(i=0;i<gs.length;i++)sig.push(gs[i].gid+'='+(gs[i].name||''));
   sig=sig.join('|');
-  /* With many groups a native select is easier than a row of tiny buttons. */
-  if(pg.gsig!==sig||pg.gform!==useSelect){
-    pg.gsig=sig;pg.gform=useSelect;
+  /* One dropdown with an arrow on each side: the same control for two groups or twenty. */
+  if(pg.gsig!==sig){
+    pg.gsig=sig;
     pg.gseg.textContent='';
-    if(useSelect){
-      var sel=document.createElement('select');
-      sel.className='gsel';
-      sel.setAttribute('aria-label','Lamp group');
-      gs.forEach(function(x){
-        var o=document.createElement('option');
-        o.value=String(x.gid);o.textContent=x.name||('Group '+x.gid);
-        sel.appendChild(o);
-      });
-      sel.addEventListener('change',function(){chooseGroup(parseInt(sel.value,10));});
-      pg.gseg.appendChild(sel);
-      pg.gsel=sel;
-    }else{
-      pg.gsel=null;
-      gs.forEach(function(x){
-        var b=makeButton(x.name||('Group '+x.gid),'');
-        b.setAttribute('data-gid',String(x.gid));
-        b.addEventListener('click',function(){chooseGroup(x.gid);});
-        pg.gseg.appendChild(b);
-      });
-    }
+    var prev=makeButton('‹','gstep');
+    prev.setAttribute('aria-label','Previous lamp group');
+    prev.addEventListener('click',function(){stepGroup(-1);});
+    var sel=document.createElement('select');
+    sel.className='gsel';
+    sel.setAttribute('aria-label','Lamp group');
+    sel.addEventListener('change',function(){chooseGroup(parseInt(sel.value,10));});
+    gs.forEach(function(x){
+      var o=document.createElement('option');
+      o.value=String(x.gid);o.textContent=x.name||('Group '+x.gid);
+      sel.appendChild(o);
+    });
+    var next=makeButton('›','gstep');
+    next.setAttribute('aria-label','Next lamp group');
+    next.addEventListener('click',function(){stepGroup(1);});
+    pg.gseg.appendChild(prev);pg.gseg.appendChild(sel);pg.gseg.appendChild(next);
+    pg.gprev=prev;pg.gsel=sel;pg.gnext=next;
   }
   pg.gseg.hidden=gs.length<2;
-  if(pg.gsel){
-    if(document.activeElement!==pg.gsel) pg.gsel.value=String(g.gid);
-    return;
-  }
-  var bs=pg.gseg.children;
-  for(i=0;i<bs.length;i++){
-    var on=parseInt(bs[i].getAttribute('data-gid'),10)===g.gid;
-    bs[i].className=on?'on':'';
-    bs[i].setAttribute('aria-pressed',on?'true':'false');
-  }
+  if(document.activeElement!==pg.gsel) pg.gsel.value=String(g.gid);
+  var idx=-1;
+  for(i=0;i<gs.length;i++)if(gs[i].gid===g.gid)idx=i;
+  pg.gprev.disabled=idx<=0;
+  pg.gnext.disabled=idx<0||idx>=gs.length-1;
 }
 function markLegend(){
   var bs=pg.legend.children;
@@ -2721,6 +3057,21 @@ function draw(){
     if(fe)fe.focus();
   }
 }
+function syncOrphanHint(s){
+  if(!pg||!pg.orphanHint)return;
+  var known={},gids=[],i,lamps=s.lamps||[],groups=s.groups||[];
+  for(i=0;i<groups.length;i++)known[groups[i].gid]=true;
+  for(i=0;i<lamps.length;i++){
+    var gid=lamps[i].gid;
+    if(!known[gid]&&gids.indexOf(gid)<0)gids.push(gid);
+  }
+  gids.sort(function(a,b){return a-b;});
+  pg.orphanHint.hidden=!gids.length;
+  if(!gids.length){setText(pg.orphanHint,'');return;}
+  var subject=gids.length===1?'Group '+gids[0]:'Groups '+gids.join(', ');
+  setText(pg.orphanHint,subject+(gids.length===1?' has':' have')+
+    ' lamps but no program. Add the GID or move them in Settings > Lamps.');
+}
 function renderProgram(s){
   if(!s)return;
   var root=byId('prog-root'),gs=s.groups||[],i,g=null;
@@ -2735,6 +3086,7 @@ function renderProgram(s){
   }
   if(root.getAttribute('data-empty')==='1'){root.removeAttribute('data-empty');root.textContent='';}
   if(!pg)buildProg();
+  syncOrphanHint(s);
   for(i=0;i<gs.length;i++)if(gs[i].gid===P.gid)g=gs[i];
   if(!g){
     g=gs[0];P.gid=g.gid;saveGid(g.gid);P.sel=0;P.scrub=-1;P.dirty=0;P.drag=false;
@@ -2745,6 +3097,7 @@ function renderProgram(s){
   var ro=genOn(g);
   pg.ro=ro; /* every poll: leaving Sun or Moon must make the chart editable again */
   if(!P.basesInit){P.basesInit=true;setBases(s);}
+  if(ro)settleSky(g);
   if(ro){
     syncGenerated(g);
   }else if(!P.drag&&Date.now()-P.dirty>=1500){
@@ -2769,6 +3122,14 @@ byId('writes-on').addEventListener('click',function(){setWrites(true);});
 byId('writes-toggle').addEventListener('click',function(){
   setWrites(!(state&&state.bus.want_writes));
 });
+byId('settings-gid').addEventListener('change',function(){
+  var v=parseInt(this.value,10)||0;
+  if(!v)return;
+  SET.gid=v;
+  renderOutputs();
+  renderAcc();
+  updateBusy();
+});
 byId('scan-btn').addEventListener('click',function(){
   act('scan',API+'/scan',{},'Scan started',null);
 });
@@ -2788,10 +3149,11 @@ document.addEventListener('keydown',function(ev){
   var k=(ev.key||'').toLowerCase();
   if(k==='z'){
     ev.preventDefault();
-    if(ev.shiftKey)redo();else undo();
+    if(genOn(pg.g)){if(ev.shiftKey)skyRedo();else skyUndo();}
+    else if(ev.shiftKey)redo();else undo();
   }else if(k==='y'){
     ev.preventDefault();
-    redo();
+    if(genOn(pg.g))skyRedo();else redo();
   }
 });
 byId('lamp-search').addEventListener('input',function(ev){
