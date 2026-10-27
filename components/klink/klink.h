@@ -30,6 +30,7 @@
 #include "klink_guard.h"
 #include "klink_inventory.h"
 #include "klink_mode.h"
+#include "klink_fx_map.h"
 #include "klink_names.h"
 #include "klink_weather.h"
 #include "klink_output.h"
@@ -171,6 +172,10 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
   const kessil::klink::NameTable &names() const { return names_; }
   // Set or clear a lamp nickname (empty clears); false and `error` filled on invalid input.
   bool set_name(uint32_t kid, const std::string &name, std::string &error);
+  // Group nicknames, by gid: what the page calls a group. The Home Assistant entity keeps its YAML name.
+  const kessil::klink::NameTable &group_names() const { return group_names_; }
+  bool check_group_name(uint32_t gid, const std::string &name, std::string &error) const;
+  bool set_group_name(uint32_t gid, const std::string &name, std::string &error);
   // Identify every known lamp in `gid`. Returns false when the group has no lamps.
   bool identify_gid(uint8_t gid);
   uint32_t bus_timeouts() const { return bus_.timeouts(); }
@@ -211,6 +216,7 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
   void observe_(const std::vector<uint8_t> &frame);
   void save_inventory_();
   void save_names_();
+  void save_group_names_();
   void read_next_identity_();
 
   UartIo io_;
@@ -220,6 +226,8 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
   ESPPreferenceObject pref_;
   kessil::klink::NameTable names_;
   ESPPreferenceObject names_pref_;
+  kessil::klink::NameTable group_names_;
+  ESPPreferenceObject group_names_pref_;
   std::vector<KLinkGroup *> groups_;
   std::vector<ProgramHost *> programs_;
   Coordinate location_[2];  // latitude, longitude
@@ -277,16 +285,18 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
 };
 
 // One K-Link group: the manual-override light and the schedule that drives it.
-// What a group's lamps are. The Tuna Sun is tested on lamps; the others are untested or raw.
+// What a group's lamps are. The Tuna Sun is tested on lamps; the Tuna Blue and the Refugium follow Kessil's
+// published channel layouts and are untested.
 enum class GroupModel : uint8_t {
   TUNA_SUN,   // UI1 intensity, UI2 color temperature, UI4 red, UI5 amber (UI3 unused)
-  TUNA_BLUE,  // provisional: channel meanings not established, so every channel is a raw value
-  GENERIC,    // any other model: raw channels
+  TUNA_BLUE,  // UI1 intensity, UI2 blue to white, UI3 violet, UI4 red, UI5 green
+  REFUGIUM,   // UI1 intensity, UI2 blue to red (0-240), UI4 white, UI5 green (UI3 unused)
 };
 
 // The color models of the Tuna lights (tables generated at compile time from klink_colors.py).
 extern const kessil::klink::ColorSpec COLOR_SUN;
 extern const kessil::klink::ColorSpec COLOR_BLUE;
+extern const kessil::klink::ColorSpec COLOR_REFUGIUM;
 
 // What a group last put on its light entity (the schedule's value or a snapped color), so the light's
 // own write_state() call for that value is recognized as ours and not taken for a user command.
@@ -301,6 +311,11 @@ struct LightShown {
 
 class KLinkGroup : public ProgramBase, public light::LightOutput, public Component {
  public:
+  // Groups register when they are constructed: a saved effect is restored while the light sets up, before this
+  // group's own setup() runs, and must already find its group.
+  KLinkGroup();
+  // The group behind a light's output, or nullptr when the light is not one of ours (an ordinary ESPHome light).
+  static KLinkGroup *from_output(const light::LightOutput *output);
   const char *kind() const override { return "bus"; }
   void set_model(GroupModel model) { model_ = model; }
   GroupModel model() const { return model_; }
@@ -314,9 +329,13 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
         return &kessil::klink::LABELS_TUNA_SUN;
       case GroupModel::TUNA_BLUE:
         return &kessil::klink::LABELS_TUNA_BLUE;
-      default:
-        return &kessil::klink::LABELS_GENERIC;
+      case GroupModel::REFUGIUM:
+        return &kessil::klink::LABELS_REFUGIUM;
     }
+    return &kessil::klink::LABELS_TUNA_SUN;
+  }
+  const uint8_t *channel_max() const override {
+    return this->model_ == GroupModel::REFUGIUM ? kessil::klink::CHANNEL_MAX_REFUGIUM : kessil::klink::CHANNEL_MAX;
   }
   void set_hub(KLinkHub *hub) { hub_ = hub; }
   void set_gid(uint8_t gid) { gid_ = gid; }
@@ -343,16 +362,17 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
     }
     return "Group " + std::to_string(this->gid_);
   }
-  // Web API: the model key used in YAML ("tuna_sun", "tuna_blue", "generic").
+  // Web API: the model key used in YAML ("tuna_sun", "tuna_blue", "refugium").
   std::string model_name() const override {
     switch (this->model_) {
       case GroupModel::TUNA_SUN:
         return "tuna_sun";
       case GroupModel::TUNA_BLUE:
         return "tuna_blue";
-      default:
-        return "generic";
+      case GroupModel::REFUGIUM:
+        break;
     }
+    return "refugium";
   }
   uint8_t gid() const override { return gid_; }
   // UI2 (0-255, models without a color temperature) and UI3-UI5 (percent) from the number entities.
@@ -362,7 +382,7 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   void add_on_extras_callback(std::function<void()> &&cb) override { extras_cb_.add(std::move(cb)); }
   void set_extra_silent(uint8_t channel, uint8_t value) override {
     if (channel == 2)
-      manual_color_ = value;
+      manual_color_ = value > channel_max()[1] ? channel_max()[1] : value;
     else if (channel >= 3 && channel <= 5)
       extras_[channel - 3] = value > 100 ? 100 : value;
   }
@@ -380,7 +400,8 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
     this->effect_end_ms_ = duration_ms == 0 ? 0 : millis() + duration_ms;
   }
   // Output options (brightness curve, transition time and style), set by the entities.
-  bool has_sources() const override { return true; }
+  // The sun and moon programs are written for the Tuna lamps' channels; a Refugium runs My points.
+  bool has_sources() const override { return model_ != GroupModel::REFUGIUM; }
   bool can_moon() const override { return model_ == GroupModel::TUNA_BLUE; }
   bool has_output_options() const override { return true; }
   OutputSettings output_settings() const override { return out_settings_; }
@@ -409,9 +430,10 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
         return kessil::klink::DYN_SUN;
       case GroupModel::TUNA_BLUE:
         return kessil::klink::DYN_BLUE;
-      default:
-        return kessil::klink::DYN_GENERIC;
+      case GroupModel::REFUGIUM:
+        break;
     }
+    return kessil::klink::DYN_GENERIC;
   }
   bool effect_active() const override { return this->state_ != nullptr && this->state_->get_current_effect_index() != 0; }
   std::string effect_name() const override {
@@ -625,9 +647,19 @@ class KLinkPointTime : public datetime::TimeEntity, public Component {
 // effects (pulse, flicker, ...) need no class of ours: the group forwards their values to the lamps.
 enum class FxKind : uint8_t { STORM, CLOUD, RAINBOW, AURORA, MOON_RED, MOON_BLUE };
 
+class KLinkLightProgram;
+
+// On a K-Link group the effect streams group writes; on an ordinary ESPHome light it applies the same frames
+// as light calls (see klink_fx_map.h), without publishing each one so Home Assistant is not flooded.
 class KLinkEffect : public light::LightEffect {
  public:
-  explicit KLinkEffect(const char *name) : light::LightEffect(name) {}
+  explicit KLinkEffect(const char *name) : light::LightEffect(name) { instances().push_back(this); }
+  static std::vector<KLinkEffect *> &instances();
+  // nullptr when `effect` is not one of ours.
+  static KLinkEffect *from(const light::LightEffect *effect);
+  FxKind kind() const { return kind_; }
+  // The same seed on every light of a program keeps their random flashes in step.
+  void set_seed(uint32_t seed) { seed_ = seed; }
   void set_kind(FxKind kind) { kind_ = kind; }
   void set_speed(uint8_t variant) { variant_ = variant; }  // 0 fast, 1 moderate, 2 slow
   void set_duration(uint32_t ms) { duration_ms_ = ms; }    // 0 = until stopped
@@ -639,13 +671,21 @@ class KLinkEffect : public light::LightEffect {
 
  protected:
   void finish_();
+  uint32_t next_random_();
+  void apply_native_(uint32_t elapsed);
 
+  uint32_t seed_{0};
+  bool native_{false};       // an ordinary ESPHome light, not a K-Link group
+  bool unsupported_{false};  // this kind of light would show nothing for this effect
+  kessil::klink::FxLight fx_light_{kessil::klink::FxLight::BRIGHTNESS};
+  kessil::klink::CtRange range_{0.0f, 0.0f};
+  KLinkLightProgram *program_{nullptr};
   FxKind kind_{FxKind::STORM};
   uint8_t variant_{0};
   uint32_t duration_ms_{120000};
   uint32_t start_ms_{0};
   uint32_t last_tick_ms_{0};
-  kessil::klink::EffectEngine engine_{[]() { return random_uint32(); }};
+  kessil::klink::EffectEngine engine_{[this]() { return this->next_random_(); }};
 };
 
 // One schedule slot, edited as text: "HH:MM u1 u2 u3 u4 u5" or "off".

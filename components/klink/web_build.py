@@ -54,9 +54,10 @@ def colors_js():
     overlays = ",".join(
         "%s:'%s'" % (label, value) for label, value in klink_colors.OVERLAYS.items()
     )
-    return "var KCOL={sun:%s,blue:%s,ov:{%s}};" % (
+    return "var KCOL={sun:%s,blue:%s,refugium:%s,ov:{%s}};" % (
         quote(klink_colors.SUN_STOPS),
         quote(klink_colors.BLUE_STOPS),
+        quote(klink_colors.REFUGIUM_STOPS),
         overlays,
     )
 

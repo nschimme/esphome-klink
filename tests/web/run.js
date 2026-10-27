@@ -388,6 +388,44 @@ async function scenarioPicker() {
   check(name + ': back to a select', !!pickerSelect(page));
 }
 
+async function scenarioFindLights() {
+  var name = 'find lights on a light program';
+  var lamp = makeLight(101, 'Hallway', 'light_ct', ['int', 'ct', null, null, null]);
+  lamp.effects = ['Storm', 'Cloud', 'Aurora'];
+  var server = stub.makeServer({ group: lamp, groups: [lamp] });
+  var page = await newPage(server);
+  var card = dashCard(page, 'Hallway');
+  check(name + ': card is drawn', !!card);
+  var buttons = card ? card.querySelectorAll('button') : [];
+  var find = null;
+  buttons.forEach(function (b) { if (!find && b.textContent.trim() === 'Find these lights') find = b; });
+  check(name + ': offers Find these lights', !!find, card ? cardText(card) : '');
+  check(name + ': no lamp count for a program', !!card && card.querySelector('.lamps').hidden === true);
+  server.resetRequests();
+  if (find) page.click(find);
+  var ids = server.requests.filter(function (r) { return r.path === '/klink/identify'; });
+  check(name + ': flashes the program', ids.length === 1 && ids[0].params.gid === '101', JSON.stringify(ids));
+  check(name + ': lists its effects', !!card && fxButtons(card).length === 3, card ? fxButtons(card).length : 'no card');
+}
+
+async function scenarioRefugium() {
+  var name = 'refugium group';
+  var r = makeGroup(26, 'Refugium', 'refugium', ['int', 'clr', null, 'w', 'grn']);
+  r.max = [255, 240, 100, 100, 100];
+  r.slots = [
+    { minute: 480, ch: [255, 240, 0, 50, 10], enabled: true },
+    { minute: 1200, ch: [255, 240, 0, 50, 10], enabled: true }
+  ];
+  r.now_minute = 600;
+  var server = stub.makeServer({ group: r, groups: [r] });
+  var page = await newPage(server);
+  var card = dashCard(page, 'Refugium');
+  check(name + ': card is drawn', !!card);
+  var text = card ? cardText(card) : '';
+  check(name + ': CLR is a percent of its 240 limit', text.indexOf('CLR 100%') >= 0, text);
+  check(name + ': shows the white and green channels', text.indexOf('W 50%') >= 0 && text.indexOf('GRN 10%') >= 0, text);
+}
+
 async function scenarioManyLamps() {
   var name = 'settings many lamps';
   var lamps = [], i;
@@ -533,9 +571,9 @@ async function scenarioWheelHexAndKeys() {
   check(name + ': invalid color explains', page.progRoot().textContent.indexOf('Enter a color like #ff8800') >= 0);
 }
 
-async function scenarioWheelHiddenGeneric() {
-  var name = 'wheel hidden for generic';
-  var group = makeGroup(2, 'Generic', 'generic', ['ui1', 'ui2', 'ui3', 'ui4', 'ui5']);
+async function scenarioWheelHiddenBrightness() {
+  var name = 'wheel hidden for a brightness light';
+  var group = makeLight(2, 'Lamp', 'light_brightness', ['int', null, null, null, null]);
   var server = stub.makeServer({ group: group, groups: [group] });
   var page = await newPage(server);
   var card = page.wheelCard();
@@ -546,7 +584,7 @@ async function scenarioWheelHiddenGeneric() {
   page.pointer(wheel, 'pointerdown', { button: 0, pointerId: 9, clientX: 150, clientY: 110 });
   page.clock.tick(120);
   await stub.settle();
-  check(name + ': no snap for generic', server.snapRequests().length === 0, server.snapRequests().length);
+  check(name + ': no snap for a brightness light', server.snapRequests().length === 0, server.snapRequests().length);
 }
 
 async function scenarioWheelSliderSync() {
@@ -1224,6 +1262,8 @@ async function scenarioGeneratedReadOnly() {
   check(name + ': editor tools hidden', page.progRoot().querySelector('.ptools').hidden === true);
   check(name + ': point panel hidden', page.progRoot().querySelector('.panel').hidden === true);
   check(name + ': generated tag', page.doc.getElementById('prog-gen-tag').hidden === false);
+  var hints = page.progRoot().querySelectorAll('.hint').filter(function (h) { return h.textContent.indexOf('points are used') >= 0; });
+  check(name + ': no slots-full hint on a generated day', hints.length === 1 && hints[0].hidden === true);
   server.resetRequests();
   var svg = page.svg();
   page.pointer(svg, 'pointerdown', { button: 0, pointerId: 11, clientX: xFor(500), clientY: yFor(60) });
@@ -1518,6 +1558,8 @@ async function main() {
   await scenarioPlace();
   await scenarioRefused();
   await scenarioAllUsed();
+  await scenarioRefugium();
+  await scenarioFindLights();
   await scenarioDragUndo();
   await scenarioAddUndo();
   await scenarioRemoveUndo();
@@ -1530,7 +1572,7 @@ async function main() {
   await scenarioTracks();
   await scenarioWheelDrag();
   await scenarioWheelHexAndKeys();
-  await scenarioWheelHiddenGeneric();
+  await scenarioWheelHiddenBrightness();
   await scenarioWheelSliderSync();
   await scenarioLightCard();
   await scenarioLightPresets();

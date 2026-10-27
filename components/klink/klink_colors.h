@@ -21,6 +21,7 @@ struct ColorSpec {
   uint8_t n_overlays;
   const uint8_t *overlay_channel;    // channel index per overlay, in label order
   const uint8_t (*overlay_rgb)[3];   // overlay color per overlay
+  uint8_t clr_max;                   // highest CLR the lamp accepts (240 on a Refugium)
 };
 
 struct SnapResult {
@@ -82,9 +83,9 @@ inline SnapResult nearest_i(const ColorSpec &spec, const uint8_t target[3]) {
   uint8_t zeros[3] = {0, 0, 0};
   uint8_t rgb[3];
 
-  // Stage 1: coarse CLR scan (0, 8, ..., 248, 255), overlays 0.
+  // Stage 1: coarse CLR scan (0, 8, ... and clr_max), overlays 0.
   bool have = false;
-  for (int clr = 0; clr <= 248; clr += 8) {
+  for (int clr = 0; clr <= spec.clr_max; clr += 8) {
     swatch_i(spec, static_cast<uint8_t>(clr), zeros, rgb);
     uint32_t distance = dist_i(rgb, target);
     best.evals++;
@@ -96,12 +97,12 @@ inline SnapResult nearest_i(const ColorSpec &spec, const uint8_t target[3]) {
         best.rgb[c] = rgb[c];
     }
   }
-  {
-    swatch_i(spec, 255, zeros, rgb);
+  if (spec.clr_max % 8 != 0) {
+    swatch_i(spec, spec.clr_max, zeros, rgb);
     uint32_t distance = dist_i(rgb, target);
     best.evals++;
     if (!have || distance < best.dist) {
-      best.clr = 255;
+      best.clr = spec.clr_max;
       best.dist = distance;
       for (int c = 0; c < 3; c++)
         best.rgb[c] = rgb[c];
@@ -115,7 +116,7 @@ inline SnapResult nearest_i(const ColorSpec &spec, const uint8_t target[3]) {
       bool accepted = false;
       for (int vi = 0; vi < 1 + n_ov; vi++) {
         int32_t step = vi == 0 ? CLR_STEPS[s] : OV_STEPS[s];
-        int32_t high = vi == 0 ? 255 : 100;
+        int32_t high = vi == 0 ? spec.clr_max : 100;
         int32_t current = values[vi];
         for (int sign = 1; sign >= -1; sign -= 2) {
           int32_t candidate = current + sign * step;

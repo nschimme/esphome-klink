@@ -1,6 +1,7 @@
 # esphome-klink
 
-Local control of **Kessil X-Series aquarium lights** (A360X and A360XE Tuna Sun and Tuna Blue) from Home Assistant, or
+Local control of **Kessil X-Series aquarium lights** (A360X and A360XE Tuna Sun and Tuna Blue, and the Refugium) from
+Home Assistant, or
 from a web page the controller serves itself, using a cheap USB-C ESP32 board running ESPHome plugged into the lamp's
 K-Link port. No cloud, no app. You get a daily light program you can edit on a
 visual day curve, a sun that rises and sets at your location, a moon for the night, gentle ramps, an acclimation mode
@@ -46,19 +47,20 @@ lights.
 | Sun, moon, weather, acclimation, soft start | Computed days are checked against an independent astronomy library (sun within about a minute, moon within about 15 minutes) and run on the device; soft start and a full acclimation run have not been observed on lamps. |
 | Light programs on ordinary lights | **Tested** on the board's own RGB LED; other light types compile but are untested. |
 | **Kessil A360XE Tuna Blue** | **Untested.** The channels follow Kessil's controller screen (violet, red, green), but the mapping to the lamp has not been confirmed. |
+| **Kessil Refugium** | **Untested.** The channels (UI2 blue to red up to 240, UI4 white, UI5 green) follow Kessil's product page and have not been confirmed on a lamp. |
 | ESP32-C6 | **Tested.** ESP32-S3, -C3 and -S2 build but have not been run on a lamp. |
 
 Not supported:
 - **The AP9X, the AP700 and older lights.** This project talks directly to X-Series fixtures through their K-Link
   port. Lights with no K-Link port (older non-X models) cannot be controlled, and the AP9X and AP700 are different
   products that it does not work through.
-- The Kessil Refugium and other X-Series models (`model: generic` exposes the raw channels, untested).
 - Kessil's Wi-Fi dongle or Controller X on the same bus at the same time: two controllers fight each other, so
   unplug them.
 
 ## Is this for you?
 
-- You have an X-Series **Tuna Sun** (tested) or **Tuna Blue** (untested), on a freshwater planted or a reef tank.
+- You have an X-Series **Tuna Sun** (tested), **Tuna Blue** (untested) or **Refugium** (untested), on a freshwater
+  planted or a reef tank.
   The AP9X, the AP700 and older lights without a K-Link port are not supported.
 - You can flash an ESP32 with ESPHome, or are happy to follow a short guide to do it.
 - **Home Assistant is optional.** The web page on the board works on its own. Home Assistant adds entities and
@@ -72,7 +74,8 @@ Not supported:
 
 1. Get an ESP32-C6 board with a USB-C port and a USB-C cable. It plugs into a spare K-Link port on a lamp.
 2. In the ESPHome dashboard, import
-   `github://nschimme/esphome-klink/kessil-tuna-sun-esp32-c6.yaml@main` (use `kessil-tuna-blue-...` for a Tuna Blue).
+   `github://nschimme/esphome-klink/kessil-tuna-sun-esp32-c6.yaml@main` (use `kessil-tuna-blue-...` for a Tuna Blue,
+   or `kessil-refugium-...` for a Refugium).
 3. Power it from the lamp, turn on **Send to lights**, and open `http://<device>/klink`.
 
 The full walk-through, including wiring risks, is in [Getting started](docs/getting-started.md). **Read the first-run
@@ -85,6 +88,10 @@ The Tuna Blue and the other boards are untested because the author has none of t
 - **Tuna Blue owners:** in Home Assistant, enable the manual **violet**, **red** and **green** numbers for the group.
   Put the group in Manual, set one number to 50 % at a time, and note which color the lamp shows. Then open an issue
   with what you saw. That confirms (or corrects) the channel mapping the Tuna Blue support rests on.
+- **A360XE, A500X and Refugium owners:** run a scan, then open an issue with the type, model and firmware shown for each
+  lamp in the Settings tab (for example `Type 2 · A360X Tuna Sun · firmware 1.3.0`). For Refugium owners: in Home
+  Assistant, enable the manual **white** and **green** numbers; set one to 50 % at a time and note the color; then turn
+  the **color** number from 0 to 240 and note where blue, violet, magenta and red appear.
 - **ESP32-S3, -C3 and -S2 owners:** tell us whether the board finds your lamps and holds a program.
 
 ## Documentation

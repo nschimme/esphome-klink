@@ -34,6 +34,8 @@ import web_build  # noqa: E402
 
 NUM_CHANNELS = 5
 CHANNEL_MAX = [255, 255, 100, 100, 100]
+# The Refugium's color (UI2) stops at 240.
+CHANNEL_MAX_REFUGIUM = [255, 240, 100, 100, 100]
 MIN_GID, MAX_GID = 1, 40
 PROGRAM_ID_MIN, PROGRAM_ID_MAX = 101, 164
 CUSTOM_GID_MIN, CUSTOM_GID_MAX = 3, 25
@@ -44,15 +46,14 @@ NAME_MAX_LEN = 24
 
 GET_ROUTES = ("/klink", "/klink/state", "/klink/snap", "/klink/generated")
 
-COLOR_MODELS = ("tuna_sun", "tuna_blue")
+COLOR_MODELS = ("tuna_sun", "tuna_blue", "refugium")
 
 # Sun and moon program defaults for bus groups. The generated days below are illustrative, not
 # astronomy: they only need to move with the date and stay in a sensible range for the page.
 SKY_DEFAULTS = {"peak": 60, "hours": 0, "glow": 100, "ramp": 150, "amber": 0, "shift": 0, "moon": 5, "phase": 1}
 LOCATION = {"lat": 41.88, "lon": -87.63, "source": "Home Assistant"}
 
-# The effects each model offers (the light's own effect list, without "None"). Light programs drive
-# ESPHome lights rather than lamps on the bus, so they have none.
+# The effects each model offers (the light's own effect list, without "None").
 EFFECTS = {
     "tuna_sun": ["Storm", "Cloud", "Aurora", "Pulse", "Flicker"],
     "tuna_blue": [
@@ -65,6 +66,12 @@ EFFECTS = {
         "Pulse",
         "Flicker",
     ],
+    "refugium": ["Storm", "Cloud", "Aurora", "Pulse", "Flicker"],
+    # A light program offers the effects every one of its lights can show: Cloud needs a color, Rainbow needs RGB.
+    "light_brightness": ["Storm", "Aurora"],
+    "light_ct": ["Storm", "Cloud", "Aurora"],
+    "light_rgb": ["Storm", "Cloud", "Aurora", "Rainbow"],
+    "light_rgbw": ["Storm", "Cloud", "Aurora", "Rainbow"],
 }
 
 EFFECT_SPEEDS = {"fast": 0, "moderate": 1, "slow": 2}
@@ -77,6 +84,7 @@ POST_ROUTES = (
     "/klink/preview/done",
     "/klink/assign",
     "/klink/name",
+    "/klink/groupname",
     "/klink/copy",
     "/klink/retry",
     "/klink/scan",
@@ -102,6 +110,11 @@ def copy_slots(slots):
     return [point(p["minute"], p["ch"], p["enabled"]) for p in slots]
 
 
+def has_sources_for(kind, model):
+    """A bus group of the Tuna lamps has the sun and moon sources; a Refugium and light programs do not."""
+    return kind != "light" and model != "refugium"
+
+
 def make_group(gid, name, model, labels, slots, kind="bus"):
     group = {
         "gid": gid,
@@ -109,7 +122,7 @@ def make_group(gid, name, model, labels, slots, kind="bus"):
         "name": name,
         "model": model,
         "labels": list(labels),
-        "max": list(CHANNEL_MAX),
+        "max": list(CHANNEL_MAX_REFUGIUM if model == "refugium" else CHANNEL_MAX),
         "mode": "program",
         "before_preview": "program",
         "preview_until": 0.0,
@@ -119,7 +132,7 @@ def make_group(gid, name, model, labels, slots, kind="bus"):
         "defaults": copy_slots(slots),
         # Effects: names this group offers, the one running (if any) and the runtime options. An
         # effect is a temporary overlay on the schedule; the mode never changes when one runs.
-        "effects": list(EFFECTS.get(model, [])) if kind != "light" else [],
+        "effects": list(EFFECTS.get(model, [])),
         "effect_name": None,
         "effect_end": 0.0,  # millis-like timestamp; 0.0 means "until stopped"
         "effect_speed": 0,  # 0 fast, 1 moderate, 2 slow
@@ -131,8 +144,8 @@ def make_group(gid, name, model, labels, slots, kind="bus"):
         # Acclimation for every program: off means full light; turning it on starts at `start`.
         "acclimation": {"on": False, "start": 30, "days": 14, "share": 100},
     }
-    if kind != "light":
-        # Only a bus group has the sun and moon program sources.
+    if has_sources_for(kind, model):
+        # Only a Tuna group has the sun and moon program sources.
         group["source"] = 0
         group["sky"] = dict(SKY_DEFAULTS)
     return group
@@ -217,12 +230,43 @@ GROUPS = [
             point(0, [0, 0, 0, 0, 0], False),
         ],
     ),
+    make_group(
+        26,
+        "Refugium",
+        "refugium",
+        ["int", "clr", None, "w", "grn"],
+        [
+            point(8 * 60, [0, 0, 0, 0, 0]),
+            point(9 * 60, [100, 150, 0, 10, 0]),
+            point(17 * 60, [100, 150, 0, 10, 0]),
+            point(18 * 60, [0, 0, 0, 0, 0]),
+            point(0, [0, 0, 0, 0, 0], False),
+            point(0, [0, 0, 0, 0, 0], False),
+            point(0, [0, 0, 0, 0, 0], False),
+            point(0, [0, 0, 0, 0, 0], False),
+        ],
+    ),
 ] + light_groups()
+
+MODEL_NAMES = {1: "A360X Tuna Blue", 2: "A360X Tuna Sun", 3: "A360X Refugium"}
+
+
+def lamp_record(lamp):
+    return {
+        "kid": lamp["kid"],
+        "type": lamp["type"],
+        "gid": lamp["gid"],
+        "name": lamp["name"],
+        "model": MODEL_NAMES.get(lamp["type"], ""),
+        "firmware": "1.3.0",
+    }
+
 
 LAMPS = [
     {"kid": 18000001, "type": 2, "gid": 2, "name": ""},
     {"kid": 18000002, "type": 1, "gid": 1, "name": "Left"},
     {"kid": 18000003, "type": 1, "gid": 1, "name": "Right"},
+    {"kid": 18000004, "type": 3, "gid": 26, "name": ""},
 ]
 
 BUS = {"writes": True, "conflict": False, "scanning_until": 0.0, "scan_note": ""}
@@ -261,6 +305,7 @@ MANY_GROUPS = (
 LABELS = {
     "tuna_sun": ["int", "clr", None, "r", "am"],
     "tuna_blue": ["int", "clr", "vio", "r", "grn"],
+    "refugium": ["int", "clr", None, "w", "grn"],
 }
 
 
@@ -480,7 +525,7 @@ def status_text(group):
         parts = ""
         for index, label in enumerate(group["labels"]):
             if label is not None:
-                value = percent(channels[index]) if CHANNEL_MAX[index] == 255 else channels[index]
+                value = round(channels[index] * 100 / group["max"][index])
                 parts += " · %s %d%%" % (label.upper(), value)
         return "Program · %02d:%02d%s" % (minute // 60, minute % 60, parts)
     if mode == "manual":
@@ -637,7 +682,8 @@ def state_json():
         entry = {
             "gid": group["gid"],
             "kind": group["kind"],
-            "name": group["name"],
+            "name": group.get("nickname") or group["name"],
+            "default_name": group["name"],
             "model": group["model"],
             "mode": group["mode"],
             "status": status_text(group),
@@ -656,7 +702,7 @@ def state_json():
         }
         if group.get("output") is not None:
             entry["output"] = group["output"]
-        if group["kind"] != "light":
+        if "source" in group:
             entry["source"] = group["source"]
             entry["sources"] = [0, 1, 2] if can_moon(group) else [0, 1]
             entry["source_note"] = source_note(group)
@@ -664,9 +710,7 @@ def state_json():
             if group["source"] != 0 and LOCATION is not None:
                 entry["generated"] = generated_day(group, group["source"], today_iso())["points"]
         groups.append(entry)
-    lamps = [
-        {"kid": lamp["kid"], "type": lamp["type"], "gid": lamp["gid"], "name": lamp["name"]} for lamp in LAMPS
-    ]
+    lamps = [lamp_record(lamp) for lamp in LAMPS]
     return {
         "groups": groups,
         "lamps": lamps,
@@ -795,7 +839,7 @@ def require_sky_group(query):
     """The group named by gid, when it has the sun and moon sources."""
     gid = require_program_gid(query, "gid")
     group = require_group(gid)
-    if group["kind"] == "light":
+    if "source" not in group:
         raise HttpError(400, "this program has no sun or moon source")
     return group
 
@@ -925,6 +969,11 @@ def handle_identify(query):
     if has_kid == has_gid:
         raise HttpError(400, "provide exactly one of kid or gid")
     if has_gid:
+        value = require_uint(query, "gid", PROGRAM_ID_MAX)
+        if is_program_id(value):
+            # A light program flashes its own lights, also while Send to lights is off (it never touches the bus).
+            require_group(value)
+            return
         value = require_lamp_gid(query, "gid")
     else:
         value = require_uint(query, "kid", 0xFFFFFFFF)
@@ -952,14 +1001,14 @@ def handle_point(query):
         p["minute"] = require_uint(query, "minute", 1439)
     for name, channel in (("int", 0), ("clr", 1), ("r", 3), ("am", 4)):
         if name in query:
-            p["ch"][channel] = require_uint(query, name, CHANNEL_MAX[channel])
+            p["ch"][channel] = require_uint(query, name, group["max"][channel])
     for c in range(NUM_CHANNELS):
         name = "c%d" % (c + 1)
         if name not in query:
             continue
         if group["labels"][c] is None:
             raise HttpError(400, "this model has no channel " + name)
-        p["ch"][c] = require_uint(query, name, CHANNEL_MAX[c])
+        p["ch"][c] = require_uint(query, name, group["max"][c])
     if "enabled" in query:
         p["enabled"] = require_bool(query, "enabled")
     group["slots"][index] = p
@@ -1083,6 +1132,17 @@ def handle_name(query):
         lamp["name"] = name
 
 
+def handle_group_name(query):
+    gid = require_program_gid(query, "gid")
+    group = require_group(gid)
+    if "name" not in query:
+        raise HttpError(400, "missing parameter: name")
+    name = query["name"][0]
+    if len(name.encode("utf-8")) > NAME_MAX_LEN:
+        raise HttpError(400, "name is too long (24 bytes max)")
+    group["nickname"] = name
+
+
 def handle_copy(query):
     source_gid = require_program_gid(query, "from")
     target_gid = require_program_gid(query, "to")
@@ -1138,6 +1198,7 @@ ROUTES = {
     "/klink/preview/done": handle_preview_done,
     "/klink/assign": handle_assign,
     "/klink/name": handle_name,
+    "/klink/groupname": handle_group_name,
     "/klink/copy": handle_copy,
     "/klink/retry": handle_retry,
     "/klink/scan": handle_scan,

@@ -104,12 +104,17 @@ struct SlotLabels {
 };
 static const SlotLabels LABELS_TUNA_SUN = {{"int", "clr", nullptr, "r", "am"}};
 static const SlotLabels LABELS_TUNA_BLUE = {{"int", "clr", "vio", "r", "grn"}};
-static const SlotLabels LABELS_GENERIC = {{"ui1", "ui2", "ui3", "ui4", "ui5"}};
+static const SlotLabels LABELS_REFUGIUM = {{"int", "clr", nullptr, "w", "grn"}};
+// The Refugium's CLR (UI2) stops at 240.
+static const uint8_t CHANNEL_MAX_REFUGIUM[NUM_CHANNELS] = {255, 240, 100, 100, 100};
 
 // Slot text, as edited in Home Assistant: "HH:MM u1 u2 u3 u4 u5" (spaces or commas), or "off"/"" for
 // an unused slot. Strict: out-of-range values are rejected, never clamped, so a typo cannot
 // silently change a light level. Seconds in the time ("HH:MM:SS") are accepted and ignored.
-inline bool parse_slot(const std::string &text, SchedulePoint &out, const SlotLabels *labels = nullptr) {
+// `max` holds the model's per-channel limits (CHANNEL_MAX when null).
+inline bool parse_slot(const std::string &text, SchedulePoint &out, const SlotLabels *labels = nullptr,
+                       const uint8_t *max = nullptr) {
+  const uint8_t *limit = max != nullptr ? max : CHANNEL_MAX;
   std::vector<std::string> tok;
   std::string cur;
   for (size_t i = 0; i <= text.size(); i++) {
@@ -176,7 +181,7 @@ inline bool parse_slot(const std::string &text, SchedulePoint &out, const SlotLa
           return false;
         v = v * 10 + (val[k] - '0');
       }
-      if (v > CHANNEL_MAX[c])
+      if (v > limit[c])
         return false;
       seen[c] = true;
       out.channels[c] = static_cast<uint8_t>(v);
@@ -195,7 +200,7 @@ inline bool parse_slot(const std::string &text, SchedulePoint &out, const SlotLa
         return false;
       v = v * 10 + (t[i] - '0');
     }
-    if (v > CHANNEL_MAX[c])
+    if (v > limit[c])
       return false;
     out.channels[c] = static_cast<uint8_t>(v);
   }

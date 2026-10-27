@@ -75,6 +75,10 @@ inline std::vector<uint8_t> group_channels(uint8_t gid, const uint8_t ch[5]) {
   return build(CMD_SET_GROUP_CHANNELS, p);
 }
 
+// Neither carries a KID: they are answered by the one unmuted lamp.
+inline std::vector<uint8_t> model_query() { return build(CMD_MODEL, std::vector<uint8_t>()); }
+inline std::vector<uint8_t> firmware_query() { return build(CMD_FIRMWARE_VERSION, std::vector<uint8_t>()); }
+
 inline std::vector<uint8_t> controller_probe() { return build(CMD_CONTROLLER_PROBE, std::vector<uint8_t>()); }
 
 // True when `r` is a complete frame for `command`: marker, length, command, checksum, stop.
@@ -98,6 +102,40 @@ inline bool parse_identity(const std::vector<uint8_t> &r, Identity &out) {
     return false;
   out.gid = r[5];
   out.type = static_cast<uint8_t>(r[6] + 1);
+  return true;
+}
+
+// Model reply: the name is the bytes between the command and the checksum, with no terminator. An empty name is
+// not a reply (a bare command frame has the same bytes as the request).
+inline bool parse_model(const std::vector<uint8_t> &r, std::string &out) {
+  if (!valid_reply(r, CMD_MODEL) || r.size() == 7)
+    return false;
+  size_t n = r.size() - 7;
+  out.clear();
+  for (size_t i = 0; i < n; i++) {
+    uint8_t c = r[5 + i];
+    if (c == 0)
+      break;
+    if (c < 0x20 || c > 0x7E)
+      return false;
+    out.push_back(static_cast<char>(c));
+  }
+  return true;
+}
+
+// Firmware reply: major, minor and patch; a lamp that sends only major and minor reports patch 0.
+struct FirmwareVersion {
+  uint8_t major;
+  uint8_t minor;
+  uint8_t patch;
+};
+
+inline bool parse_firmware(const std::vector<uint8_t> &r, FirmwareVersion &out) {
+  if (!valid_reply(r, CMD_FIRMWARE_VERSION) || (r.size() != 9 && r.size() != 10))
+    return false;
+  out.major = r[5];
+  out.minor = r[6];
+  out.patch = r.size() == 10 ? r[7] : 0;
   return true;
 }
 

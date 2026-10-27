@@ -2,6 +2,7 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import number
 from esphome.const import CONF_TYPE
+from esphome.core import CORE
 
 from . import CONF_KLINK_ID, KLinkHub, klink_ns
 from .light import ProgramHost
@@ -174,6 +175,14 @@ def _config_schema(config):
 CONFIG_SCHEMA = cv.All(_config_schema)
 
 
+def _group_model(group_id):
+    """The `model` of the klink light with this id, or None (a light program has none)."""
+    for light_conf in CORE.config.get("light", []):
+        if light_conf.get("output_id") == group_id:
+            return light_conf.get("model")
+    return None
+
+
 async def to_code(config):
     if config.get(CONF_TYPE) in TANK_TYPES:
         kind, low, high, step, unit, icon = TANK_TYPES[config[CONF_TYPE]]
@@ -207,6 +216,8 @@ async def to_code(config):
     point = CONF_POINT_CHANNEL in config
     ui = config[CONF_POINT_CHANNEL] if point else config[CONF_CHANNEL]
     top = 255 if ui <= 2 and (point or ui == 2) else 100  # UI1 and UI2 are bytes, UI3-UI5 percent
+    if ui == 2 and _group_model(config[CONF_GROUP]) == "refugium":
+        top = 240  # the lamp refuses a CLR above 240
     var = await number.new_number(config, min_value=0, max_value=top, step=1)
     await cg.register_component(var, config)
     cg.add(var.set_group(await cg.get_variable(config[CONF_GROUP])))

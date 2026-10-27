@@ -30,6 +30,8 @@ static const ColorSpec *spec_for(const char *model) {
     return &COLOR_SUN;
   if (std::strcmp(model, "tuna_blue") == 0)
     return &COLOR_BLUE;
+  if (std::strcmp(model, "refugium") == 0)
+    return &COLOR_REFUGIUM;
   return nullptr;
 }
 
@@ -98,6 +100,7 @@ int main(int argc, char **argv) {
     check("rgb matches swatch_i", recomputed[0] == got.rgb[0] && recomputed[1] == got.rgb[1] &&
                                        recomputed[2] == got.rgb[2]);
 
+    check("clr within the model's limit", got.clr <= spec->clr_max);
     SnapResult again = nearest_i(*spec, target);
     check("deterministic", same_result(got, again));
 
@@ -110,13 +113,13 @@ int main(int argc, char **argv) {
   check("golden file has vectors", lines > 0);
 
   // Every one of the model's own gradient stops must be reproduced exactly with overlays 0.
-  const ColorSpec *specs[2] = {&COLOR_SUN, &COLOR_BLUE};
-  for (int m = 0; m < 2; m++) {
+  const ColorSpec *specs[3] = {&COLOR_SUN, &COLOR_BLUE, &COLOR_REFUGIUM};
+  for (int m = 0; m < 3; m++) {
     uint8_t zeros[3] = {0, 0, 0};
     for (int i = 0; i < 17; i++) {
       uint8_t target[3] = {specs[m]->stops[i][0], specs[m]->stops[i][1], specs[m]->stops[i][2]};
       SnapResult got = nearest_i(*specs[m], target);
-      if (got.dist != 0) {
+      if (got.dist > (m == 2 ? 2u : 0u)) {  // the Refugium's stops sit between whole CLR steps
         std::printf("FAIL gradient stop %d of model %d not exact (%u)\n", i, m, got.dist);
         failures++;
       }

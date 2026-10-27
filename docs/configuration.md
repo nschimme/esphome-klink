@@ -10,6 +10,7 @@ Set these in your own config.
 | `timezone` | `Etc/UTC` | the program runs on local time, so set yours. It is also the last-resort location for the sun and moon. |
 | `tuna_sun_gid` | `"2"` | the K-Link group the Tuna Sun package controls |
 | `tuna_blue_gid` | `"1"` | the K-Link group the Tuna Blue package controls |
+| `refugium_gid` | `"26"` | the K-Link group the Refugium package controls |
 | `auto_writes` | `"false"` | `"true"`: listen first and take over the bus when it is quiet |
 | `klink_ref` | `main` | the branch or tag of this repository the component is fetched from |
 
@@ -70,9 +71,10 @@ packages:
     vars: {id: reef_5, name: Reef 5, gid: "5"}
 ```
 
-Custom groups use K-Link group ids **3 to 25**; ids 1 and 2 are the defaults of the Tuna Blue and Tuna Sun packages
-(change those with `tuna_blue_gid` and `tuna_sun_gid`). A group cannot mix lamp types: a Tuna Sun group contains only
-Tuna Sun lamps, a Tuna Blue group only Tuna Blue lamps. Move a lamp to a group in the web page's Settings tab. See
+Custom groups use K-Link group ids **3 to 25**; ids 1, 2 and 26 are the defaults of the Tuna Blue, Tuna Sun and
+Refugium packages (change those with `tuna_blue_gid`, `tuna_sun_gid` and `refugium_gid`). A group cannot mix lamp
+types: a Tuna Sun group contains only Tuna Sun lamps, a Tuna Blue group only Tuna Blue lamps, and a Refugium group
+only Refugium lamps. Move a lamp to a group in the web page's Settings tab. See
 [`examples/two-groups.yaml`](../examples/two-groups.yaml) and
 [`examples/three-groups.yaml`](../examples/three-groups.yaml).
 

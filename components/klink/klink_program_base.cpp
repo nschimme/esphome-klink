@@ -2,6 +2,7 @@
 
 #include "klink.h"  // KLinkSlotText
 
+#include <algorithm>
 #include <cmath>
 #include <cctype>
 #include <cstdio>
@@ -317,7 +318,7 @@ bool ProgramBase::default_point(size_t index, kk::SchedulePoint &out) const {
   if (index >= this->slot_texts_.size() || this->slot_texts_[index] == nullptr)
     return false;
   kk::SchedulePoint parsed;
-  if (!kk::parse_slot(this->slot_texts_[index]->initial_value(), parsed, this->slot_labels()))
+  if (!kk::parse_slot(this->slot_texts_[index]->initial_value(), parsed, this->slot_labels(), this->channel_max()))
     return false;
   out = parsed;
   return true;
@@ -382,7 +383,7 @@ void ProgramBase::edit_point_channel(uint8_t index, uint8_t value) {
   if (this->slots_.empty() || index >= kk::NUM_CHANNELS)
     return;
   kk::SchedulePoint &p = this->slots_[this->selected_];
-  p.channels[index] = kk::clamp_channel(index, value);
+  p.channels[index] = std::min<uint8_t>(kk::clamp_channel(index, value), this->channel_max()[index]);
   p.enabled = true;
   this->point_changed_();
   this->preview_point(this->selected_);
@@ -488,8 +489,7 @@ std::string ProgramBase::status_text() {
       for (size_t i = 0; i < kk::NUM_CHANNELS && len > 0 && static_cast<size_t>(len) < sizeof(buf); i++) {
         if (labels->name[i] == nullptr)
           continue;
-        unsigned value = kk::CHANNEL_MAX[i] == 255 ? static_cast<unsigned>(std::lround(channels[i] * 100.0f / 255.0f))
-                                                   : static_cast<unsigned>(channels[i]);
+        unsigned value = static_cast<unsigned>(std::lround(channels[i] * 100.0f / this->channel_max()[i]));
         char label[8];
         size_t n = 0;
         for (; labels->name[i][n] != '\0' && n < sizeof(label) - 1; n++)

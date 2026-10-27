@@ -1,4 +1,5 @@
 #include "klink.h"
+#include "klink_light_program.h"
 
 #include <algorithm>
 #include <cmath>
@@ -96,6 +97,13 @@ void KLinkHub::setup() {
     std::vector<uint8_t> blob(stored_names.data, stored_names.data + stored_names.length);
     if (!this->names_.deserialize(blob))
       ESP_LOGW(TAG, "Stored lamp names are invalid or from another version; starting empty");
+  }
+  this->group_names_pref_ = global_preferences->make_preference<StoredNames>(fnv1_hash("klink_group_names"));
+  StoredNames stored_group_names;
+  if (this->group_names_pref_.load(&stored_group_names) && stored_group_names.length <= sizeof(stored_group_names.data)) {
+    std::vector<uint8_t> blob(stored_group_names.data, stored_group_names.data + stored_group_names.length);
+    if (!this->group_names_.deserialize(blob))
+      ESP_LOGW(TAG, "Stored group names are invalid or from another version; starting empty");
   }
 }
 
@@ -330,15 +338,47 @@ void KLinkHub::read_next_identity_() {
   this->bus_.enqueue(kk::unmute(kid), 0, 0, nullptr);
   this->bus_.enqueue(kk::identity(kid), kk::CMD_GET_GID_TYPE, kk::REPLY_TIMEOUT_MS, [this, kid](bool ok, const std::vector<uint8_t> &reply) {
     kk::Identity id = {0, 0};
-    if (ok && kk::parse_identity(reply, id) && this->inventory_.upsert(kid, id.gid, id.type)) {
+    const bool parsed = ok && kk::parse_identity(reply, id);
+    const bool known = parsed && this->inventory_.upsert(kid, id.gid, id.type);
+    if (known) {
       this->scan_found_++;
       ESP_LOGI(TAG, "Lamp KID %u: GID %u, type %u", kid, id.gid, id.type);
       this->lamp_found_cb_.call(kid, id.gid, id.type);
+    } else if (parsed) {
+      // A type this controller has no model for: it is not added, but what it reports is logged so it can be
+      // reported (the read-only model and firmware queries below run for it too).
+      ESP_LOGW(TAG, "Lamp KID %u reports GID %u, type %u: not a lamp type this controller drives", kid, id.gid, id.type);
     } else {
       ESP_LOGW(TAG, "Lamp KID %u did not return a valid identity", kid);
     }
-    this->bus_.enqueue(kk::mute(kid), kk::CMD_MUTE, kk::REPLY_TIMEOUT_MS,
-                       [this](bool, const std::vector<uint8_t> &) { this->read_next_identity_(); });
+    if (!parsed) {
+      this->bus_.enqueue(kk::mute(kid), kk::CMD_MUTE, kk::REPLY_TIMEOUT_MS,
+                         [this](bool, const std::vector<uint8_t> &) { this->read_next_identity_(); });
+      return;
+    }
+    // Model and firmware carry no KID: the one unmuted lamp answers them.
+    this->bus_.enqueue(kk::model_query(), kk::CMD_MODEL, kk::REPLY_TIMEOUT_MS, [this, kid, known](bool ok, const std::vector<uint8_t> &reply) {
+      std::string model;
+      const bool have_model = ok && kk::parse_model(reply, model);
+      if (have_model && known) {
+        const kk::LampRecord *lamp = this->inventory_.find(kid);
+        this->inventory_.set_info(kid, model, lamp != nullptr && lamp->has_firmware, lamp ? lamp->fw_major : 0,
+                                  lamp ? lamp->fw_minor : 0, lamp ? lamp->fw_patch : 0);
+      }
+      this->bus_.enqueue(kk::firmware_query(), kk::CMD_FIRMWARE_VERSION, kk::REPLY_TIMEOUT_MS, [this, kid, known, model, have_model](bool fw_ok, const std::vector<uint8_t> &fw_reply) {
+        kk::FirmwareVersion fw = {0, 0, 0};
+        const bool have_fw = fw_ok && kk::parse_firmware(fw_reply, fw);
+        if (have_fw && known) {
+          const kk::LampRecord *lamp = this->inventory_.find(kid);
+          this->inventory_.set_info(kid, lamp != nullptr ? lamp->model : model, true, fw.major, fw.minor, fw.patch);
+        }
+        ESP_LOGI(TAG, "Lamp KID %u reports model \"%s\", firmware %s", kid, have_model ? model.c_str() : "(unknown)",
+                 have_fw ? (std::to_string(fw.major) + "." + std::to_string(fw.minor) + "." + std::to_string(fw.patch)).c_str()
+                         : "(unknown)");
+        this->bus_.enqueue(kk::mute(kid), kk::CMD_MUTE, kk::REPLY_TIMEOUT_MS,
+                           [this](bool, const std::vector<uint8_t> &) { this->read_next_identity_(); });
+      });
+    });
   });
 }
 
@@ -393,7 +433,8 @@ void KLinkHub::set_weather_condition(const std::string &condition) {
   if (!first && this->storms_from_weather_ && !was_thunder && kessil::klink::weather_is_thunder(condition) &&
       (!this->storm_started_once_ || millis() - this->last_storm_ms_ > 30u * 60u * 1000u)) {
     for (ProgramHost *program : this->programs_) {
-      if (program->mode() != kk::Mode::PROGRAM)
+      // Real weather flashes the lamps on the bus; a light program's own lights (a hallway lamp) are not asked to.
+      if (std::strcmp(program->kind(), "bus") != 0 || program->mode() != kk::Mode::PROGRAM)
         continue;
       bool has_storm = false;
       for (const auto &name : program->effect_names())
@@ -591,6 +632,39 @@ void KLinkHub::save_names_() {
   this->names_pref_.save(&stored);
 }
 
+void KLinkHub::save_group_names_() {
+  std::vector<uint8_t> blob = this->group_names_.serialize();
+  StoredNames stored;
+  std::memset(&stored, 0, sizeof(stored));
+  if (blob.size() > sizeof(stored.data))
+    return;
+  stored.length = static_cast<uint16_t>(blob.size());
+  std::memcpy(stored.data, blob.data(), blob.size());
+  this->group_names_pref_.save(&stored);
+}
+
+bool KLinkHub::check_group_name(uint32_t gid, const std::string &name, std::string &error) const {
+  error.clear();
+  kk::NameTable probe = this->group_names_;
+  if (probe.set(gid, name))
+    return true;
+  if (name.size() > kk::NAME_MAX_LEN)
+    error = "name is too long (24 bytes max)";
+  else if (!this->group_names_.contains(gid) && this->group_names_.size() >= kk::MAX_NAMES)
+    error = "no room for another name";
+  else
+    error = "name is not valid UTF-8";
+  return false;
+}
+
+bool KLinkHub::set_group_name(uint32_t gid, const std::string &name, std::string &error) {
+  if (!this->check_group_name(gid, name, error))
+    return false;
+  this->group_names_.set(gid, name);
+  this->save_group_names_();
+  return true;
+}
+
 bool KLinkHub::check_name(uint32_t kid, const std::string &name, std::string &error) const {
   error.clear();
   kk::NameTable probe = this->names_;
@@ -633,6 +707,20 @@ bool KLinkHub::identify_gid(uint8_t gid) {
 }
 
 // ---- Group ----------------------------------------------------------------------------------
+
+static std::vector<KLinkGroup *> &all_groups() {
+  static std::vector<KLinkGroup *> groups;
+  return groups;
+}
+
+KLinkGroup *KLinkGroup::from_output(const light::LightOutput *output) {
+  for (KLinkGroup *group : all_groups())
+    if (static_cast<const light::LightOutput *>(group) == output)
+      return group;
+  return nullptr;
+}
+
+KLinkGroup::KLinkGroup() { all_groups().push_back(this); }
 
 void KLinkGroup::setup() {
   this->hub_->register_group(this);
@@ -701,7 +789,7 @@ float KLinkGroup::light_brightness_(light::LightState *state) const {
 }
 
 void KLinkGroup::dump_config() {
-  ESP_LOGCONFIG(TAG, "  Model: %s", this->model_ == GroupModel::TUNA_SUN ? "Tuna Sun" : (this->model_ == GroupModel::TUNA_BLUE ? "Tuna Blue (provisional)" : "generic"));
+  ESP_LOGCONFIG(TAG, "  Model: %s", this->model_ == GroupModel::TUNA_SUN ? "Tuna Sun" : (this->model_ == GroupModel::TUNA_BLUE ? "Tuna Blue" : "Refugium"));
   ESP_LOGCONFIG(TAG, "K-Link group:");
   ESP_LOGCONFIG(TAG, "  GID: %u", this->gid_);
   ESP_LOGCONFIG(TAG, "  Slots: %u", static_cast<unsigned>(this->slots_.size()));
@@ -730,16 +818,17 @@ const kk::ColorSpec *KLinkGroup::color_spec_() const {
       return &COLOR_SUN;
     case GroupModel::TUNA_BLUE:
       return &COLOR_BLUE;
-    default:
-      return nullptr;
+    case GroupModel::REFUGIUM:
+      return &COLOR_REFUGIUM;
   }
+  return nullptr;
 }
 
 void KLinkGroup::set_extra(uint8_t channel, uint8_t value) {
   if (channel == 2) {
     if (this->has_color_temperature())
       return;  // UI2 is the light's color temperature on this model
-    this->manual_color_ = value;
+    this->manual_color_ = value > this->channel_max()[1] ? this->channel_max()[1] : value;
   } else if (channel >= 3 && channel <= 5) {
     this->extras_[channel - 3] = value > 100 ? 100 : value;
   } else {
@@ -871,7 +960,12 @@ void KLinkGroup::effect_ended_() {
 void KLinkGroup::write_bus_(const uint8_t channels[5]) {
   if (this->hub_->group_held(this->gid_))
     return;  // a lamp of this group is flashing to identify itself
-  this->hub_->write_group(this->gid_, channels);
+  // A Refugium takes a CLR of at most 240, so no source (effects included) may send more. Only UI2
+  // is limited here: effect frames put values above 100 on UI3-UI5.
+  uint8_t limited[5] = {channels[0], channels[1], channels[2], channels[3], channels[4]};
+  if (limited[1] > this->channel_max()[1])
+    limited[1] = this->channel_max()[1];
+  this->hub_->write_group(this->gid_, limited);
 }
 
 // Frames of effects go straight to the bus; the stage follows them so a later fade starts where the lamp is.
@@ -1232,7 +1326,7 @@ void KLinkSlotText::control(const std::string &value) { this->apply_(value, true
 void KLinkSlotText::apply_(const std::string &value, bool save) {
   kk::SchedulePoint point;
   const kk::SlotLabels *labels = this->group_->slot_labels();
-  if (!kk::parse_slot(value, point, labels)) {
+  if (!kk::parse_slot(value, point, labels, this->group_->channel_max())) {
     ESP_LOGW(TAG, "Slot %u: '%s' is not valid. Use \"HH:MM u1 u2 u3 u4 u5\" (UI1-2 0-255, UI3-5 0-100), a labeled form like \"HH:MM int=153 clr=89 r=25 am=0\", or \"off\".",
              this->index_ + 1, value.c_str());
     this->publish_state(this->state);  // restore the previous text in the UI
@@ -1539,7 +1633,7 @@ void KLinkChannelNumber::setup() {
   if (!this->pref_.load(&value))
     value = 0;
   // Restore the value without sending anything: the schedule keeps control until the user moves it.
-  float max = this->channel_ == 2 ? 255.0f : 100.0f;
+  float max = this->channel_ == 2 ? static_cast<float>(this->group_->channel_max()[1]) : 100.0f;
   uint8_t pct = static_cast<uint8_t>(value < 0 ? 0 : (value > max ? max : value));
   this->group_->set_extra_silent(this->channel_, pct);
   this->publish_state(pct);
@@ -1573,17 +1667,59 @@ void KLinkChannelNumber::dump_config() {
 
 // ---- Effects -----------------------------------------------------------------------------------
 
+std::vector<KLinkEffect *> &KLinkEffect::instances() {
+  static std::vector<KLinkEffect *> list;
+  return list;
+}
+
+KLinkEffect *KLinkEffect::from(const light::LightEffect *effect) {
+  for (KLinkEffect *candidate : instances())
+    if (static_cast<const light::LightEffect *>(candidate) == effect)
+      return candidate;
+  return nullptr;
+}
+
+uint32_t KLinkEffect::next_random_() {
+  if (this->seed_ == 0)
+    return random_uint32();
+  // xorshift32, so lights given the same seed draw the same flashes
+  this->seed_ ^= this->seed_ << 13;
+  this->seed_ ^= this->seed_ >> 17;
+  this->seed_ ^= this->seed_ << 5;
+  return this->seed_;
+}
+
 void KLinkEffect::start() {
   light::LightEffect::start();
   this->start_ms_ = millis();
   this->last_tick_ms_ = this->start_ms_ - kk::EFFECT_FRAME_MS;  // first frame right away
   light::LightState *state = this->get_light_state();
-  KLinkGroup *group = state != nullptr ? static_cast<KLinkGroup *>(state->get_output()) : nullptr;
+  KLinkGroup *group = state != nullptr ? KLinkGroup::from_output(state->get_output()) : nullptr;
+  this->native_ = group == nullptr;
+  this->unsupported_ = false;
   // The effects take the group's runtime Speed and Time settings; the
   // YAML `speed`/`duration` values only apply while the entities have not been used.
   if (group != nullptr) {
     this->variant_ = group->effect_speed();
     this->duration_ms_ = group->effect_duration_ms();
+  } else if (state != nullptr) {
+    // An ordinary ESPHome light: shown through what it can do. A program that drives it brings its own Speed
+    // and Time settings.
+    const light::LightTraits traits = state->get_traits();
+    this->fx_light_ = kk::fx_light_for_caps(light_caps_of(traits));
+    this->range_.min_mireds = traits.get_min_mireds();
+    this->range_.max_mireds = traits.get_max_mireds();
+    this->program_ = KLinkLightProgram::for_light(state);
+    if (this->program_ != nullptr) {
+      this->variant_ = this->program_->effect_speed();
+      this->duration_ms_ = this->program_->effect_duration_ms();
+      this->program_->note_effect_started(this->duration_ms_);
+    }
+    if (!kk::fx_offered(static_cast<kk::EffectKind>(this->kind_), this->fx_light_)) {
+      this->unsupported_ = true;
+      ESP_LOGW(TAG, "Effect '%s' shows nothing on light '%s' (it has no color control for it)",
+               this->get_name().c_str(), state->get_name().c_str());
+    }
   }
   this->engine_.start(static_cast<kk::EffectKind>(this->kind_), this->variant_);
   if (group != nullptr)
@@ -1595,7 +1731,7 @@ void KLinkEffect::stop() {
   light::LightState *state = this->get_light_state();
   if (state == nullptr)
     return;
-  KLinkGroup *group = static_cast<KLinkGroup *>(state->get_output());
+  KLinkGroup *group = KLinkGroup::from_output(state->get_output());
   if (group != nullptr)
     group->effect_ended_();
 }
@@ -1620,16 +1756,39 @@ void KLinkEffect::apply() {
   if (now - this->last_tick_ms_ >= kk::EFFECT_FRAME_MS)
     this->last_tick_ms_ = now;
   const uint32_t elapsed = now - this->start_ms_;
-  if (this->duration_ms_ != 0 && elapsed >= this->duration_ms_) {
+  if (this->unsupported_ || (this->duration_ms_ != 0 && elapsed >= this->duration_ms_)) {
     this->finish_();
     return;
   }
-  // The light output is a K-Link group: these effects are only registered for klink lights. The
-  // engine drives all five channels itself.
-  KLinkGroup *group = static_cast<KLinkGroup *>(this->get_light_state()->get_output());
+  if (this->native_) {
+    this->apply_native_(elapsed);
+    return;
+  }
+  // The light output is a K-Link group. The engine drives all five channels itself.
+  KLinkGroup *group = KLinkGroup::from_output(this->get_light_state()->get_output());
   uint8_t out[5] = {0, 0, 0, 0, 0};
   this->engine_.step(elapsed, out);
   group->send_effect_frame(out);
+}
+
+void KLinkEffect::apply_native_(uint32_t elapsed) {
+  uint8_t out[5] = {0, 0, 0, 0, 0};
+  this->engine_.step(elapsed, out);
+  const kk::LightValues v =
+      kk::fx_light_values(static_cast<kk::EffectKind>(this->kind_), this->fx_light_, out, this->range_);
+  // Like ESPHome's own effects: no publish (Home Assistant sees the effect, not 25 states a second), no save, no
+  // fade. The light stays on and a dark frame is brightness 0: a call that turns the light off would end the effect.
+  auto call = this->get_light_state()->make_call();
+  call.set_state(true);
+  call.set_brightness(v.on ? v.brightness : 0.0f);
+  if (this->fx_light_ == kk::FxLight::CT)
+    call.set_color_temperature(v.mireds);
+  else if (this->fx_light_ == kk::FxLight::RGB)
+    call.set_rgb(v.r, v.g, v.b);
+  call.set_transition_length(0);
+  call.set_publish(false);
+  call.set_save(false);
+  call.perform();
 }
 
 // ---- State text sensor ------------------------------------------------------------------------

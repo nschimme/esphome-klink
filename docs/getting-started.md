@@ -15,9 +15,9 @@ This page takes you from a board in a box to lamps running a daily program.
 
 ## What you need
 
-- A **Kessil X-Series light** with a spare K-Link port (the lamps have two). Tested: A360X **Tuna Sun**.
-  Included but untested: A360XE **Tuna Blue**. Not supported: the AP9X, the AP700, and older lights with no K-Link
-  port; this controller talks to the X-Series lamps directly and does not work through those products.
+- A **Kessil X-Series light** with a spare K-Link port (the lamps have two). See [Supported models](#supported-models)
+  for the models, their lamp types and what is tested. Not supported: the AP9X, the AP700, and older lights with no
+  K-Link port; this controller talks to the X-Series lamps directly and does not work through those products.
 - An **ESP32 board with a native USB-C port** and a plain USB-C-to-USB-C cable. The board plugs into the lamp's
   K-Link port. There is no transceiver and no breakout: the chip's own USB data pads (D+ and D-) carry the bus.
 - Wi-Fi, so the controller can set its clock over SNTP and talk to Home Assistant. The program runs on local time.
@@ -38,9 +38,25 @@ GPIO is rated for, and the board can be damaged. Before the first connection, me
 and D- with the lamp unpowered. Above about 10 kOhm the load is light. The lamps themselves are not expected to
 be at risk, but nothing here guarantees that.
 
+## Supported models
+
+K-Link lamps report one of three lamp types: 1 Tuna Blue, 2 Tuna Sun or 3 Refugium. Kessil says K-Link links A360X,
+A360XE and A500X units.
+
+| Model | Lamp type | Status |
+|---|---|---|
+| A360X Tuna Sun | 2 Tuna Sun | Tested on hardware. |
+| A360XE Tuna Sun | 2 Tuna Sun | Expected to work as a Tuna Sun; untested. |
+| A360X/A360XE Tuna Blue | 1 Tuna Blue | The channels follow Kessil's controller screen; untested. |
+| A500X Tuna Blue (185 W) | 1 Tuna Blue | Expected to work as a Tuna Blue: it has the same two K-Link ports and the same violet, red and green channels, which a controller on the bus can reach. Untested. |
+| Refugium | 3 Refugium | Supported with `kessil-refugium-<board>.yaml`: UI2 color 0-240 (blue to red), UI4 white, UI5 green. Untested. |
+| A160WE and A80 | None (0-10 V) | Analog lights with no K-Link support known; not controllable over K-Link. A light program on a PWM-to-0-10 V converter module driven by the ESPHome board is the route (see [light programs](light-programs.md)). |
+| AP9X and AP700 | None | Not supported. |
+
 ## Install
 
-Pick the file for your board and lamp: `kessil-tuna-sun-<board>.yaml` or `kessil-tuna-blue-<board>.yaml`, where
+Pick the file for your board and lamp: `kessil-tuna-sun-<board>.yaml`, `kessil-tuna-blue-<board>.yaml` or
+`kessil-refugium-<board>.yaml` for a Refugium, where
 `<board>` is `esp32-c6`, `esp32-s3`, `esp32-c3` or `esp32-s2`. Each file includes the default network package, so
 you do not add Wi-Fi, API or OTA yourself: the device opens a setup access point when it has no credentials.
 

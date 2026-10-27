@@ -1,0 +1,22 @@
+# Kessil Refugium on an ESP32-S3 (untested). Flash this, or adopt it from the ESPHome dashboard.
+# See docs/getting-started.md for wiring, safety notes and the other ways to use this file.
+substitutions:
+  name: kessil-refugium
+  friendly_name: Kessil Refugium
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  project:
+    name: nschimme.esphome-klink
+    version: "0.2.0"
+
+dashboard_import:
+  package_import_url: github://nschimme/esphome-klink/kessil-refugium-esp32-s3.yaml@main
+  import_full_config: false
+
+packages:
+  board: !include boards/esp32-s3.yaml
+  network: !include common/network-wifi.yaml
+  base: !include common/base.yaml
+  lamp: !include common/refugium.yaml

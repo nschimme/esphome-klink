@@ -8,8 +8,12 @@ Three tabs.
 
 **Dashboard**
 - Each group's mode and status. Tap a group, or one of its lamps, to flash it so you can tell which is which.
-- An **Effects** row per K-Link group: run Storm, Cloud, Aurora and the other effects at Fast, Moderate or Slow for a
-  few minutes or until stopped. An effect is a temporary overlay: the program carries on where it left off.
+- A light program's card has **Find these lights**: the lights of the program blink three times (dark, bright) and
+  then return to what they showed. It works while Send to lights is off, since a light program never uses the bus.
+- An **Effects** row per K-Link group and per light program: run Storm, Cloud, Aurora and the other effects at Fast,
+  Moderate or Slow for a few minutes or until stopped. An effect is a temporary overlay: the program carries on
+  where it left off. On a light program the row offers the effects that every one of its lights can show, and
+  starting one starts it on all of them at once.
 - A line showing the acclimation share while acclimation is on.
 
 **Program**
@@ -24,12 +28,13 @@ Three tabs.
   program to another group. **Done** ends a preview.
 
 **Settings**
-- The lamp list with nicknames, moving a lamp to another group, and rescan; **Send to lights** and **Retry**.
+- Group names, which rename a group on the page only.
+- The lamp list with nicknames, the type of each lamp and (after a scan) the model and firmware it reports, moving a lamp to another group, and rescan; **Send to lights** and **Retry**.
 - A **Light behavior** card per K-Link group (brightness curve, transition time, soft start), an **Acclimation** card
   per program, and a **Location** card.
 
-Light programs (ids 101 to 164) appear in the Program tab too, with channels that follow the light's type, and no
-lamp chips or identify buttons since they have no lamps on the bus.
+Light programs (ids 101 to 164) appear in the Program tab too, with channels that follow the light's type. They have
+no lamp chips, but **Find these lights** works on them and their card carries the same Effects row.
 
 ## ESPHome's device page: `http://<device>/`
 
@@ -62,9 +67,10 @@ group, 409 refused). State changes run on the device's main loop.
 | `POST /klink/acclimation` | `gid`, any of `on=0\|1`, `start=10..90`, `days=1..90` | The acclimation ramp. |
 | `POST /klink/effect` | `gid`, `name`, `speed`, `minutes` | Starts an effect. |
 | `POST /klink/effect/stop` | `gid` | Stops the running effect. |
-| `POST /klink/identify` | `kid` or `gid` | Flashes one lamp, or every lamp of a group. |
+| `POST /klink/identify` | `kid` or `gid` (a bus group, or a light program 101-164) | Flashes one lamp, every lamp of a group, or the lights of a program. |
 | `POST /klink/assign` | `kid`, `gid` | Moves a lamp to another group. |
 | `POST /klink/name` | `kid`, `name` | Gives a lamp a nickname. |
+| `POST /klink/groupname` | `gid`, `name` | Names a group on the page (24 bytes at most; an empty name restores the configured name). Home Assistant keeps the name from the YAML. |
 | `POST /klink/scan` | | Scans the bus for lamps. |
 | `POST /klink/writes` | `on=0\|1` | Send to lights. |
 | `POST /klink/retry` | | Clears a bus conflict. |

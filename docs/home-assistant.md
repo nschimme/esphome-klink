@@ -1,6 +1,6 @@
 # Home Assistant entities
 
-Every lamp group (one per Tuna Sun or Tuna Blue template you include) shows up in Home Assistant as a device
+Every lamp group (one per Tuna Sun, Tuna Blue or Refugium template you include) shows up in Home Assistant as a device
 section with the entities below, prefixed with the group's name (for example "Tuna Sun"). Entities marked
 *off by default* exist but are disabled in Home Assistant until you enable them.
 
@@ -11,7 +11,8 @@ section with the entities below, prefixed with the group's name (for example "Tu
   measured). The light also accepts an **RGB color**: it is snapped to the nearest color the lamp can make, using
   color temperature plus red and amber, and the snapped color is shown on the light.
 - **Tuna Blue:** an RGB light whose color is snapped to the nearest color the lamp can make.
-- **Effects.** Storm, Cloud and Aurora on both models, plus Rainbow, Moon Red and Moon Blue on the Tuna Blue (they
+- **Refugium:** an RGB light whose color is snapped to the nearest color the lamp can make.
+- **Effects.** Storm, Cloud and Aurora on every model, plus Rainbow, Moon Red and Moon Blue only on the Tuna Blue (they
   drive UI3-UI5, which a Tuna Sun does not have). The standard ESPHome effects `pulse` and `flicker` are included
   too. A sunrise is a `light.turn_on` with a long `transition_length`.
 
@@ -51,7 +52,8 @@ effects reach the lamps at no more than 25 frames a second, and the built-in eff
 
 ## Manual channels (*off by default*)
 
-**Red** and **amber** on the Tuna Sun; **color (raw 0-255)**, **violet**, **red** and **green** on the Tuna Blue.
+**Red** and **amber** on the Tuna Sun; **color (raw 0-255)**, **violet**, **red** and **green** on the Tuna Blue;
+**color (raw 0-240)**, **white** and **green** on the Refugium.
 Setting one switches the group to Manual. Values are raw: INT and CLR run 0 to 255; red, amber, violet and green run
 0 to 100. On the Tuna Blue the channel order follows Kessil's controller screen (violet, red, green); how those
 channels map to the lamp is untested.

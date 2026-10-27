@@ -1,17 +1,9 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import light, time
-from esphome.components.light.types import LightEffect
-from esphome.components.light.effects import (
-    MONOCHROMATIC_EFFECTS,
-    register_effect,
-    validate_effects,
-)
+from esphome.components.light.effects import MONOCHROMATIC_EFFECTS, validate_effects
 from esphome.const import (
-    CONF_DURATION,
     CONF_EFFECTS,
-    CONF_NAME,
-    CONF_SPEED,
     CONF_COLD_WHITE_COLOR_TEMPERATURE,
     CONF_WARM_WHITE_COLOR_TEMPERATURE,
     CONF_DEFAULT_TRANSITION_LENGTH,
@@ -21,6 +13,7 @@ from esphome.const import (
 )
 
 from . import CONF_GID, CONF_KLINK_ID, KLinkHub, ProgramHost, klink_ns
+from .effects import EFFECTS, KLinkEffect  # noqa: F401  (the effects register when the component loads)
 
 DEPENDENCIES = ["klink"]
 
@@ -33,50 +26,13 @@ CONF_MODEL = "model"
 # ProgramHost is declared in __init__.py so the hub schema can define KLinkLightProgram without a
 # circular import; it stays importable from here for the platform modules.
 KLinkGroup = klink_ns.class_("KLinkGroup", ProgramHost, light.LightOutput, cg.Component)
-KLinkEffect = klink_ns.class_("KLinkEffect", LightEffect)
-FxKind = klink_ns.enum("FxKind", is_class=True)
 GroupModel = klink_ns.enum("GroupModel", is_class=True)
 MODELS = {
     "tuna_sun": GroupModel.TUNA_SUN,  # tested: UI1 intensity, UI2 color temperature, UI4 red, UI5 amber
-    "tuna_blue": GroupModel.TUNA_BLUE,  # untested on a lamp: violet, red and green extra channels
-    "generic": GroupModel.GENERIC,  # any other model: raw channels
+    "tuna_blue": GroupModel.TUNA_BLUE,  # untested on a lamp: UI3 violet, UI4 red, UI5 green
+    "refugium": GroupModel.REFUGIUM,  # untested on a lamp: UI2 blue to red (0-240), UI4 white, UI5 green
 }
 
-
-# (YAML key, default name, kind)
-# The built-in effects (speed fast/moderate/slow, a duration). Standard ESPHome effects
-# (pulse, flicker, ...) are listed in YAML as usual and are forwarded to the lamps by the group.
-EFFECTS = [
-    ("klink_storm", "Storm", FxKind.STORM),
-    ("klink_cloud", "Cloud", FxKind.CLOUD),
-    ("klink_aurora", "Aurora", FxKind.AURORA),
-    ("klink_rainbow", "Rainbow", FxKind.RAINBOW),  # drives UI3-UI5; UI3 is unused on a Tuna Sun
-    ("klink_moon_red", "Moon Red", FxKind.MOON_RED),  # drives UI3 (unused on a Tuna Sun)
-    ("klink_moon_blue", "Moon Blue", FxKind.MOON_BLUE),  # drives UI4 (red on a Tuna Sun)
-]
-SPEEDS = {"fast": 0, "moderate": 1, "slow": 2}
-
-
-def _register_effect(key, default_name, kind):
-    schema = {
-        cv.Optional(CONF_SPEED, default="fast"): cv.one_of(*SPEEDS, lower=True),
-        # How long it runs, like the app's Time slider (0.5 to 5 minutes); 0s runs until stopped.
-        cv.Optional(CONF_DURATION, default="2min"): cv.positive_time_period_milliseconds,
-    }
-
-    @register_effect(key, KLinkEffect, default_name, schema)
-    async def effect_to_code(config, effect_id):
-        var = cg.new_Pvariable(effect_id, config[CONF_NAME])
-        cg.add(var.set_kind(kind))
-        cg.add(var.set_duration(config[CONF_DURATION]))
-        cg.add(var.set_speed(SPEEDS[config[CONF_SPEED]]))
-        return var
-
-    return effect_to_code
-
-
-for _key, _name, _kind in EFFECTS:
-    _register_effect(_key, _name, _kind)
 
 CONFIG_SCHEMA = (
     light.LIGHT_SCHEMA.extend(
