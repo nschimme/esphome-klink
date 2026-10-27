@@ -99,7 +99,7 @@ def main():
     WORK.mkdir()
     for name in ("boards", "common", "components", "examples"):
         shutil.copytree(ROOT / name, WORK / name, ignore=shutil.ignore_patterns("__pycache__"))
-    for path in ROOT.glob("kessil-tuna-*.yaml"):
+    for path in ROOT.glob("kessil-*.yaml"):
         shutil.copy(path, WORK / path.name)
     patch_base()
     rewrite_examples()

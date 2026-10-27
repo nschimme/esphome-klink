@@ -1,7 +1,7 @@
 #pragma once
 // The lighting effects as pure waveforms. An effect streams ordinary group writes (command 1F) 25 times a
-// second; no K-Link effect command exists on the wire. The shapes were recovered from the original
-// controller's firmware and checked against bus captures of its effects.
+// second; no K-Link effect command exists on the wire. The shapes match the effects of Kessil's own
+// controller, checked on the bus.
 //
 // An effect ID is `kind + 100 * variant`: kind 0-5 picks the effect and variant 0-2 slows it down by
 // (variant + 1), which is the Fast / Moderate / Slow speed. No ESPHome dependencies (host tested).

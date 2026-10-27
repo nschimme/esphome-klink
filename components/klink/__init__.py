@@ -259,9 +259,9 @@ async def to_code(config):
         component_conf.pop(CONF_UPDATE_INTERVAL, None)
         await cg.register_component(pvar, component_conf)
 
-    # The color tables of the Tuna lights: Home Assistant's RGB colors are snapped to the nearest
+    # The color tables of the Tuna lights and the Refugium: Home Assistant's RGB colors are snapped to the nearest
     # color a lamp can make (in every build, with or without the web page). klink.h declares
-    # COLOR_SUN/COLOR_BLUE extern before this global, so the const definitions get external linkage.
+    # COLOR_SUN/COLOR_BLUE/COLOR_REFUGIUM extern before this global, so the const definitions get external linkage.
     cg.add_global(cg.RawStatement(klink_colors.emit_cpp(firmware=True)))
 
     if config[CONF_WEB]:
@@ -322,3 +322,8 @@ async def stage_assignment_to_code(config, action_id, template_arg, args):
     cg.add(var.set_kid(await cg.templatable(config[CONF_KID], args, cg.uint32)))
     cg.add(var.set_gid(await cg.templatable(config[CONF_GID], args, cg.uint8)))
     return var
+
+
+# The klink_* light effects register with ESPHome when the component loads, so the stock rgb, monochromatic and
+# cwww lights of a light program can use them too.
+from . import effects  # noqa: E402,F401

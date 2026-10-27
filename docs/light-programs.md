@@ -32,6 +32,52 @@ Changing a light from outside the program, in Home Assistant, another automation
 program to **Manual**: the program stops writing and the light keeps what you set. Choosing **Program** in the Mode
 select hands control back and re-applies the program at the current time. **Off** turns the lights off.
 
+## Effects and Find
+
+The `klink_*` effects are light effects that work on any ESPHome light, not only K-Link groups: `klink_storm`,
+`klink_cloud` and `klink_aurora` on every light except on/off-only (binary) lights, and `klink_rainbow` on RGB
+lights. The two Moon effects (`klink_moon_red`, `klink_moon_blue`) are only on K-Link groups. Each takes `speed`
+(fast, moderate or slow; default fast) and `duration` (default 2min; 0s runs until stopped).
+
+UI1 (intensity) is the light's brightness. The color axis (UI2) is its color temperature when it has one; on an RGB
+light without color temperature it is a warm-to-cool white tint (an approximation of 2700 K to 6500 K). A
+brightness-only light has no color axis, so Cloud is not offered on it, because Cloud moves only the color axis.
+Storm and Aurora also move intensity, so they work on every light. Rainbow sweeps red, green and blue at full
+brightness.
+
+| Light type | Effects offered | How UI2 shows |
+|---|---|---|
+| Brightness only | Storm, Aurora | No color axis; Cloud is not offered |
+| Color temperature or cold/warm white | Storm, Cloud, Aurora | Its color temperature |
+| RGB | Storm, Cloud, Aurora, Rainbow | A warm-to-cool white tint (an approximation of 2700 K to 6500 K) |
+| RGBW | Treated like RGB for effects | As RGB |
+
+To use them, list them on the light, for example:
+
+```yaml
+light:
+  - platform: rgb
+    ...
+    effects:
+      - klink_storm:
+      - klink_cloud:
+      - klink_aurora:
+      - klink_rainbow:
+```
+
+For a color temperature or cold/warm white light list storm, cloud and aurora; for a brightness-only light storm and
+aurora. Effect frames go to the light at 25 a second with no fade and are not published to Home Assistant one by
+one (Home Assistant sees the effect running); they are not saved.
+
+A light program shows, on the page's Effects row, the effects that every one of its lights can show, including Pulse,
+Flicker and any other effect configured on the lights. Starting one starts it on all the lights of the program at
+once, with the same random flashes for Storm. The program holds its schedule back while an effect runs; afterwards
+the schedule shows again (Manual gets the lights back as they were before the effect, when the effect was started
+from the page). The page's Speed and Time settings apply; they are not stored in flash for a program.
+
+**Find these lights** on a program's Dashboard card makes the lights blink three times (dark, bright) and then
+return to what they showed. It works while Send to lights is off too, since a light program never uses the bus.
+
 ## Templates
 
 Include one template per program. Each file contains the whole program: the `klink: programs:` entry, the point

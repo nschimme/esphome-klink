@@ -18,6 +18,7 @@
 #include "esphome/components/light/light_state.h"
 #include "esphome/components/time/real_time_clock.h"
 
+#include "klink_fx_map.h"
 #include "klink_light_map.h"
 #include "klink_program.h"
 #include "klink_program_base.h"
@@ -27,8 +28,21 @@ namespace klink {
 
 class KLinkHub;
 
+// What a light entity can do, from its traits, as klink_light_map.h capability bits.
+inline uint8_t light_caps_of(const light::LightTraits &traits) {
+  uint8_t caps = kessil::klink::CAP_BRIGHTNESS;  // every light gets brightness
+  if (traits.supports_color_capability(light::ColorCapability::COLOR_TEMPERATURE))
+    caps |= kessil::klink::CAP_CT;
+  if (traits.supports_color_capability(light::ColorCapability::RGB))
+    caps |= kessil::klink::CAP_RGB;
+  if (traits.supports_color_capability(light::ColorCapability::WHITE))
+    caps |= kessil::klink::CAP_WHITE;
+  return caps;
+}
+
 class KLinkLightProgram : public ProgramBase, public Component {
  public:
+  KLinkLightProgram();  // registers itself: see for_light()
   const char *kind() const override { return "light"; }
   uint8_t gid() const override { return this->program_id_; }
   std::string name() const override { return this->name_; }
@@ -53,7 +67,26 @@ class KLinkLightProgram : public ProgramBase, public Component {
   void set_update_ms(uint32_t ms) { this->set_refresh_interval(ms); }
   void set_transition_ms(uint32_t ms) { this->transition_ms_ = ms; }
 
+  // The program that drives `light`, or nullptr.
+  static KLinkLightProgram *for_light(const light::LightState *light);
+
+  // Effects are the lights' own effect lists (the klink_* effects and ESPHome's). The ones that show something on every
+  // light of the program are offered; starting one starts it on all the lights, in step.
+  std::vector<std::string> effect_names() const override;
+  bool start_effect(const std::string &name) override;
+  void stop_effect() override;
+  int32_t effect_remaining_seconds() const override;
+  std::string effect_label() const override;
+  uint8_t effect_speed() const override { return this->effect_speed_; }
+  uint32_t effect_duration_ms() const override { return this->effect_duration_ms_; }
+  void set_effect_options(uint8_t speed, uint32_t duration_ms) override;
+  // Called by an effect on one of the lights.
+  void note_effect_started(uint32_t duration_ms);
+  // Three blinks on every light of the program, then back to what it showed.
+  bool find() override;
+
   void setup() override;
+  void loop() override;
   void dump_config() override;
   // After the lights (LightState is HARDWARE - 1), so their restored state is already published
   // and their traits are known.
@@ -115,6 +148,23 @@ class KLinkLightProgram : public ProgramBase, public Component {
   // False until the first output_() has completed: the lights' boot restore publishes long before
   // that and must never be treated as a manual change.
   bool armed_{false};
+
+  // Effects
+  uint8_t effect_speed_{0};              // 0 fast, 1 moderate, 2 slow
+  uint32_t effect_duration_ms_{120000};  // 0 = until stopped
+  uint32_t effect_end_ms_{0};
+  bool was_effect_active_{false};
+  // Our own effect calls publish too (the first value, the last frame): changes to the lights are not a user's until
+  // this time has passed since an effect last ran.
+  uint32_t quiet_until_ms_{0};
+  std::vector<light::LightColorValues> saved_;  // the lights before an effect started here, restored in Manual
+  bool saved_valid_{false};
+  // Find: step 0..5 alternate dark and bright every 250 ms, step 6 restores; -1 when idle.
+  int8_t find_step_{-1};
+  uint32_t find_next_ms_{0};
+  std::vector<light::LightColorValues> find_saved_;
+  void apply_find_step_();
+  void restore_(const std::vector<light::LightColorValues> &values);
 };
 
 }  // namespace klink

@@ -24,6 +24,7 @@ extern const size_t KLINK_PAGE_LEN;
 // linkage (the same pattern as KLINK_PAGE).
 extern const kessil::klink::ColorSpec COLOR_SUN;
 extern const kessil::klink::ColorSpec COLOR_BLUE;
+extern const kessil::klink::ColorSpec COLOR_REFUGIUM;
 
 // The K-Link web handler: the page at /klink and the JSON API under /klink. Registered with the
 // shared web server (web_server_base) so it works with or without the full `web_server:` component.
@@ -62,6 +63,7 @@ class KLinkWeb : public AsyncWebHandler, public Component {
   void handle_preview(AsyncWebServerRequest *request);
   void handle_preview_done(AsyncWebServerRequest *request);
   void handle_assign(AsyncWebServerRequest *request);
+  void handle_group_name(AsyncWebServerRequest *request);
   void handle_name(AsyncWebServerRequest *request);
   void handle_copy(AsyncWebServerRequest *request);
   void handle_retry(AsyncWebServerRequest *request);

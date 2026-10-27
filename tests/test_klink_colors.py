@@ -33,15 +33,27 @@ class StopTests(unittest.TestCase):
     def test_seventeen_stops(self):
         self.assertEqual(len(kc.SUN_STOPS), 17)
         self.assertEqual(len(kc.BLUE_STOPS), 17)
+        self.assertEqual(len(kc.REFUGIUM_STOPS), 17)
 
     def test_hex_format(self):
-        for value in kc.SUN_STOPS + kc.BLUE_STOPS + list(kc.OVERLAYS.values()):
+        for value in kc.SUN_STOPS + kc.BLUE_STOPS + kc.REFUGIUM_STOPS + list(kc.OVERLAYS.values()):
             self.assertRegex(value, HEX)
 
     def test_blue_ramp_direction(self):
         deep, light = channels(kc.BLUE_STOPS[0]), channels(kc.BLUE_STOPS[-1])
         self.assertGreaterEqual(light[2], deep[2])
         self.assertGreaterEqual(light[0], deep[0])
+
+    def test_refugium_ramp_runs_blue_to_red(self):
+        first, last = channels(kc.REFUGIUM_STOPS[0]), channels(kc.REFUGIUM_STOPS[-1])
+        self.assertGreater(first[2], first[0], "CLR 0 is the blue end")
+        self.assertGreater(last[0], last[2], "the far end is red")
+        self.assertEqual(kc.REFUGIUM_STOPS[-1], kc.REFUGIUM_STOPS[-2], "CLR 255 is not reachable: it repeats red")
+
+    def test_refugium_clr_limit(self):
+        self.assertEqual(kc.CLR_MAX, {"tuna_sun": 255, "tuna_blue": 255, "refugium": 240})
+        for target in kc._golden_targets("refugium"):
+            self.assertLessEqual(kc.nearest_i("refugium", target)["clr"], 240)
 
     def test_light_overlay_labels(self):
         # The light_* models reuse the KCOL block for their slider tracks and legend lines.
@@ -67,7 +79,7 @@ class SwatchTests(unittest.TestCase):
             self.assertLessEqual(abs(got[i] - expected), 1)
 
     def test_swatch_bounds(self):
-        for model in ("tuna_sun", "tuna_blue"):
+        for model in ("tuna_sun", "tuna_blue", "refugium"):
             for clr in (0, 1, 64, 128, 200, 255):
                 for overlays in ({}, {"r": 100}, {"vio": 50, "grn": 100}, {"am": 100, "r": 100}):
                     got = channels(kc.swatch(model, clr, overlays))
@@ -75,24 +87,24 @@ class SwatchTests(unittest.TestCase):
                         self.assertGreaterEqual(value, 0)
                         self.assertLessEqual(value, 255)
 
-    def test_generic_rejected(self):
+    def test_unknown_model_rejected(self):
         with self.assertRaises(ValueError):
-            kc.swatch("generic", 0)
+            kc.swatch("light_brightness", 0)
 
 
 class IntegerModelTests(unittest.TestCase):
     def test_int_stops_round_trip(self):
-        for model, stops in (("tuna_sun", kc.SUN_STOPS), ("tuna_blue", kc.BLUE_STOPS)):
+        for model, stops in (("tuna_sun", kc.SUN_STOPS), ("tuna_blue", kc.BLUE_STOPS), ("refugium", kc.REFUGIUM_STOPS)):
             self.assertEqual(kc.int_stops(model), [tuple(channels(v)) for v in stops])
 
     def test_swatch_i_endpoints(self):
-        for model in ("tuna_sun", "tuna_blue"):
+        for model in ("tuna_sun", "tuna_blue", "refugium"):
             stops = kc.int_stops(model)
             self.assertEqual(kc.swatch_i(model, 0, []), stops[0])
             self.assertEqual(kc.swatch_i(model, 255, []), stops[-1])
 
     def test_overlay_full_moves_sixty_percent(self):
-        for model in ("tuna_sun", "tuna_blue"):
+        for model in ("tuna_sun", "tuna_blue", "refugium"):
             n = len(kc.CHANNELS[model])
             for clr in (0, 64, 128, 200, 255):
                 base = kc.swatch_i(model, clr, [0] * n)
@@ -105,16 +117,17 @@ class IntegerModelTests(unittest.TestCase):
                         self.assertLessEqual(abs(got[c] - expected), 1)
 
     def test_nearest_i_exact_on_own_stops(self):
-        for model in ("tuna_sun", "tuna_blue"):
+        for model in ("tuna_sun", "tuna_blue", "refugium"):
             n = len(kc.CHANNELS[model])
             for stop in kc.int_stops(model):
                 result = kc.nearest_i(model, stop)
-                self.assertEqual(result["dist"], 0)
+                # The Refugium's stops are not spaced on whole CLR steps, so one unit of rounding is allowed.
+                self.assertLessEqual(result["dist"], 2 if model == "refugium" else 0)
                 self.assertEqual(result["overlays"], [0] * n)
                 self.assertEqual(kc.swatch_i(model, result["clr"], result["overlays"]), result["rgb"])
 
     def test_nearest_i_bounds_and_determinism(self):
-        for model in ("tuna_sun", "tuna_blue"):
+        for model in ("tuna_sun", "tuna_blue", "refugium"):
             for target in ((0, 0, 0), (255, 255, 255), (12, 34, 56), (255, 128, 0)):
                 first = kc.nearest_i(model, target)
                 second = kc.nearest_i(model, target)
@@ -124,7 +137,7 @@ class IntegerModelTests(unittest.TestCase):
                 self.assertEqual(kc.swatch_i(model, first["clr"], first["overlays"]), first["rgb"])
 
     def test_float_and_integer_swatch_agree(self):
-        for model in ("tuna_sun", "tuna_blue"):
+        for model in ("tuna_sun", "tuna_blue", "refugium"):
             labels = [label for _, label in kc.CHANNELS[model]]
             for clr in range(0, 256, 17):
                 for level in (0, 50, 100):
@@ -167,7 +180,7 @@ class EmitTests(unittest.TestCase):
 
     def test_emit_golden_shape(self):
         lines = kc.emit_golden().splitlines()
-        self.assertEqual(len(lines), 2 * (17 + 12 + 40))
+        self.assertEqual(len(lines), 3 * (17 + 12 + 40))
         for line in lines:
             self.assertEqual(len(line.split()), 13)
 

@@ -13,11 +13,12 @@ A point is `HH:MM` plus values, written as `key=value` pairs. Anything you leave
 |---|---|---|
 | Tuna Sun | `int` `clr` `r` `am` | int and clr 0-255; red and amber 0-100 |
 | Tuna Blue | `int` `clr` `vio` `r` `grn` | int and clr 0-255; violet, red and green 0-100 |
+| Refugium | `int` `clr` `w` `grn` | int 0-255; clr 0-240 (blue to red); white and green 0-100 |
 
-Examples: `09:00 int=51 clr=12 r=10 am=30` (Tuna Sun), `13:00 int=153 clr=178 vio=60 r=5 grn=5` (Tuna Blue). The
-plain five-number form `HH:MM 51 12 0 10 30` also works. `off` (or an empty text) leaves a slot unused. Values
-out of range are rejected, not clamped. With one point enabled the lamp holds it all day; with none the group has
-nothing to run.
+Examples: `09:00 int=51 clr=12 r=10 am=30` (Tuna Sun), `13:00 int=153 clr=178 vio=60 r=5 grn=5` (Tuna Blue),
+`09:00 int=102 clr=150 w=10` (Refugium). The plain five-number form `HH:MM 51 12 0 10 30` also works. `off` (or an
+empty text) leaves a slot unused. Values out of range are rejected, not clamped. With one point enabled the lamp
+holds it all day; with none the group has nothing to run.
 
 **Percent or raw?** The page and the status line show intensity and color in percent. The point texts and the JSON API
 use raw values: INT and CLR run to 255, so percent times 2.55 gives the raw value (60 % is 153). Red, amber, violet
@@ -72,7 +73,8 @@ night at local noon), and never saved: only the source and its settings are. Cho
 Program tab to copy today's curve into My points, simplified to fit the slots.
 
 The Sun source works on every program. The Moon source needs blue light, so it is offered on a Tuna Blue and on
-RGB or RGBW light programs, and not on a Tuna Sun, tunable-white or brightness-only lights.
+RGB or RGBW light programs, and not on a Tuna Sun, tunable-white or brightness-only lights. Neither the Sun nor the
+Moon source is offered on a Refugium.
 
 ### Sun
 
@@ -154,7 +156,7 @@ counts as clear. Clouds take a share off the Sun source's intensity:
 |---|---|
 | **Follow weather** | Off by default. The Sun source's intensity is reduced by the cloud share times **Max cloud dimming**, easing in and out over minutes so it never flickers. The status shows `clouds -N%`. |
 | **Max cloud dimming** | 0 to 90 %, default 50. The most that is taken off at a cloud share of 1. |
-| **Storms from weather** | Off by default. When a thunderstorm (`lightning`, `lightning-rainy`) begins, the Storm effect starts on groups that are in Program mode and have it. At most once every 30 minutes, and never from the first value after a restart. |
+| **Storms from weather** | Off by default. When a thunderstorm (`lightning`, `lightning-rainy`) begins, the Storm effect starts on K-Link groups in Program mode that have it, never on light programs. At most once every 30 minutes, and never from the first value after a restart. |
 
 For your own rules, call `light.turn_on` with `effect: Storm` from a Home Assistant automation.
 

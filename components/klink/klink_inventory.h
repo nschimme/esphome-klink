@@ -20,6 +20,12 @@ struct LampRecord {
   uint32_t kid;
   uint8_t gid;
   uint8_t type;  // 1, 2 or 3
+  // What the lamp reports about itself (commands 20 and 08), read during a scan and not stored in flash.
+  std::string model;
+  bool has_firmware;
+  uint8_t fw_major;
+  uint8_t fw_minor;
+  uint8_t fw_patch;
 };
 
 // Default group for a lamp type (type 1 -> 1, type 2 -> 2, type 3 -> 26); 0 for an unknown type.
@@ -78,8 +84,23 @@ class Inventory {
       }
     if (lamps_.size() >= MAX_LAMPS)
       return false;
-    lamps_.push_back(LampRecord{kid, gid, type});
+    lamps_.push_back(LampRecord{kid, gid, type, std::string(), false, 0, 0, 0});
     return true;
+  }
+
+  // Attach the lamp's own report to a known lamp. False when the KID is not in the table.
+  bool set_info(uint32_t kid, const std::string &model, bool has_firmware, uint8_t major, uint8_t minor,
+                uint8_t patch) {
+    for (size_t i = 0; i < lamps_.size(); i++)
+      if (lamps_[i].kid == kid) {
+        lamps_[i].model = model;
+        lamps_[i].has_firmware = has_firmware;
+        lamps_[i].fw_major = major;
+        lamps_[i].fw_minor = minor;
+        lamps_[i].fw_patch = patch;
+        return true;
+      }
+    return false;
   }
 
   bool remove(uint32_t kid) {
@@ -145,7 +166,7 @@ class Inventory {
       const uint8_t *p = &b[2 + 6 * i];
       LampRecord r = {(static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
                           (static_cast<uint32_t>(p[2]) << 8) | p[3],
-                      p[4], p[5]};
+                      p[4], p[5], std::string(), false, 0, 0, 0};
       if (r.type < 1 || r.type > 3)
         return false;
       parsed.push_back(r);

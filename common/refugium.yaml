@@ -1,0 +1,17 @@
+# Refugium: one K-Link group with a manual light, a 16-point daily program you can edit from Home
+# Assistant, and a point editor. Include it together with a board file and common/base.yaml
+# (the top-level kessil-*.yaml files do this for you).
+#
+# This is a thin wrapper around the reusable template common/group-refugium.yaml. To add another
+# Refugium group, include the template directly with its vars (see the template header and
+# docs/configuration.md); this file keeps the default group.
+#
+# Substitutions you can override:
+#   refugium_gid   the K-Link group this controls (default 26, the Refugium's default). Changing
+#                  it moves the group; the entity names and ids stay the same, so stored programs
+#                  follow the group.
+substitutions:
+  refugium_gid: "26"
+
+packages:
+  group: !include {file: group-refugium.yaml, vars: {id: refugium, name: Refugium, gid: "${refugium_gid}"}}

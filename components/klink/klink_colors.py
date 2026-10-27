@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Color model for the esphome-klink page (stdlib only).
 
-The values here are our own approximations of the light a lamp makes. They are rough on purpose:
-BLUE_STOPS in particular is a plain blue ramp that still needs calibration against real lamps.
-Nothing is taken from Kessil's website, images or code.
+The values here approximate the light a lamp makes. They are rough: only the Tuna Sun has been
+compared with a lamp. BLUE_STOPS and REFUGIUM_STOPS are calibrated against the color wheels
+published on Kessil's product pages, not against lamps.
 
 Used by components/klink/web_build.py to generate the KCOL block in the page and by
 tests/test_klink_colors.py as the reference implementation.
@@ -19,8 +19,27 @@ import sys
 SUN_TEMPS = (6000.0, 9000.0)
 SUN_STOPS = []
 
-# A rough blue ramp, deep blue to light blue, interpolated linearly in RGB. Uncalibrated guess.
-BLUE_STOPS = []
+# The Tuna Blue ramp: saturated blue at CLR 0 to lavender white at CLR 255, read at 17 evenly spaced
+# points along the strip of the Tuna Blue's color wheel on Kessil's product page.
+BLUE_STOPS = [
+    "#096cff", "#1a77ff", "#3085ff", "#4794ff", "#5fa3ff", "#74afff", "#87baff", "#96c0ff",
+    "#a3c4ff", "#afc7ff", "#bac9ff", "#c4cbff", "#cdceff", "#d7d3ff", "#dfd9ff", "#e6dfff",
+    "#ece5ff",
+]
+
+# The Refugium ramp: blue at CLR 0 through violet and magenta to red at CLR 240, read from the strip of
+# the Refugium's color wheel on Kessil's product page (the wheel continues past red into salmon and
+# daylight, which are the white channel's job). Which end is CLR 0 is inferred: the wheel's blue-to-red
+# sweep spans 240 degrees, matching the 240 limit on CLR. Stops sit at CLR 255*i/16; CLR 255 is not reachable
+# and repeats red.
+REFUGIUM_STOPS = [
+    "#0078ff", "#0276fe", "#1863fa", "#3847f3", "#5a2aec", "#7b11e4", "#9800db", "#b100d4",
+    "#c900ce", "#de00c6", "#f200ba", "#fe00aa", "#ff0080", "#ff0045", "#ff0014", "#ff0000",
+    "#ff0000",
+]
+
+# Highest CLR (UI2) each model's lamp accepts: a Refugium takes at most 240.
+CLR_MAX = {"tuna_sun": 255, "tuna_blue": 255, "refugium": 240}
 
 # Channel overlays applied on top of the CLR base tint, in the group's label order.
 # The light_* labels (g, b, ct, w) are not part of any Kessil color model; the page uses them
@@ -36,7 +55,7 @@ OVERLAYS = {
     "w": "#e4ebf1",
 }
 
-# CLR used when a group has no CLR channel (generic model, not rendered): the middle of the axis.
+# CLR used when a group has no CLR channel (not rendered): the middle of the axis.
 MID_CLR = 128
 
 
@@ -79,10 +98,6 @@ def _stop_clr(index, count=17):
 def _build():
     for i in range(17):
         SUN_STOPS.append(_rgb_to_hex(_kelvin_rgb(_mired_kelvin(_stop_clr(i)))))
-    deep, light = _hex_to_rgb("#1d4ed8"), _hex_to_rgb("#5ec8ff")
-    for i in range(17):
-        t = _stop_clr(i) / 255.0
-        BLUE_STOPS.append(_rgb_to_hex([a + (b - a) * t for a, b in zip(deep, light)]))
 
 
 _build()
@@ -93,6 +108,8 @@ def _stops_for(model):
         return SUN_STOPS
     if model == "tuna_blue":
         return BLUE_STOPS
+    if model == "refugium":
+        return REFUGIUM_STOPS
     raise ValueError("no color axis for model %r" % (model,))
 
 
@@ -133,6 +150,7 @@ def swatch(model, clr, overlays=None):
 CHANNELS = {
     "tuna_sun": [(3, "r"), (4, "am")],
     "tuna_blue": [(2, "vio"), (3, "r"), (4, "grn")],
+    "refugium": [(3, "w"), (4, "grn")],
 }
 
 # Highest number of swatch+dist evaluations nearest_i() may make for any target.
@@ -202,12 +220,14 @@ def nearest_i(model, target):
         evals += 1
         return rgb, dist_i(rgb, target)
 
-    # Stage 1: coarse CLR scan (0, 8, ..., 248, 255), overlays 0.
+    clr_max = CLR_MAX[model]
+
+    # Stage 1: coarse CLR scan (0, 8, ... and clr_max), overlays 0.
     best_dist = None
     best_clr = 0
     best_ov = [0] * n_ov
     best_rgb = (0, 0, 0)
-    for clr in list(range(0, 249, 8)) + [255]:
+    for clr in list(range(0, clr_max + 1, 8)) + ([clr_max] if clr_max % 8 else []):
         rgb, distance = evaluate(clr, [0] * n_ov)
         if best_dist is None or distance < best_dist:
             best_dist, best_clr, best_rgb = distance, clr, rgb
@@ -219,7 +239,7 @@ def nearest_i(model, target):
             accepted = False
             for vi in range(1 + n_ov):
                 step = _CLR_STEPS[s] if vi == 0 else _OV_STEPS[s]
-                high = 255 if vi == 0 else 100
+                high = clr_max if vi == 0 else 100
                 current = values[vi]
                 for sign in (1, -1):
                     candidate = current + sign * step
@@ -273,7 +293,7 @@ def emit_cpp(firmware=False):
             "namespace klink {",
             "",
         ]
-    for model, macro in (("tuna_sun", "SUN"), ("tuna_blue", "BLUE")):
+    for model, macro in (("tuna_sun", "SUN"), ("tuna_blue", "BLUE"), ("refugium", "REFUGIUM")):
         channels = CHANNELS[model]
         lines.append("static const uint8_t COLOR_%s_STOPS[17][3] = {" % macro)
         for rgb in int_stops(model):
@@ -292,13 +312,13 @@ def emit_cpp(firmware=False):
         if firmware:
             lines.append(
                 "const kessil::klink::ColorSpec COLOR_%s = {COLOR_%s_STOPS, %d, "
-                "COLOR_%s_OVERLAY_CHANNEL, COLOR_%s_OVERLAY_RGB};"
-                % (macro, macro, len(channels), macro, macro)
+                "COLOR_%s_OVERLAY_CHANNEL, COLOR_%s_OVERLAY_RGB, %d};"
+                % (macro, macro, len(channels), macro, macro, CLR_MAX[model])
             )
         else:
             lines.append(
                 "static const ColorSpec COLOR_%s = {COLOR_%s_STOPS, %d, COLOR_%s_OVERLAY_CHANNEL, "
-                "COLOR_%s_OVERLAY_RGB};" % (macro, macro, len(channels), macro, macro)
+                "COLOR_%s_OVERLAY_RGB, %d};" % (macro, macro, len(channels), macro, macro, CLR_MAX[model])
             )
         lines.append("")
     if firmware:
@@ -340,7 +360,7 @@ def _golden_targets(model):
 def emit_golden():
     """Golden vectors: one line per model and target, recomputed by the C++ test."""
     lines = []
-    for model in ("tuna_sun", "tuna_blue"):
+    for model in ("tuna_sun", "tuna_blue", "refugium"):
         for target in _golden_targets(model):
             result = nearest_i(model, target)
             overlays = list(result["overlays"]) + [-1] * (3 - len(result["overlays"]))

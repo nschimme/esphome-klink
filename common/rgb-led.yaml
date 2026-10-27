@@ -20,3 +20,7 @@ light:
     effects:
       - pulse:
       - random:
+      - klink_storm:
+      - klink_cloud:
+      - klink_aurora:
+      - klink_rainbow:

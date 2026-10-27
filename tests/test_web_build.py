@@ -111,11 +111,17 @@ class LightProgramTests(unittest.TestCase):
     def test_no_ct_light_in_default_state(self):
         self.assertIsNone(self.by_gid(102))
 
-    def test_refuses_lamp_routes_for_program_ids(self):
-        with self.assertRaises(mock_server.HttpError) as raised:
+    def test_identify_flashes_a_program_s_lights(self):
+        mock_server.BUS["writes"] = False  # a light program never touches the bus
+        try:
             mock_server.handle_identify({"gid": ["101"]})
-        self.assertEqual(raised.exception.code, 400)
-        self.assertEqual(raised.exception.message, "not a lamp group")
+            with self.assertRaises(mock_server.HttpError) as raised:
+                mock_server.handle_identify({"gid": ["164"]})
+            self.assertEqual(raised.exception.code, 404)
+        finally:
+            mock_server.BUS["writes"] = True
+
+    def test_refuses_lamp_routes_for_program_ids(self):
         with self.assertRaises(mock_server.HttpError) as raised:
             mock_server.handle_assign({"kid": ["18000001"], "gid": ["101"]})
         self.assertEqual(raised.exception.code, 400)
@@ -178,7 +184,7 @@ class MockEffectTests(unittest.TestCase):
     def test_effect_names_per_model(self):
         self.assertEqual(self.group(2)["effects"], self.SUN)
         self.assertEqual(self.group(1)["effects"], self.BLUE)
-        self.assertEqual(self.group(101)["effects"], [])
+        self.assertEqual(self.group(101)["effects"], ["Storm", "Cloud", "Aurora", "Rainbow"])
 
     def test_idle_defaults(self):
         for gid in (2, 1, 101):
@@ -234,9 +240,9 @@ class MockEffectTests(unittest.TestCase):
         with self.assertRaises(mock_server.HttpError) as raised:
             self.start(gid="2", name="Disco")
         self.assertEqual((raised.exception.code, raised.exception.message), (404, "unknown effect"))
-        # A light program has effects on the light, but none are offered here.
+        # A program offers only the effects its lights can show: Moon needs a K-Link lamp.
         with self.assertRaises(mock_server.HttpError) as raised:
-            self.start(gid="101", name="Storm")
+            self.start(gid="101", name="Moon Blue")
         self.assertEqual(raised.exception.code, 404)
 
     def test_bad_parameters(self):
@@ -326,7 +332,10 @@ class MockSnapTests(unittest.TestCase):
                 1, "Tuna Blue", "tuna_blue", ["int", "clr", "vio", "r", "grn"], []
             ),
             mock_server.make_group(
-                3, "Generic", "generic", ["ui1", "ui2", "ui3", "ui4", "ui5"], []
+                26, "Refugium", "refugium", ["int", "clr", None, "w", "grn"], []
+            ),
+            mock_server.make_group(
+                3, "Lamp", "light_brightness", ["int", None, None, None, None], [], kind="light"
             ),
         ]
 
@@ -356,7 +365,14 @@ class MockSnapTests(unittest.TestCase):
         )
         self.assertEqual(payload["target"], "00ff00")
 
-    def test_generic_rejected(self):
+    def test_refugium(self):
+        payload = self.snap(gid="26", rgb="ff0000")
+        expected = mock_server.klink_colors.nearest_i("refugium", (255, 0, 0))
+        self.assertEqual(list(payload["set"]), ["clr", "w", "grn"])
+        self.assertEqual(payload["set"]["clr"], expected["clr"])
+        self.assertLessEqual(payload["set"]["clr"], 240)
+
+    def test_brightness_light_rejected(self):
         with self.assertRaises(mock_server.HttpError) as raised:
             self.snap(gid="3", rgb="ffffff")
         self.assertEqual(raised.exception.code, 400)
@@ -376,6 +392,31 @@ class MockSnapTests(unittest.TestCase):
     def test_snap_is_get_only(self):
         self.assertIn("/klink/snap", mock_server.GET_ROUTES)
         self.assertNotIn("/klink/snap", mock_server.POST_ROUTES)
+
+
+class GroupNameTests(unittest.TestCase):
+    def setUp(self):
+        self.saved = copy.deepcopy(mock_server.GROUPS)
+
+    def tearDown(self):
+        mock_server.GROUPS[:] = self.saved
+
+    def group(self, gid):
+        return [g for g in mock_server.state_json()["groups"] if g["gid"] == gid][0]
+
+    def test_rename_and_clear(self):
+        default = self.group(2)["name"]
+        self.assertEqual(self.group(2)["default_name"], default)
+        mock_server.handle_group_name({"gid": ["2"], "name": ["Frag tank"]})
+        self.assertEqual(self.group(2)["name"], "Frag tank")
+        self.assertEqual(self.group(2)["default_name"], default)
+        mock_server.handle_group_name({"gid": ["2"], "name": [""]})
+        self.assertEqual(self.group(2)["name"], default)
+
+    def test_rejects_bad_requests(self):
+        for query in ({"gid": ["2"]}, {"gid": ["2"], "name": ["x" * 25]}, {"gid": ["99"], "name": ["x"]}, {"name": ["x"]}):
+            with self.assertRaises(mock_server.HttpError):
+                mock_server.handle_group_name(query)
 
 
 if __name__ == "__main__":

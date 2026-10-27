@@ -18,6 +18,12 @@ int main() {
   check("remove", inv.remove(18001235) && !inv.remove(18001235) && inv.lamps().size() == 1);
   inv.upsert(18001235, 2, 2);
 
+  check("info on unknown kid", !inv.set_info(5, "A360X", true, 1, 3, 0));
+  check("set info", inv.set_info(18001234, "A360X", true, 1, 3, 7) && inv.find(18001234)->model == "A360X" &&
+                        inv.find(18001234)->has_firmware && inv.find(18001234)->fw_patch == 7);
+  check("upsert keeps info", inv.upsert(18001234, 2, 2) && inv.find(18001234)->model == "A360X");
+  check("new lamp has no info", inv.find(18001235)->model.empty() && !inv.find(18001235)->has_firmware);
+
   // round trip
   std::vector<uint8_t> blob = inv.serialize();
   Inventory back;

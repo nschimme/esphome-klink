@@ -756,6 +756,7 @@ function makeServer(opts) {
 var APP = path.join(__dirname, '..', '..', 'components', 'klink', 'web', 'app.js');
 var KCOL = 'var KCOL={sun:' + JSON.stringify(new Array(17).fill('#102030')) +
   ',blue:' + JSON.stringify(new Array(17).fill('#203040')) +
+  ',refugium:' + JSON.stringify(new Array(17).fill('#304050')) +
   ',ov:{r:"#ff0000",am:"#ffaa00",vio:"#8800ff",grn:"#00ff00",g:"#00ff00",b:"#0000ff",ct:"#ffb46b",w:"#eeeeee"}};';
 
 function flush() {

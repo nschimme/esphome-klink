@@ -128,7 +128,7 @@ function outputText(g){
     var label=g.labels&&g.labels[i];
     if(!label) continue;
     var max=g.max&&typeof g.max[i]==='number'?g.max[i]:255;
-    var pct=max===255?Math.round(ch[i]*100/255):ch[i];
+    var pct=pctOf(g,i)?Math.round(ch[i]*100/max):ch[i];
     parts.push(label.toUpperCase()+' '+pct+'%');
   }
   return parts.join(' · ');
@@ -215,7 +215,7 @@ function makeCard(g){
   var find=makeButton('Find these lamps','btn');
   find.setAttribute('data-busy','find-'+g.gid);
   find.addEventListener('click',function(){
-    act('find-'+g.gid,API+'/identify',{gid:g.gid},'Flashing the lamps in '+g.name,null);
+    act('find-'+g.gid,API+'/identify',{gid:g.gid},'Flashing the '+(g.kind==='light'?'lights':'lamps')+' in '+g.name,null);
   });
   var count=document.createElement('span');count.className='lamps';
   rowline.appendChild(find);rowline.appendChild(count);
@@ -360,7 +360,6 @@ function updateCard(g){
   setText(c.name,g.name||('Group '+g.gid));
   c.tag.hidden=!light;
   c.badge.hidden=g.mode!=='preview';
-  c.rowline.hidden=light;
   setText(c.status,g.status||'');
   var ac=g.acclimation;
   c.acc.hidden=!(ac&&ac.on);
@@ -394,10 +393,11 @@ function updateCard(g){
     var sp=document.createElement('span');sp.className='spin';sp.setAttribute('aria-hidden','true');
     c.find.appendChild(sp);c.find.appendChild(document.createTextNode('Finding…'));
   }else{
-    c.find.appendChild(document.createTextNode('Find these lamps'));
+    c.find.appendChild(document.createTextNode(light?'Find these lights':'Find these lamps'));
   }
   var n=g.lamps?g.lamps.length:0;
   c.chips.hidden=light;
+  c.count.hidden=light;
   setText(c.count,n===1?'1 lamp':n+' lamps');
   var seen={},i,kid,chip;
   if(g.lamps) for(i=0;i<g.lamps.length;i++){
@@ -642,7 +642,7 @@ function updateRow(lamp,body){
   setText(r.name,lampLabel(lamp.kid));
   var gname='';
   if(state&&state.groups) for(var i=0;i<state.groups.length;i++) if(state.groups[i].gid===lamp.gid) gname=state.groups[i].name;
-  setText(r.meta,'Type '+lamp.type);
+  setText(r.meta,'Type '+lamp.type+(lamp.model?' · '+lamp.model:'')+(lamp.firmware?' · firmware '+lamp.firmware:''));
   r.search=(lampLabel(lamp.kid)+' '+lamp.kid+' '+String(lamp.kid).slice(-4)+' group '+lamp.gid+' '+(gname||'')).toLowerCase();
   fillGroups(r.select,lamp,r);
   if(!editing[lamp.kid]) r.edit.hidden=true;
@@ -879,7 +879,52 @@ function renderAcc(){
     }
   }
 }
+var groupNameRows={};
+function makeGroupNameRow(gid){
+  var el=document.createElement('div');el.className='row compact';
+  var label=document.createElement('label');label.className='row-name';
+  var input=document.createElement('input');input.type='text';input.maxLength=24;
+  input.id='group-name-'+gid;label.htmlFor=input.id;
+  var save=makeButton('Save','btn small primary');save.setAttribute('data-busy','gname-'+gid);
+  var err=document.createElement('div');err.className='row-error';err.hidden=true;err.setAttribute('role','status');
+  var r={el:el,label:label,input:input,save:save,err:err,dirty:false};
+  function doSave(){
+    var v=input.value;
+    act('gname-'+gid,API+'/groupname',{gid:gid,name:v},v?'Group renamed':'Group name cleared',function(e){
+      if(e){err.hidden=false;setText(err,e.message);}
+      else{err.hidden=true;r.dirty=false;}
+    });
+  }
+  input.addEventListener('input',function(){r.dirty=true;});
+  input.addEventListener('keydown',function(ev){if(ev.key==='Enter'){ev.preventDefault();doSave();}});
+  save.addEventListener('click',doSave);
+  el.appendChild(label);el.appendChild(input);el.appendChild(save);el.appendChild(err);
+  return r;
+}
+function renderGroupNames(){
+  var box=byId('group-names'),gs=(state.groups||[]),seen={},i,g,r;
+  if(!box) return;
+  for(i=0;i<gs.length;i++){
+    g=gs[i];seen[g.gid]=true;
+    r=groupNameRows[g.gid];
+    if(!r){r=makeGroupNameRow(g.gid);groupNameRows[g.gid]=r;}
+    placeRow(box,r.el,i);
+    setText(r.label,'Group '+g.gid);
+    var def=g.default_name||('Group '+g.gid);
+    if(r.input.placeholder!==def) r.input.placeholder=def;
+    r.input.setAttribute('aria-label','Name for group '+g.gid);
+    var cur=g.name===def?'':(g.name||'');
+    if(!r.dirty&&document.activeElement!==r.input&&r.input.value!==cur) r.input.value=cur;
+  }
+  for(var gid in groupNameRows){
+    if(!seen[gid]){
+      if(groupNameRows[gid].el.parentNode) groupNameRows[gid].el.parentNode.removeChild(groupNameRows[gid].el);
+      delete groupNameRows[gid];
+    }
+  }
+}
 function renderSettings(){
+  renderGroupNames();
   renderOutputs();
   renderAcc();
   var ll=byId('location-line');
@@ -1093,7 +1138,7 @@ function ctRGB(v){
 }
 /* The color-strip gradient, also used for the CLR channel track. */
 function stripGradient(model){
-  var st=model==='tuna_blue'?KCOL.blue:KCOL.sun;
+  var st=model==='tuna_blue'?KCOL.blue:model==='refugium'?KCOL.refugium:KCOL.sun;
   return 'linear-gradient(to right,'+st.join(',')+')';
 }
 /* Track tint per channel: CLR follows the color axis, overlays fade from a neutral dark. */
@@ -1129,14 +1174,14 @@ function swatchColor(g,ch){
     var v=i<0?0:cl(ch[i]==null?0:ch[i],0,255);
     return rgbHex([v,v,v]);
   }
-  var st=m==='tuna_sun'?KCOL.sun:m==='tuna_blue'?KCOL.blue:0;
+  var st=m==='tuna_sun'?KCOL.sun:m==='tuna_blue'?KCOL.blue:m==='refugium'?KCOL.refugium:0;
   if(!st)return '';
   var ci=L.indexOf('clr'),n=16;
   var f=(ci<0?128:(ch[ci]==null?128:cl(ch[ci],0,255)))/255*n,j=Math.floor(f),t=f-j;
   var a=hx(st[j]),b=hx(st[Math.min(n,j+1)]);
   for(k=0;k<3;k++)o[k]=a[k]+(b[k]-a[k])*t;
-  var O=['r','am','vio','grn'];
-  for(k=0;k<4;k++){
+  var O=['r','am','vio','grn','w'];
+  for(k=0;k<5;k++){
     var q=L.indexOf(O[k]);
     if(q<0||ch[q]==null)continue;
     var c=hx(KCOL.ov[O[k]]),mm=.6*cl(ch[q],0,100)/100;
@@ -1174,7 +1219,7 @@ function parseColor(v){
 /* What kind of color control this model gets: snap wheel, direct disc, CT strip or none. */
 function pickKind(g){
   if(!g)return '';
-  if(g.model==='tuna_sun'||g.model==='tuna_blue') return hasCh(g,1)?'snap':'';
+  if(g.model==='tuna_sun'||g.model==='tuna_blue'||g.model==='refugium') return hasCh(g,1)?'snap':'';
   if(g.model==='light_rgb'||g.model==='light_rgbw') return 'disc';
   if(g.model==='light_ct') return 'ct';
   return '';
@@ -1397,8 +1442,10 @@ function ctPick(ev){
   var w=r.width||1;
   ctApply(cl((ev.clientX-r.left)/w,0,1)*mx);
 }
-function cv(g,c,v){var mx=g.max&&typeof g.max[c]==='number'?g.max[c]:255;return mx===255?Math.round(v*100/255):v;}
-function vc(g,c,p){var mx=g.max&&typeof g.max[c]==='number'?g.max[c]:255;return mx===255?Math.round(p*255/100):Math.round(p);}
+/* Channels show as a percent of their own maximum (CLR tops out at 240 on a Refugium); only a light program's raw ct stays raw. */
+function pctOf(g,c){var mx=g.max&&typeof g.max[c]==='number'?g.max[c]:255;return mx===255||!(g.labels&&g.labels[c]==='ct');}
+function cv(g,c,v){var mx=g.max&&typeof g.max[c]==='number'?g.max[c]:255;return pctOf(g,c)?Math.round(v*100/mx):v;}
+function vc(g,c,p){var mx=g.max&&typeof g.max[c]==='number'?g.max[c]:255;return pctOf(g,c)?Math.round(p*mx/100):Math.round(p);}
 function cloneSlots(a){var o=[],i;for(i=0;i<a.length;i++)o.push({minute:a[i].minute,ch:a[i].ch.slice(),enabled:!!a[i].enabled});return o;}
 function lerp(a,b,e,s){var d=(b-a)*e;return a+(d>=0?Math.floor(d/s):-Math.floor((-d+s-1)/s));}
 /* ---- history, device mirror and writes ---- */
@@ -2172,8 +2219,11 @@ function buildProg(){
     });
   });
   copyRow.appendChild(pg.copyBtn);
-  pg.presetsLabel=mk('p','section-label',root,'Presets');
-  var pr=mk('div','chips',root);
+  /* Presets sit under the chart, beside the tall point panel (see .pre in the stylesheet). */
+  var preBox=mk('div','pre',pg.wrap);
+  pg.preBox=preBox;
+  pg.presetsLabel=mk('p','section-label',preBox,'Presets');
+  var pr=mk('div','chips',preBox);
   pg.presets=pr;
   pg.defaultBtn=makeButton('Default','btn small');
   pg.defaultBtn.setAttribute('title','Reset the program to the factory points');
@@ -2184,7 +2234,7 @@ function buildProg(){
     b.addEventListener('click',function(){askPreset(pre);});
     pr.appendChild(b);
   });
-  pg.confirm=mk('div','confirm',root);
+  pg.confirm=mk('div','confirm',preBox);
   pg.confirm.hidden=true;
   pg.confirmText=mk('span',null,pg.confirm);
   var yes=makeButton('Yes','btn small primary');
@@ -2360,6 +2410,7 @@ function applyEditorMode(ro){
   pg.panel.hidden=ro;
   pg.presetsLabel.hidden=ro;
   pg.presets.hidden=ro;
+  pg.preBox.hidden=ro;
   if(ro)pg.copy.hidden=true;
   pg.wrap.className=ro?'pwrap ro':'pwrap';
   if(ro){
@@ -2486,7 +2537,7 @@ function updatePanel(g){
   if(!g)return;
   var s=P.slots[P.sel],on=s&&s.enabled,i,rank=0,ol=onList();
   for(i=0;i<ol.length;i++)if(ol[i].i===P.sel)rank=i+1;
-  setText(pg.ptitle,on&&rank?'Point '+rank+' of '+ol.length:'No point selected');
+  setText(pg.ptitle,on&&rank?'Point '+rank+' of '+ol.length+' (room for '+P.slots.length+')':'No point selected');
   pg.time.disabled=!on;
   if(document.activeElement!==pg.time)pg.time.value=on?hhmm(s.minute):'';
   for(i=0;i<pg.chRows.length;i++){
@@ -2526,7 +2577,7 @@ function syncToolbar(){
   for(i=0;i<all;i++)if(!P.slots[i].enabled)free++;
   pg.addBtn.disabled=!g||free===0;
   pg.addBtn.setAttribute('title',free===0?'All '+all+' points are used. Remove one to add another.':'Add a point at a time of day you choose');
-  pg.allHint.hidden=!(g&&free===0);
+  pg.allHint.hidden=!(g&&!genOn(g)&&free===0);
   setText(pg.allHint,'All '+all+' points are used. Remove one to add another.');
   pg.undoBtn.disabled=!h.undo.length;
   pg.redoBtn.disabled=!h.redo.length;

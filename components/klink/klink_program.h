@@ -67,6 +67,8 @@ class ProgramHost {
   virtual std::string name() const = 0;
   virtual std::string model_name() const = 0;
   virtual const kessil::klink::SlotLabels *slot_labels() const = 0;
+  // Highest value of each channel the lamps accept (five entries).
+  virtual const uint8_t *channel_max() const { return kessil::klink::CHANNEL_MAX; }
   virtual size_t num_slots() const = 0;
   virtual const kessil::klink::SchedulePoint &point(size_t index) const = 0;
   // The shipped ("factory") point for a slot, independent of edits stored since. False when there is
@@ -109,6 +111,9 @@ class ProgramHost {
   virtual uint8_t effect_speed() const { return 0; }  // 0 fast, 1 moderate, 2 slow
   virtual uint32_t effect_duration_ms() const { return 120000; }
   virtual void set_effect_options(uint8_t speed, uint32_t duration_ms) {}
+  // Flash the lights so they can be told apart: false when this host cannot (a bus group is found through
+  // its lamps, see KLinkHub::identify_gid).
+  virtual bool find() { return false; }
 
   // Sun and moon programs: hosts without them keep these defaults.
   virtual void set_location_provider(const LocationProvider *provider) { (void) provider; }

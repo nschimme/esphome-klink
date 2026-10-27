@@ -49,7 +49,8 @@ static bool is_post_route(const char *path) {
   return std::strcmp(path, "/klink/mode") == 0 || std::strcmp(path, "/klink/identify") == 0 ||
          std::strcmp(path, "/klink/point") == 0 || std::strcmp(path, "/klink/preview") == 0 ||
          std::strcmp(path, "/klink/preview/done") == 0 || std::strcmp(path, "/klink/assign") == 0 ||
-         std::strcmp(path, "/klink/name") == 0 || std::strcmp(path, "/klink/copy") == 0 ||
+         std::strcmp(path, "/klink/name") == 0 || std::strcmp(path, "/klink/groupname") == 0 ||
+         std::strcmp(path, "/klink/copy") == 0 ||
          std::strcmp(path, "/klink/retry") == 0 || std::strcmp(path, "/klink/writes") == 0 || std::strcmp(path, "/klink/scan") == 0 ||
          std::strcmp(path, "/klink/effect") == 0 || std::strcmp(path, "/klink/effect/stop") == 0 ||
          std::strcmp(path, "/klink/output") == 0 || std::strcmp(path, "/klink/source") == 0 ||
@@ -222,6 +223,10 @@ void KLinkWeb::handleRequest(AsyncWebServerRequest *request) {
       this->handle_name(request);
       return;
     }
+    if (std::strcmp(path, "/klink/groupname") == 0) {
+      this->handle_group_name(request);
+      return;
+    }
     if (std::strcmp(path, "/klink/copy") == 0) {
       this->handle_copy(request);
       return;
@@ -361,6 +366,9 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
     out += ",\"kind\":";
     append_quoted(out, group->kind());
     out += ",\"name\":";
+    const char *nickname = this->hub_->group_names().get(group->gid());
+    append_quoted(out, nickname != nullptr ? std::string(nickname) : group->name());
+    out += ",\"default_name\":";
     append_quoted(out, group->name());
     out += ",\"model\":";
     append_quoted(out, group->model_name());
@@ -453,7 +461,7 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
     for (size_t c = 0; c < kk::NUM_CHANNELS; c++) {
       if (c)
         out += ',';
-      out += std::to_string(kk::CHANNEL_MAX[c]);
+      out += std::to_string(group->channel_max()[c]);
     }
     out += ']';
     out += ",\"slots\":[";
@@ -504,6 +512,14 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
     out += std::to_string(lamp.gid);
     out += ",\"name\":";
     append_quoted(out, lamp_name(lamp.kid));
+    out += ",\"model\":";
+    append_quoted(out, lamp.model);
+    out += ",\"firmware\":";
+    if (lamp.has_firmware)
+      append_quoted(out, std::to_string(lamp.fw_major) + "." + std::to_string(lamp.fw_minor) + "." +
+                             std::to_string(lamp.fw_patch));
+    else
+      out += "null";
     out += '}';
   }
   {
@@ -900,7 +916,21 @@ void KLinkWeb::handle_identify(AsyncWebServerRequest *request) {
     if (!this->read_uint_arg(request, "kid", 0xFFFFFFFFu, value))
       return;
   } else {
-    // Identifying needs real lamps: a program id is not a lamp group.
+    // A light program flashes its own lights (also in dry run: it never touches the bus); a bus group is found
+    // through its lamps.
+    uint32_t id;
+    if (!this->read_uint_arg(request, "gid", kk::PROGRAM_ID_MAX, id))
+      return;
+    if (kk::is_program_id(id)) {
+      ProgramHost *program = this->find_group(id);
+      if (program == nullptr) {
+        send_error(request, 404, "unknown group");
+        return;
+      }
+      this->defer([program]() { program->find(); });
+      this->send_ok(request);
+      return;
+    }
     if (!this->read_lamp_gid(request, "gid", value))
       return;
   }
@@ -954,28 +984,28 @@ void KLinkWeb::handle_point(AsyncWebServerRequest *request) {
     p.minute = static_cast<uint16_t>(value);
   }
   if (request->hasArg("int")) {
-    if (!parse_uint(arg_string(request, "int"), kk::CHANNEL_MAX[0], value)) {
+    if (!parse_uint(arg_string(request, "int"), group->channel_max()[0], value)) {
       send_error(request, 400, "invalid parameter: int");
       return;
     }
     p.channels[0] = static_cast<uint8_t>(value);
   }
   if (request->hasArg("clr")) {
-    if (!parse_uint(arg_string(request, "clr"), kk::CHANNEL_MAX[1], value)) {
+    if (!parse_uint(arg_string(request, "clr"), group->channel_max()[1], value)) {
       send_error(request, 400, "invalid parameter: clr");
       return;
     }
     p.channels[1] = static_cast<uint8_t>(value);
   }
   if (request->hasArg("r")) {
-    if (!parse_uint(arg_string(request, "r"), kk::CHANNEL_MAX[3], value)) {
+    if (!parse_uint(arg_string(request, "r"), group->channel_max()[3], value)) {
       send_error(request, 400, "invalid parameter: r");
       return;
     }
     p.channels[3] = static_cast<uint8_t>(value);
   }
   if (request->hasArg("am")) {
-    if (!parse_uint(arg_string(request, "am"), kk::CHANNEL_MAX[4], value)) {
+    if (!parse_uint(arg_string(request, "am"), group->channel_max()[4], value)) {
       send_error(request, 400, "invalid parameter: am");
       return;
     }
@@ -990,7 +1020,7 @@ void KLinkWeb::handle_point(AsyncWebServerRequest *request) {
       send_error(request, 400, std::string("this model has no channel ") + CH_ARGS[c]);
       return;
     }
-    if (!parse_uint(arg_string(request, CH_ARGS[c]), kk::CHANNEL_MAX[c], value)) {
+    if (!parse_uint(arg_string(request, CH_ARGS[c]), group->channel_max()[c], value)) {
       send_error(request, 400, std::string("invalid parameter: ") + CH_ARGS[c]);
       return;
     }
@@ -1096,6 +1126,32 @@ void KLinkWeb::handle_name(AsyncWebServerRequest *request) {
   this->send_ok(request);
 }
 
+void KLinkWeb::handle_group_name(AsyncWebServerRequest *request) {
+  uint32_t gid;
+  if (!this->read_program_gid(request, "gid", gid))
+    return;
+  if (this->find_group(gid) == nullptr) {
+    send_error(request, 404, "unknown group");
+    return;
+  }
+  if (!request->hasArg("name")) {
+    send_error(request, 400, "missing parameter: name");
+    return;
+  }
+  std::string error;
+  const std::string name = arg_string(request, "name");
+  if (!this->hub_->check_group_name(gid, name, error)) {
+    send_error(request, 400, error);
+    return;
+  }
+  KLinkHub *hub = this->hub_;
+  this->defer([hub, gid, name]() {
+    std::string why;
+    hub->set_group_name(gid, name, why);
+  });
+  this->send_ok(request);
+}
+
 void KLinkWeb::handle_copy(AsyncWebServerRequest *request) {
   uint32_t from;
   if (!this->read_program_gid(request, "from", from))
@@ -1165,6 +1221,8 @@ void KLinkWeb::handle_snap(AsyncWebServerRequest *request) {
     spec = &COLOR_SUN;
   else if (model == "tuna_blue")
     spec = &COLOR_BLUE;
+  else if (model == "refugium")
+    spec = &COLOR_REFUGIUM;
   if (spec == nullptr) {
     send_error(request, 400, "no color model for this group");
     return;

@@ -132,6 +132,10 @@ jobs:
           - kessil-tuna-blue-esp32-c6.yaml
           - kessil-tuna-blue-esp32-s2.yaml
           - kessil-tuna-blue-esp32-s3.yaml
+          - kessil-refugium-esp32-c3.yaml
+          - kessil-refugium-esp32-c6.yaml
+          - kessil-refugium-esp32-s2.yaml
+          - kessil-refugium-esp32-s3.yaml
           - examples/two-groups.yaml
           - examples/three-groups.yaml
           - examples/light-program.yaml
@@ -183,6 +187,9 @@ jobs:
           - config: kessil-tuna-sun-esp32-s2.yaml
           - config: kessil-tuna-blue-esp32-c6.yaml
           - config: kessil-tuna-blue-esp32-s3.yaml
+          - config: kessil-refugium-esp32-c3.yaml
+          - config: kessil-refugium-esp32-s2.yaml
+          - config: kessil-refugium-esp32-s3.yaml
           - config: examples/three-groups.yaml
     steps:
       - uses: actions/checkout@v4
@@ -219,7 +226,7 @@ jobs:
           path: |
             ~/.platformio
             ci-work/.esphome
-          key: esphome-${{ runner.os }}-${{ steps.slug.outputs.value }}-${{ hashFiles('boards/**', 'common/**', 'components/klink/**', 'kessil-tuna-*.yaml', 'examples/**', '.github/workflows/ci.yml') }}
+          key: esphome-${{ runner.os }}-${{ steps.slug.outputs.value }}-${{ hashFiles('boards/**', 'common/**', 'components/klink/**', 'kessil-*.yaml', 'examples/**', '.github/workflows/ci.yml') }}
           restore-keys: |
             esphome-${{ runner.os }}-${{ steps.slug.outputs.value }}-
             esphome-${{ runner.os }}-

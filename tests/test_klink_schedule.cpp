@@ -94,6 +94,12 @@ int main() {
         sp.channels[3] == 25 && sp.channels[4] == 10);
   check("format blue fits", format_slot(pt(13, 0, 255, 255, 100, 100, 100), &LABELS_TUNA_BLUE).size() < 64);
 
+  check("refugium labels", LABELS_REFUGIUM.name[2] == nullptr && parse_slot("09:00 int=102 clr=240 w=10 grn=5", sp, &LABELS_REFUGIUM, CHANNEL_MAX_REFUGIUM) &&
+        sp.channels[1] == 240 && sp.channels[3] == 10 && sp.channels[4] == 5);
+  check("refugium clr limit is 240", !parse_slot("09:00 int=102 clr=241", sp, &LABELS_REFUGIUM, CHANNEL_MAX_REFUGIUM) &&
+        !parse_slot("09:00 1 241 0 0 0", sp, &LABELS_REFUGIUM, CHANNEL_MAX_REFUGIUM) && parse_slot("09:00 1 241 0 0 0", sp));
+  check("refugium has no channel 3 label", !parse_slot("09:00 vio=5", sp, &LABELS_REFUGIUM, CHANNEL_MAX_REFUGIUM));
+
   std::printf(failures ? "%d failure(s)\n" : "all passed\n", failures);
   return failures != 0;
 }
