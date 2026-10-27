@@ -38,10 +38,10 @@ Try the web page without hardware: [live demo](https://nschimme.github.io/esphom
   violet, red and green on a Tuna Blue), with the lamps moving in straight lines between them. Edit it by dragging
   points on a curve and see the change on the lamps as you go. The shipped programs are a 12-hour day with a
   two-hour plateau and a dark night.
-- 🌅 **Sun and moon.** Switch a program to **Sun** and it follows the real sunrise and sunset at your location, with a
-  warm glow at the edges and a ramp that is gentler than the real sun's (or a fixed day length you choose). Switch it
-  to **Moon** on a blue or RGB light and it lights the dark hours, brighter near a full moon. Preview any day of the
-  year before it happens.
+- 🌅 **Sun and moon.** Switch a program to **Sky** and turn on the **Sun** and/or **Moon** layer. Sun follows the real
+  sunrise and sunset at your location, with a warm glow at the edges and a ramp that is gentler than the real sun's
+  (or a fixed day length you choose). Moon on a blue lamp lifts into the dark hours, brighter near a full moon; with
+  Sun off it is a night-only light. Preview any day of the year before it happens.
 - ⛈️ **Weather.** Optionally let clouds dim the sun, and a thunderstorm start the Storm effect.
 - 🐟 **New tank?** **Acclimation** raises the whole program from a low share to full over days you choose.
 - 🌗 **Smooth.** Transitions ease in and out, and **soft start** fades the lamps in whenever the controller starts.

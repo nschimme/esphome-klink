@@ -34,38 +34,44 @@
 </section>
 <section id="tab-settings" role="tabpanel" aria-labelledby="tab-settings-btn" tabindex="0" hidden>
 <h2 class="sr">Settings</h2>
+<div class="card settings-block" id="lamps-card">
+<h3>Lamps</h3>
+<p class="hint" id="lamps-hint">Lamps and follower boards on the bus.</p>
+<input type="search" id="lamp-search" placeholder="Search lamps by name, number or group" aria-label="Search lamps by name, number or group" hidden>
+<div id="lamps"></div>
+</div>
+<div class="settings-headingrow" id="group-settings-heading">
+<h3 class="settings-heading">Group settings</h3>
+<select id="settings-gid" aria-label="Group to configure"></select>
+</div>
 <div id="outputs"></div>
 <div id="acclimations"></div>
-<div class="card settings-block" id="location-card">
+<h3 class="settings-heading">Device</h3>
+<details class="card settings-block" id="names-card">
+<summary><span class="summary-title">Location and group names</span><span class="summary-sub" id="names-summary"></span></summary>
+<div class="settings-block" id="location-card">
 <h3>Location</h3>
 <p class="hint" id="location-line"></p>
 <p class="hint">Home Assistant's home location is used automatically. You can also set the Latitude and Longitude entities in Home Assistant.</p>
 </div>
-<div class="card settings-block">
+<div class="settings-block">
 <h3>Group names</h3>
 <p class="hint">Names used on this page. Home Assistant keeps the name from your configuration. Leave a name empty to go back to it.</p>
 <div id="group-names"></div>
 </div>
-<div class="card settings-block">
-<h3>Lamps</h3>
-<p class="hint" id="lamps-hint">Known lamps on the bus.</p>
-<input type="search" id="lamp-search" placeholder="Search lamps by name, number or group" aria-label="Search lamps by name, number or group" hidden>
-<div id="lamps"></div>
-</div>
-<div class="card settings-block">
-<h3>Find lamps</h3>
-<p class="hint">Scan the bus for lamps. A scan also runs by itself on first start, so most lamps are found without pressing anything.</p>
-<div class="rowline"><button type="button" class="btn" id="scan-btn" data-busy="scan">Find lamps</button></div>
-</div>
-<div class="card settings-block">
-<h3>Send to lights</h3>
+</details>
+<div class="card settings-block" id="bus-card">
+<h3>Bus</h3>
+<div id="writes-block">
+<h4 class="settings-subheading">Send to lights</h4>
 <p class="hint">When off, esphome-klink only watches the bus and never changes what your lights do.</p>
 <div class="rowline"><button type="button" class="btn" id="writes-toggle" data-busy="writes">Turn off</button><button type="button" class="btn danger" id="retry-btn" data-busy="retry" hidden>Retry</button></div>
 </div>
-<div class="card settings-block">
-<h3>Bus state</h3>
-<p id="bus-text" class="hint"></p>
-<p class="hint"><span id="bus-count">0</span> known lamp(s).</p>
+<div id="find-lamps-card">
+<h4 class="settings-subheading">Scan for lamps</h4>
+<p class="hint" id="scan-note">Finds lamps and follower boards on the bus. Use Identify to flash one.</p>
+<div class="rowline"><button type="button" class="btn" id="scan-btn" data-busy="scan">Scan bus</button></div>
+</div>
 </div>
 <p class="about"><a href="/">Advanced / device page</a></p>
 </section>

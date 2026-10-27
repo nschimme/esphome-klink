@@ -20,6 +20,18 @@ function eq(name, actual, expected) {
   check(name, a === e, 'expected ' + e + ' got ' + a);
 }
 function slots(server) { return stub.cloneSlots(server.group.slots); }
+/* Every channel curve in the chart, as the point pairs the drawing produced. */
+function curvePoints(page) {
+  var svg = page.svg(), out = [];
+  (function walk(node) {
+    for (var i = 0; i < node.children.length; i++) {
+      var el = node.children[i];
+      if (el.tagName === 'POLYLINE') out.push(el.getAttribute('points'));
+      walk(el);
+    }
+  })(svg);
+  return out.join('|');
+}
 
 var Q = { l: 32, r: 10, t: 10, b: 18, w: 1000, h: 300 };
 function xFor(m) { return Q.l + m / 1440 * (Q.w - Q.l - Q.r); }
@@ -102,6 +114,9 @@ function pickerSelect(page) {
   var p = picker(page), i;
   for (i = 0; i < p.children.length; i++) if (p.children[i].tagName === 'SELECT') return p.children[i];
   return null;
+}
+function pickerArrows(page) {
+  return picker(page).children.filter(function (el) { return el.tagName === 'BUTTON'; });
 }
 
 function place(page, minute) {
@@ -344,7 +359,10 @@ async function scenarioOrphans() {
   var card = orphans[0];
   check(name + ': names the group', cardText(card).indexOf('Group 11') >= 0, cardText(card));
   check(name + ': lamp count', cardText(card).indexOf('2 lamps here are not driven by this controller') >= 0, cardText(card));
-  check(name + ': documentation hint', cardText(card).indexOf('light programs') >= 0);
+  check(name + ': documentation hint', cardText(card).indexOf('Add a group for this GID') >= 0, cardText(card));
+  check(name + ': program tab calls out the missing program',
+    cardText(page.doc.getElementById('prog-orphans')).indexOf('Group 11') >= 0,
+    cardText(page.doc.getElementById('prog-orphans')));
   var chips = card.querySelectorAll('.chip');
   check(name + ': one chip per lamp', chips.length === 2, 'got ' + chips.length);
   server.resetRequests();
@@ -355,6 +373,12 @@ async function scenarioOrphans() {
   page.click(card.children[2].children[0]);
   ids = server.requests.filter(function (r) { return r.path === '/klink/identify'; });
   check(name + ': find flashes the group', ids.length === 1 && ids[0].params.gid === '11', JSON.stringify(ids));
+  var manage = card.children[2].children[1];
+  check(name + ': manage lamps button', !!manage && manage.textContent.trim() === 'Manage lamps');
+  page.click(manage);
+  await stub.settle();
+  eq(name + ': manage opens Settings', page.doc.body.getAttribute('data-tab'), 'settings');
+  check(name + ': manage points at the lamp list', page.doc.getElementById('lamps-card')._scrolled === true);
 }
 
 async function scenarioPicker() {
@@ -368,9 +392,14 @@ async function scenarioPicker() {
   var server = stub.makeServer({ group: gs[1], groups: gs });
   var page = await newPage(server);
   var sel = pickerSelect(page);
-  check(name + ': 4 groups use a select', !!sel);
+  check(name + ': dropdown present', !!sel);
   check(name + ': labeled Lamp group', !!sel && sel.getAttribute('aria-label') === 'Lamp group');
-  check(name + ': select shows the first group', !!sel && sel.value === '1', sel && sel.value);
+  check(name + ': dropdown lists every group', !!sel && sel.children.length === 4, sel && sel.children.length);
+  check(name + ': dropdown shows the first group', !!sel && sel.value === '1', sel && sel.value);
+  var arrows = pickerArrows(page);
+  check(name + ': previous and next arrows', arrows.length === 2, arrows.length);
+  check(name + ': previous disabled on the first group', !!arrows[0] && arrows[0].disabled === true);
+  check(name + ': next enabled on the first group', !!arrows[1] && arrows[1].disabled === false);
   if (sel) {
     sel.value = '3';
     sel.dispatch('change', {});
@@ -378,14 +407,26 @@ async function scenarioPicker() {
     eq(name + ': change persists the group', page.storage('klink.prog.gid'), '3');
     check(name + ': panel follows the group', page.progRoot().textContent.indexOf('VIO') >= 0);
   }
-  /* Shrinking to three groups switches back to buttons, then back again without errors. */
+  arrows = pickerArrows(page);
+  check(name + ': arrows enabled in the middle', !!arrows[0] && arrows[0].disabled === false &&
+    !!arrows[1] && arrows[1].disabled === false);
+  page.click(arrows[1]);
+  await stub.settle();
+  eq(name + ': next arrow moves to group 4', pickerSelect(page).value, '4');
+  arrows = pickerArrows(page);
+  check(name + ': next disabled on the last group', !!arrows[1] && arrows[1].disabled === true);
+  page.click(arrows[0]);
+  await stub.settle();
+  eq(name + ': previous arrow moves back', pickerSelect(page).value, '3');
+  /* Shrinking to three groups keeps the same control, then grows back without errors. */
   var extra = gs.pop();
   await page.refresh();
-  check(name + ': 3 groups use buttons', pickerSelect(page) === null);
-  check(name + ': button picker has groups', picker(page).children.length === 3, picker(page).children.length);
+  check(name + ': 3 groups keep the dropdown', !!pickerSelect(page));
+  check(name + ': dropdown follows the smaller list', pickerSelect(page).children.length === 3,
+    pickerSelect(page).children.length);
   gs.push(extra);
   await page.refresh();
-  check(name + ': back to a select', !!pickerSelect(page));
+  check(name + ': back to 4 groups', pickerSelect(page).children.length === 4);
 }
 
 async function scenarioFindLights() {
@@ -1063,7 +1104,7 @@ async function scenarioAcclimationCards() {
   var page = await newPage(server);
   var card = accCard(page, 2);
   check(name + ': card for a bus group', !!card);
-  check(name + ': card for a light program', !!accCard(page, 101));
+  check(name + ': only the selected group has a card', accCard(page, 101) === null);
   check(name + ': title', !!card && cardText(card).indexOf('Acclimation') >= 0, card && cardText(card));
   check(name + ': group name in the subtitle', cardText(page.doc.getElementById('acc-group-2')).indexOf('Tuna Sun') >= 0);
   check(name + ': hint', cardText(page.doc.getElementById('acc-hint-2')).indexOf(
@@ -1080,6 +1121,17 @@ async function scenarioAcclimationCards() {
   check(name + ': no status line while off', page.doc.getElementById('acc-status-2').hidden === true);
   eq(name + ': starting intensity wording', cardText(page.doc.getElementById('acc-start-value-2')), '30 %');
   eq(name + ': days wording', cardText(page.doc.getElementById('acc-days-value-2')), '14 days');
+
+  var sel = page.doc.getElementById('settings-gid');
+  check(name + ': group selector shown', sel.hidden === false);
+  eq(name + ': group selector choices', sel.children.map(function (o) { return o.value; }), ['2', '101']);
+  sel.value = '101';
+  sel.dispatch('change', {});
+  await stub.settle();
+  check(name + ': card for the chosen light program', !!accCard(page, 101));
+  check(name + ': old group card removed', accCard(page, 2) === null);
+  check(name + ': chosen group name in the subtitle',
+    cardText(page.doc.getElementById('acc-group-101')).indexOf('Board LED') >= 0);
 }
 
 async function scenarioAcclimationToggle() {
@@ -1215,11 +1267,11 @@ async function scenarioSourceControl() {
   var seg = sourceSeg(page);
   check(name + ': control present', !!seg);
   check(name + ': control visible for a bus group', !!seg && seg.hidden === false);
-  eq(name + ': three choices', seg && seg.children.map(function (b) { return b.textContent.trim(); }),
-    ['My points', 'Sun', 'Moon']);
+  eq(name + ': two choices', seg && seg.children.map(function (b) { return b.textContent.trim(); }),
+    ['My points', 'Sky']);
   check(name + ': group labeled', !!seg && seg.getAttribute('aria-label') === 'Program source');
   check(name + ': My points pressed', sourceButton(page, 'My points').getAttribute('aria-pressed') === 'true');
-  check(name + ': Sun not pressed', sourceButton(page, 'Sun').getAttribute('aria-pressed') === 'false');
+  check(name + ': Sky not pressed', sourceButton(page, 'Sky').getAttribute('aria-pressed') === 'false');
   check(name + ': no date chips for My points', page.doc.getElementById('prog-dates').hidden === true);
   check(name + ': no sky panel for My points', page.doc.getElementById('prog-sky').hidden === true);
 
@@ -1230,24 +1282,26 @@ async function scenarioSourceControl() {
 }
 
 async function scenarioChooseSun() {
-  var name = 'choose the sun';
+  var name = 'choose the sky';
   var sun = makeGroup(2, 'Tuna Sun', 'tuna_sun');
   var server = stub.makeServer({ group: sun, groups: [sun] });
   var page = await newPage(server);
   server.resetRequests();
-  page.click(sourceButton(page, 'Sun'));
+  page.click(sourceButton(page, 'Sky'));
   await stub.settle();
   var reqs = server.sourceRequests();
   check(name + ': exactly one source request', reqs.length === 1, reqs.length);
   if (reqs[0]) {
-    eq(name + ': gid and source only', reqs[0].params, { gid: '2', source: 'sun' });
+    eq(name + ': gid and source only', reqs[0].params, { gid: '2', source: 'sky' });
     check(name + ': it is a POST', reqs[0].method === 'POST', reqs[0].method);
   }
   eq(name + ': server switched', server.group.source, 1);
-  check(name + ': poll reflects the source', sourceButton(page, 'Sun').getAttribute('aria-pressed') === 'true');
+  check(name + ': poll reflects the source', sourceButton(page, 'Sky').getAttribute('aria-pressed') === 'true');
   check(name + ': My points cleared', sourceButton(page, 'My points').getAttribute('aria-pressed') === 'false');
   check(name + ': date chips appear', page.doc.getElementById('prog-dates').hidden === false);
   check(name + ': sky panel appears', page.doc.getElementById('prog-sky').hidden === false);
+  check(name + ': Sun toggle on', page.doc.getElementById('sky-sun-on').checked === true);
+  check(name + ': Moon toggle hidden for a Tuna Sun', page.doc.getElementById('sky-moon-on').parentNode.hidden === true);
 }
 
 async function scenarioGeneratedReadOnly() {
@@ -1288,7 +1342,7 @@ async function scenarioDateChip() {
   await stub.settle();
   var reqs = server.generatedRequests();
   check(name + ': one generated request', reqs.length === 1, reqs.length);
-  if (reqs[0]) eq(name + ': right gid, source and date', reqs[0].params, { gid: '2', source: 'sun', date: want });
+  if (reqs[0]) eq(name + ': right gid, source and date', reqs[0].params, { gid: '2', source: 'sky', date: want });
   check(name + ': pending answer is retried', true);
   await finishPending(page);
   reqs = server.generatedRequests();
@@ -1313,7 +1367,8 @@ async function scenarioSummaries() {
   eq(name + ': sun line', text, 'Sunrise 07:14 · sunset 17:56 · 10 h 42 min');
 
   var blue = makeGroup(1, 'Tuna Blue', 'tuna_blue', ['int', 'clr', 'vio', 'r', 'grn']);
-  blue.source = 2;
+  blue.source = 1;
+  blue.sky = { layers: 2 };
   var mServer = stub.makeServer({ group: blue, groups: [blue] });
   var mPage = await newPage(mServer);
   await finishPending(mPage);
@@ -1322,7 +1377,8 @@ async function scenarioSummaries() {
     'Moon 98% lit · rises 19:05 · sets 07:08 (estimated, within about 15 minutes)');
 
   var dark = makeGroup(1, 'Tuna Blue', 'tuna_blue', ['int', 'clr', 'vio', 'r', 'grn']);
-  dark.source = 2;
+  dark.source = 1;
+  dark.sky = { layers: 2 };
   var dServer = stub.makeServer({
     group: dark, groups: [dark],
     generated: function () {
@@ -1362,7 +1418,15 @@ async function scenarioSkySettings() {
   await finishPending(page);
   check(name + ': peak field', !!page.doc.getElementById('sky-peak'));
   check(name + ': glow field', !!page.doc.getElementById('sky-glow'));
+  eq(name + ': glow defaults to half strength', page.doc.getElementById('sky-glow').value, '50');
+  eq(name + ': glow text says half strength', cardText(page.doc.getElementById('sky-glow-value')), '50%');
+  check(name + ': settings sit beside the curve', page.doc.getElementById('prog-sky').parentNode.className.indexOf('pwrap') >= 0,
+    page.doc.getElementById('prog-sky').parentNode.className);
+  check(name + ': settings row has Undo', !!page.doc.getElementById('prog-sky-undo'));
   check(name + ': night glow for Tuna Sun', page.doc.getElementById('sky-amber').parentNode.hidden === false);
+  check(name + ': Tuna Sun night glow is amber',
+    cardText(page.doc.getElementById('prog-sky')).indexOf('A dim amber light through the night.') >= 0,
+    cardText(page.doc.getElementById('prog-sky')));
   check(name + ': day length select', page.doc.getElementById('sky-hours-mode').children.length === 2);
   server.resetRequests();
   var peak = page.doc.getElementById('sky-peak');
@@ -1385,14 +1449,31 @@ async function scenarioSkySettings() {
   eq(name + ': fixed length stored', server.group.sky.hours, 8);
   check(name + ': fixed slider shown', page.doc.getElementById('sky-hours').parentNode.hidden === false);
 
+  var shift = page.doc.getElementById('sky-shift');
+  var inDetails = false, anc = shift;
+  while (anc) { if (anc.tagName === 'DETAILS') { inDetails = true; break; } anc = anc.parentNode; }
+  check(name + ': time shift not hidden under More', !!shift && !inDetails);
+  server.resetRequests();
+  shift.value = '15';
+  shift.dispatch('change', {});
+  await stub.settle();
+  reqs = server.skyRequests();
+  check(name + ': one shift request', reqs.length === 1, reqs.length);
+  if (reqs[0]) eq(name + ': only shift sent', reqs[0].params, { gid: '2', shift: '15' });
+  eq(name + ': server took the shift', server.group.sky.shift, 15);
+
   var blue = makeGroup(1, 'Tuna Blue', 'tuna_blue', ['int', 'clr', 'vio', 'r', 'grn']);
-  blue.source = 2;
+  blue.source = 1;
+  blue.sky = { layers: 2 };
   var bServer = stub.makeServer({ group: blue, groups: [blue] });
   var bPage = await newPage(bServer);
   await finishPending(bPage);
-  check(name + ': no night glow for Tuna Blue', bPage.doc.getElementById('sky-amber').parentNode.hidden === true);
+  check(name + ': sun settings hidden on a Moon day',
+    bPage.doc.getElementById('sky-amber').parentNode.parentNode.hidden === true);
   check(name + ': moon slider', !!bPage.doc.getElementById('sky-moon'));
   check(name + ': phase checkbox', !!bPage.doc.getElementById('sky-phase'));
+  check(name + ': time shift visible on a Moon day',
+    !!bPage.doc.getElementById('sky-shift') && bPage.doc.getElementById('sky-shift').parentNode.parentNode.hidden === false);
   bServer.resetRequests();
   var phase = bPage.doc.getElementById('sky-phase');
   phase.checked = true;
@@ -1440,12 +1521,226 @@ async function scenarioSkyRamp() {
   eq(name + ': server took the ramp', server.group.sky.ramp, 150);
 
   var blue = makeGroup(1, 'Tuna Blue', 'tuna_blue', ['int', 'clr', 'vio', 'r', 'grn']);
-  blue.source = 2;
+  blue.source = 1;
+  blue.sky = { layers: 2 };
   var bServer = stub.makeServer({ group: blue, groups: [blue] });
   var bPage = await newPage(bServer);
   await finishPending(bPage);
   var bRamp = bPage.doc.getElementById('sky-ramp');
   check(name + ': no ramp for a Moon day', bRamp.parentNode.parentNode.hidden === true);
+}
+
+/* A generated day whose peak follows the setting, so the chart must move when it changes. */
+function peakDay(group) {
+  return function (gid, source, date) {
+    var peak = group.sky.peak | 0;
+    return {
+      points: [
+        { minute: 480, ch: [0, 0, 0, 0, 0], enabled: true },
+        { minute: 720, ch: [Math.round(peak * 2.55), 0, 0, 0, 0], enabled: true },
+        { minute: 960, ch: [0, 0, 0, 0, 0], enabled: true }
+      ],
+      summary: { sunrise: 480, noon: 720, sunset: 960, length: 480, always_up: false }
+    };
+  };
+}
+
+async function scenarioSkyRedraw() {
+  var name = 'sun settings redraw the curve';
+  var sun = makeGroup(2, 'Tuna Sun', 'tuna_sun');
+  sun.source = 1;
+  var server = stub.makeServer({ group: sun, groups: [sun], generated: peakDay(sun) });
+  var page = await newPage(server);
+  await finishPending(page);
+  var before = curvePoints(page);
+  server.resetRequests();
+  var peak = page.doc.getElementById('sky-peak');
+  peak.value = '90';
+  peak.dispatch('change', {});
+  await stub.settle();
+  page.clock.tick(400);
+  await stub.settle();
+  await finishPending(page);
+  eq(name + ': slider keeps the new value', cardText(page.doc.getElementById('sky-peak-value')), '90%');
+  check(name + ': today curve moved', curvePoints(page) !== before, curvePoints(page));
+  eq(name + ': device took the peak', server.group.sky.peak, 90);
+}
+
+async function scenarioSkyPreviewRedraw() {
+  var name = 'sun settings redraw a preview';
+  var sun = makeGroup(2, 'Tuna Sun', 'tuna_sun');
+  sun.source = 1;
+  var server = stub.makeServer({ group: sun, groups: [sun], generated: peakDay(sun) });
+  var page = await newPage(server);
+  await finishPending(page);
+  page.click(dateButton(page, 'Jun 21'));
+  await stub.settle();
+  await finishPending(page);
+  var before = curvePoints(page);
+  server.resetRequests();
+  var peak = page.doc.getElementById('sky-peak');
+  peak.value = '80';
+  peak.dispatch('change', {});
+  await stub.settle();
+  page.clock.tick(400);
+  await stub.settle();
+  await finishPending(page);
+  check(name + ': the preview was asked for again', server.generatedRequests().length >= 1,
+    server.generatedRequests().length);
+  check(name + ': preview curve moved', curvePoints(page) !== before, curvePoints(page));
+  check(name + ': preview date kept', dateButton(page, 'Jun 21').getAttribute('aria-pressed') === 'true');
+}
+
+async function scenarioSkyHistory() {
+  var name = 'sun settings undo, redo and revert';
+  var sun = makeGroup(2, 'Tuna Sun', 'tuna_sun');
+  sun.source = 1;
+  var server = stub.makeServer({ group: sun, groups: [sun] });
+  var page = await newPage(server);
+  await finishPending(page);
+  var undo = page.doc.getElementById('prog-sky-undo');
+  var redo = page.doc.getElementById('prog-sky-redo');
+  var revert = page.doc.getElementById('prog-sky-revert');
+  check(name + ': undo starts disabled', !!undo && undo.disabled === true);
+  check(name + ': redo starts disabled', !!redo && redo.disabled === true);
+  check(name + ': revert hidden at the base', !!revert && revert.hidden === true);
+
+  var peak = page.doc.getElementById('sky-peak');
+  peak.value = '80';
+  peak.dispatch('change', {});
+  await stub.settle();
+  eq(name + ': device took the change', server.group.sky.peak, 80);
+  check(name + ': undo enabled', undo.disabled === false);
+  check(name + ': revert shown', revert.hidden === false);
+
+  server.resetRequests();
+  page.click(undo);
+  await stub.settle();
+  page.clock.tick(400);
+  await stub.settle();
+  eq(name + ': undo posts the old peak', server.skyRequests()[0].params, { gid: '2', peak: '60' });
+  eq(name + ': device back at the default', server.group.sky.peak, 60);
+  check(name + ': redo enabled after undo', redo.disabled === false);
+  check(name + ': revert hidden again', revert.hidden === true);
+
+  page.click(redo);
+  await stub.settle();
+  page.clock.tick(400);
+  await stub.settle();
+  eq(name + ': redo puts it back', server.group.sky.peak, 80);
+
+  page.click(revert);
+  await stub.settle();
+  page.clock.tick(400);
+  await stub.settle();
+  eq(name + ': revert returns to the base', server.group.sky.peak, 60);
+  check(name + ': revert hidden after reverting', revert.hidden === true);
+}
+
+async function scenarioSunMoon() {
+  var name = 'sky program';
+  var blue = makeGroup(1, 'Tuna Blue', 'tuna_blue', ['int', 'clr', 'vio', 'r', 'grn']);
+  blue.source = 1;
+  blue.sky = { layers: 3 };
+  var server = stub.makeServer({ group: blue, groups: [blue] });
+  var page = await newPage(server);
+  await finishPending(page);
+  var sunToggle = page.doc.getElementById('sky-sun-on');
+  var moonToggle = page.doc.getElementById('sky-moon-on');
+  check(name + ': Sky pressed', sourceButton(page, 'Sky').getAttribute('aria-pressed') === 'true');
+  check(name + ': Sun layer on', sunToggle.checked === true);
+  check(name + ': Moon layer on', moonToggle.checked === true);
+  check(name + ': moon settings visible', page.doc.getElementById('sky-moon').parentNode.parentNode.hidden === false);
+  check(name + ': moon hint explains the overlay',
+    cardText(page.doc.getElementById('prog-sky')).indexOf("The moon is added over the sun's dark hours") >= 0,
+    cardText(page.doc.getElementById('prog-sky')));
+  var text = cardText(page.doc.getElementById('prog-summary'));
+  check(name + ': summary has the sun', text.indexOf('Sunrise') >= 0, text);
+  check(name + ': summary has the moon', text.indexOf('Moon 98% lit') >= 0, text);
+
+  /* Sun off: the same Sky program becomes a moon-only night light. */
+  sunToggle.checked = false;
+  sunToggle.dispatch('change', {});
+  await stub.settle();
+  await finishPending(page);
+  eq(name + ': Sun off makes a moon-only layer', server.group.source, 1);
+  eq(name + ': only the Moon layer is left', server.group.sky.layers, 2);
+  check(name + ': sun settings hidden', page.doc.getElementById('sky-peak').parentNode.parentNode.hidden === true);
+  check(name + ': moon settings still visible', page.doc.getElementById('sky-moon').parentNode.parentNode.hidden === false);
+  check(name + ': no sun in the moon-only summary',
+    cardText(page.doc.getElementById('prog-summary')).indexOf('Sunrise') < 0,
+    cardText(page.doc.getElementById('prog-summary')));
+
+  /* The last layer cannot be turned off: that would be no program at all. */
+  server.resetRequests();
+  moonToggle.checked = false;
+  moonToggle.dispatch('change', {});
+  await stub.settle();
+  eq(name + ': both layers off sends nothing',
+    server.sourceRequests().length + server.skyRequests().length, 0);
+  check(name + ': the last layer is put back', moonToggle.checked === true);
+
+  /* Moon on top of the sun again. */
+  sunToggle.checked = true;
+  sunToggle.dispatch('change', {});
+  await stub.settle();
+  await finishPending(page);
+  eq(name + ': Sun on returns to both layers', server.group.sky.layers, 3);
+
+  var sun = makeGroup(2, 'Tuna Sun', 'tuna_sun');
+  sun.source = 1;
+  var sServer = stub.makeServer({ group: sun, groups: [sun] });
+  var sPage = await newPage(sServer);
+  await finishPending(sPage);
+  check(name + ': a Tuna Sun uses the Sky program', sourceButton(sPage, 'Sky').getAttribute('aria-pressed') === 'true');
+  check(name + ': no Moon layer on a Tuna Sun', sPage.doc.getElementById('sky-moon-on').parentNode.hidden === true);
+  check(name + ': no moon settings on a Tuna Sun',
+    sPage.doc.getElementById('sky-moon').parentNode.parentNode.hidden === true);
+  check(name + ': no moon in the Tuna Sun summary',
+    cardText(sPage.doc.getElementById('prog-summary')).indexOf('Moon') < 0,
+    cardText(sPage.doc.getElementById('prog-summary')));
+}
+
+async function scenarioSkyTracks() {
+  var name = 'sun and moon color sliders';
+  var sun = makeGroup(2, 'Tuna Sun', 'tuna_sun');
+  sun.source = 1;
+  var server = stub.makeServer({ group: sun, groups: [sun] });
+  var page = await newPage(server);
+  await finishPending(page);
+  var glow = page.doc.getElementById('sky-glow');
+  var peak = page.doc.getElementById('sky-peak');
+  var amber = page.doc.getElementById('sky-amber');
+  check(name + ': glow has a warm track', glow.className.indexOf('trk') >= 0 &&
+    glow.style.getPropertyValue('--trk').indexOf('#ff8a3c') >= 0, glow.style.getPropertyValue('--trk'));
+  check(name + ': peak has a bright track', peak.className.indexOf('trk') >= 0 &&
+    peak.style.getPropertyValue('--trk').indexOf('#ffffff') >= 0, peak.style.getPropertyValue('--trk'));
+  check(name + ': amber has an amber track', amber.className.indexOf('trk') >= 0 &&
+    amber.style.getPropertyValue('--trk').indexOf('#ffaa00') >= 0, amber.style.getPropertyValue('--trk'));
+  var ramp = page.doc.getElementById('sky-ramp');
+  check(name + ': ramp stays a plain slider', ramp.className.indexOf('trk') < 0, ramp.className);
+
+  var blue = makeGroup(1, 'Tuna Blue', 'tuna_blue', ['int', 'clr', 'vio', 'r', 'grn']);
+  blue.source = 1;
+  blue.sky = { layers: 1 };
+  var bServer = stub.makeServer({ group: blue, groups: [blue] });
+  var bPage = await newPage(bServer);
+  await finishPending(bPage);
+  var bGlow = bPage.doc.getElementById('sky-glow');
+  check(name + ': a Tuna Blue glows violet', bGlow.style.getPropertyValue('--trk').indexOf('#8a2be2') >= 0,
+    bGlow.style.getPropertyValue('--trk'));
+  var bAmber = bPage.doc.getElementById('sky-amber');
+  check(name + ': a Tuna Blue can glow at night', bAmber.parentNode.hidden === false);
+  check(name + ': Tuna Blue night glow is violet',
+    cardText(bPage.doc.getElementById('prog-sky')).indexOf('A dim violet light through the night.') >= 0,
+    cardText(bPage.doc.getElementById('prog-sky')));
+  check(name + ': blue glow hint follows intensity',
+    cardText(bPage.doc.getElementById('prog-sky')).indexOf('violet otherwise follows intensity') >= 0,
+    cardText(bPage.doc.getElementById('prog-sky')));
+  var bNight = bPage.doc.getElementById('sky-amber');
+  check(name + ': blue night glow track is violet',
+    bNight.style.getPropertyValue('--trk').indexOf('#8a2be2') >= 0,
+    bNight.style.getPropertyValue('--trk'));
 }
 
 async function scenarioMakeCopy() {
@@ -1484,15 +1779,15 @@ async function scenarioMoonNeedsBlue() {
   var blue = makeGroup(3, 'Tuna Blue', 'tuna_blue', ['int', 'clr', 'vio', 'r', 'grn']);
   var server = stub.makeServer({ group: sun, groups: [sun, blue] });
   var page = await newPage(server);
-  check(name + ': Sun offered for a Tuna Sun', sourceButton(page, 'Sun').hidden === false);
-  check(name + ': no Moon for a Tuna Sun', sourceButton(page, 'Moon').hidden === true);
+  check(name + ': Sky offered for a Tuna Sun', sourceButton(page, 'Sky').hidden === false);
+  check(name + ': no Moon layer for a Tuna Sun', page.doc.getElementById('sky-moon-on').parentNode.hidden === true);
   var groupButton = null;
   sourceSeg(page); /* the group switcher lists both groups */
   page.progRoot().querySelectorAll('button').forEach(function (b) { if (b.textContent.indexOf('Tuna Blue') >= 0) groupButton = b; });
   if (groupButton) {
     page.click(groupButton);
     await stub.settle();
-    check(name + ': Moon offered for a Tuna Blue', sourceButton(page, 'Moon').hidden === false);
+    check(name + ': Moon layer offered for a Tuna Blue', page.doc.getElementById('sky-moon-on').parentNode.hidden === false);
   }
 }
 
@@ -1502,7 +1797,7 @@ async function scenarioEditAfterSources() {
   var page = await newPage(server);
   var svg = page.svg();
   /* Through Sun and Moon and back: the chart is editable again. */
-  page.click(sourceButton(page, 'Sun'));
+  page.click(sourceButton(page, 'Sky'));
   await stub.settle();
   await page.refresh();
   page.click(sourceButton(page, 'My points'));
@@ -1554,6 +1849,66 @@ async function scenarioNoLocation() {
     cardText(herePage.doc.getElementById('prog-location')));
 }
 
+async function scenarioLocalFind() {
+  var name = 'follower light find';
+  var server = stub.makeServer({
+    role: 'follower',
+    followers: [{
+      id: 'desk_follow', gid: 3, name: 'Desk strip', model: 'tuna_sun',
+      target: 'light_rgb', lights: ['Desk RGB strip']
+    }]
+  });
+  var page = await newPage(server);
+  var card = dashCard(page, 'Desk strip');
+  check(name + ': dashboard card shown', !!card);
+  check(name + ': follower tag', cardText(card).indexOf('Follower') >= 0, cardText(card));
+  check(name + ': bus lamp list hidden', page.doc.getElementById('lamps-card').hidden === true);
+  check(name + ': bus scan hidden', page.doc.getElementById('find-lamps-card').hidden === true);
+  check(name + ': send to lights hidden', page.doc.getElementById('writes-block').hidden === true);
+  check(name + ': empty bus card hidden', page.doc.getElementById('bus-card').hidden === true);
+  var btn = null;
+  if (card) {
+    card.querySelectorAll('button').forEach(function (b) {
+      if (!btn && b.textContent.indexOf('Find these lights') >= 0) btn = b;
+    });
+  }
+  check(name + ': find button present', !!btn, btn ? btn.textContent : 'missing');
+  check(name + ': find button enabled on a follower', !!btn && btn.disabled === false);
+  check(name + ': follower hides the leader transition',
+    page.doc.getElementById('output-seconds-2').parentNode.hidden === true);
+  check(name + ': follower hides acclimation', page.doc.getElementById('acc-card-2') === null);
+  check(name + ': group settings heading shown', page.doc.getElementById('group-settings-heading').hidden === false);
+  check(name + ': card names the followed group',
+    cardText(card).indexOf('Follows group 3') >= 0, cardText(card));
+  server.resetRequests();
+  page.click(btn);
+  await stub.settle();
+  var reqs = server.requests.filter(function (r) { return r.path === '/klink/identify'; });
+  check(name + ': one follower find request', reqs.length === 1, 'got ' + reqs.length);
+  eq(name + ': find targets the entry id', reqs[0] ? reqs[0].params.follower : null, 'desk_follow');
+
+  /* The leader's lamp list already has Identify for the same entry; do not repeat the card. */
+  var leaderServer = stub.makeServer({
+    followers: [{ id: 'lamp_entry', kid: 18000001, gid: 2, name: 'Board LED', model: 'tuna_sun',
+      target: 'light_rgb', lights: ['Board LED'] }],
+    lamps: [{ kid: 18000001, type: 2, gid: 2, name: 'Board LED' }]
+  });
+  var leaderPage = await newPage(leaderServer);
+  var tags = leaderPage.groupsEl().querySelectorAll('.tag').filter(function (t) {
+    return t.textContent === 'Follower';
+  });
+  check(name + ': leader does not repeat a lamp entry', tags.length === 0, 'got ' + tags.length);
+  check(name + ': leader keeps the lamp list', leaderPage.doc.getElementById('lamps-card').hidden === false);
+
+  /* A plain `lamp: false` follower has no lamp row, so it keeps its own dashboard card. */
+  var plainServer = stub.makeServer({
+    followers: [{ id: 'plain_follow', kid: 0, gid: 3, name: 'Sump strip', model: 'tuna_sun',
+      target: 'light_brightness', lights: ['Sump strip'] }]
+  });
+  var plainPage = await newPage(plainServer);
+  check(name + ': leader shows a plain follower card', !!dashCard(plainPage, 'Sump strip'));
+}
+
 async function main() {
   await scenarioPlace();
   await scenarioRefused();
@@ -1600,10 +1955,16 @@ async function main() {
   await scenarioSummaries();
   await scenarioSkySettings();
   await scenarioSkyRamp();
+  await scenarioSkyRedraw();
+  await scenarioSkyPreviewRedraw();
+  await scenarioSkyHistory();
+  await scenarioSunMoon();
+  await scenarioSkyTracks();
   await scenarioMakeCopy();
   await scenarioMoonNeedsBlue();
   await scenarioEditAfterSources();
   await scenarioNoLocation();
+  await scenarioLocalFind();
   console.log(failures ? failures + ' failure(s)' : 'all web tests passed');
   process.exit(failures ? 1 : 0);
 }

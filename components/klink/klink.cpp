@@ -897,6 +897,63 @@ void KLinkHub::add_lamp(KLinkLightFollower *light, uint32_t kid, uint8_t gid, ui
   this->own_lamps_.push_back(HubLamp{kid, gid, type, model, light, key, ESPPreferenceObject()});
 }
 
+bool KLinkHub::has_follower(const std::string &key) const {
+  for (auto *follower : this->followers_)
+    if (follower != nullptr && follower->key() == key)
+      return true;
+  return false;
+}
+
+uint32_t KLinkHub::follower_kid(const std::string &key) const {
+  for (const auto &lamp : this->own_lamps_)
+    if (lamp.key == key)
+      return lamp.kid;
+  return 0;
+}
+
+bool KLinkHub::has_local_gid(uint8_t gid) const {
+  for (auto *follower : this->followers_)
+    if (follower != nullptr && follower->gid() == gid)
+      return true;
+  return false;
+}
+
+bool KLinkHub::has_local_kid(uint32_t kid) const {
+  for (const auto &lamp : this->own_lamps_)
+    if (lamp.kid == kid && lamp.light != nullptr)
+      return true;
+  return false;
+}
+
+bool KLinkHub::flash_local(const std::string &key) {
+  for (auto *follower : this->followers_) {
+    if (follower != nullptr && follower->key() == key) {
+      follower->flash_();
+      return true;
+    }
+  }
+  return false;
+}
+
+bool KLinkHub::flash_local_gid(uint8_t gid) {
+  bool any = false;
+  for (auto *follower : this->followers_) {
+    if (follower != nullptr && follower->gid() == gid) {
+      follower->flash_();
+      any = true;
+    }
+  }
+  return any;
+}
+
+bool KLinkHub::flash_local_kid(uint32_t kid) {
+  HubLamp *lamp = this->find_lamp_(kid);
+  if (lamp == nullptr || lamp->light == nullptr)
+    return false;
+  lamp->light->flash_();
+  return true;
+}
+
 KLinkHub::HubLamp *KLinkHub::find_lamp_(uint32_t kid) {
   for (size_t i = 0; i < this->own_lamps_.size(); i++)
     if (this->own_lamps_[i].kid == kid)
@@ -1816,8 +1873,11 @@ void KLinkTankNumber::control(float value) {
 void KLinkTankNumber::dump_config() { LOG_NUMBER("", "K-Link tank number", this); }
 
 void KLinkSourceSelect::setup() {
-  this->publish_state(static_cast<size_t>(this->group_->source()));
-  this->group_->add_on_source_callback([this]() { this->publish_state(static_cast<size_t>(this->group_->source())); });
+  auto publish = [this]() {
+    this->publish_state(this->group_->source() == ProgramSource::POINTS ? 0 : 1);
+  };
+  publish();
+  this->group_->add_on_source_callback(publish);
 }
 
 void KLinkSourceSelect::dump_config() { LOG_SELECT("", "K-Link program source", this); }
@@ -2259,6 +2319,39 @@ void KLinkSensor::update() {
 
 // ---- Native light follower ------------------------------------------------------------------
 
+const char *KLinkLightFollower::model_name() const {
+  switch (this->model_) {
+    case GroupModel::TUNA_SUN:
+      return "tuna_sun";
+    case GroupModel::TUNA_BLUE:
+      return "tuna_blue";
+    case GroupModel::REFUGIUM:
+      return "refugium";
+  }
+  return "tuna_sun";
+}
+
+const char *KLinkLightFollower::target_model_name() const { return kk::light_model_name(this->output_model_); }
+
+std::string KLinkLightFollower::name() const {
+  for (auto *light : this->lights_) {
+    if (light == nullptr)
+      continue;
+    const std::string name = light->get_name().str();
+    if (!name.empty())
+      return name;
+  }
+  return "Follower lights";
+}
+
+std::vector<std::string> KLinkLightFollower::light_names() const {
+  std::vector<std::string> names;
+  names.reserve(this->lights_.size());
+  for (auto *light : this->lights_)
+    names.push_back(light != nullptr ? light->get_name().str() : std::string());
+  return names;
+}
+
 void KLinkLightFollower::setup() {
   if (this->hub_ != nullptr) {
     this->hub_->add_on_group_frame_callback([this](uint8_t gid, const uint8_t *channels) {
@@ -2286,6 +2379,19 @@ void KLinkLightFollower::setup() {
   if (!any)
     common = kk::CAP_BRIGHTNESS;
   this->output_model_ = kk::model_for_caps(common);
+
+  // Watch the lights so a local command (Home Assistant, the ESPHome page, an automation) can be
+  // answered with the group's last program value instead of staying until the next group write.
+  this->watchers_.reserve(this->lights_.size());
+  for (light::LightState *light : this->lights_) {
+    if (light == nullptr)
+      continue;
+    std::unique_ptr<Watcher> watcher(new Watcher());
+    watcher->owner = this;
+    watcher->light = light;
+    light->add_remote_values_listener(watcher.get());
+    this->watchers_.push_back(std::move(watcher));
+  }
 }
 
 void KLinkLightFollower::dump_config() {
@@ -2306,11 +2412,12 @@ void KLinkLightFollower::dump_config() {
 }
 
 // A real lamp dips for about half a second when the leader identifies it. Do the same on the local
-// light and put back what it showed before; no color mapping is involved. A group write during the
-// dip wins over the restore.
+// light and put back what it showed before; no color mapping is involved. A light that is off would
+// not show a dip, so it gets a short flash instead. A group write during the dip wins over the restore.
 void KLinkLightFollower::flash_() {
   if (this->flash_pending_)
     return;  // a dip is already running; do not save the dipped values as the ones to restore
+  this->cancel_timeout("klink_refollow");
   this->flash_pending_ = true;
   this->have_latest_ = false;
   this->saved_.clear();
@@ -2319,12 +2426,14 @@ void KLinkLightFollower::flash_() {
       this->saved_.push_back(light::LightColorValues());
       continue;
     }
-    this->saved_.push_back(light->current_values);
+    const light::LightColorValues &value = light->current_values;
+    this->saved_.push_back(value);
     if (light->get_current_effect_index() != 0)
       continue;  // a local effect wins over the bus, including the dip
     auto call = light->make_call();
     call.set_state(true);
-    call.set_brightness(0.0f);
+    // A dip only shows on a light that is on; an off light is briefly lit so Identify still finds it.
+    call.set_brightness(value.is_on() ? 0.0f : 1.0f);
     call.set_transition_length(0);
     call.set_save(false);
     call.perform();
@@ -2337,6 +2446,8 @@ void KLinkLightFollower::flash_() {
       this->apply_(this->latest_);
       return;
     }
+    // Restoring is our own write, not a local command.
+    this->applying_ = true;
     for (size_t i = 0; i < this->lights_.size() && i < this->saved_.size(); i++) {
       light::LightState *light = this->lights_[i];
       if (light == nullptr || light->get_current_effect_index() != 0)
@@ -2359,10 +2470,36 @@ void KLinkLightFollower::flash_() {
       call.set_save(false);
       call.perform();
     }
+    this->applying_ = false;
+    // The saved values may be a local command that arrived since the last group write. Return to the
+    // program now rather than waiting for the leader's next frame.
+    if (this->have_last_)
+      this->light_changed_();
+  });
+}
+
+// A listener fires on every remote-value update, including our own perform() calls. Only a change
+// made while the light is showing a group value is a local command; then the group's last value is
+// applied again, so the program wins over a one-off Home Assistant change.
+void KLinkLightFollower::light_changed_() {
+  if (this->applying_ || this->flash_pending_ || !this->have_last_)
+    return;
+  this->cancel_timeout("klink_refollow");
+  // Short delay so a slider drag or a transition's first update settles before the snap back.
+  this->set_timeout("klink_refollow", 100, [this]() {
+    if (this->applying_ || this->flash_pending_ || !this->have_last_)
+      return;
+    uint8_t channels[5];
+    std::memcpy(channels, this->last_, sizeof(channels));
+    this->apply_(channels);
   });
 }
 
 void KLinkLightFollower::apply_(const uint8_t channels[5]) {
+  for (size_t i = 0; i < 5; i++)
+    this->last_[i] = channels[i];
+  this->have_last_ = true;
+  this->cancel_timeout("klink_refollow");
   if (this->flash_pending_) {
     // Keep only the newest write; the dip's end shows it instead of the pre-dip snapshot.
     for (size_t i = 0; i < 5; i++)
@@ -2373,6 +2510,7 @@ void KLinkLightFollower::apply_(const uint8_t channels[5]) {
   const kk::ColorSpec *spec = group_color_spec(this->model_);
   if (spec == nullptr)
     return;
+  this->applying_ = true;
   for (size_t i = 0; i < this->lights_.size(); i++) {
     light::LightState *light = this->lights_[i];
     if (light == nullptr || light->get_current_effect_index() != 0)
@@ -2394,6 +2532,7 @@ void KLinkLightFollower::apply_(const uint8_t channels[5]) {
     call.set_save(false);
     call.perform();
   }
+  this->applying_ = false;
 }
 
 }  // namespace klink

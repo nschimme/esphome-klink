@@ -94,7 +94,7 @@ FADE_TIME_SCHEMA = (
 TYPED_KINDS = (EFFECT_DURATION_TYPE, FADE_TIME_TYPE)
 
 
-# The device-wide location for the sun and moon programs: a value entered here wins over the one imported
+# The device-wide location for the Sky program: a value entered here wins over the one imported
 # from Home Assistant (zone.home) and the YAML default.
 LOCATION_TYPES = {"latitude": (0, -90, 90), "longitude": (1, -180, 180)}
 

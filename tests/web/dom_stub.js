@@ -240,11 +240,13 @@ function bootstrap(doc) {
   var banner = add('div', 'writes-banner');
   add('p', 'writes-text', null, banner);
   add('button', 'writes-on');
+  add('div', 'bus-card');
+  add('div', 'writes-block');
   add('button', 'writes-toggle');
   add('button', 'retry-btn');
   add('button', 'scan-btn');
-  add('span', 'bus-text');
-  add('span', 'bus-count');
+  add('div', 'lamps-card');
+  add('div', 'find-lamps-card');
   add('div', 'groups');
   var search = add('input', 'lamp-search');
   search.type = 'search';
@@ -259,6 +261,9 @@ function bootstrap(doc) {
   var locationCard = add('div', 'location-card', null, panels.settings);
   add('p', 'location-line', null, locationCard);
   add('p', 'location-note', null, locationCard);
+  var gh = add('div', 'group-settings-heading', null, panels.settings);
+  var gsel = add('select', 'settings-gid', null, gh);
+  gsel.type = 'select';
   add('div', 'outputs', null, panels.settings);
   add('div', 'acclimations', null, panels.settings);
   add('div', 'prog-root', null, panels.program);
@@ -351,13 +356,17 @@ function makeServer(opts) {
     if (g.acclimation === undefined) {
       g.acclimation = { on: false, start: 30, days: 14, share: 100 };
     }
-    /* Only a bus group has the sun and moon sources. */
+    /* Only a bus group has the Sky program. */
     if (g.kind !== 'light') {
       if (g.source == null) g.source = 0;
-      if (!g.sky) g.sky = { peak: 60, hours: 0, glow: 100, ramp: 150, amber: 0, shift: 0, moon: 5, phase: 1 };
+      var skyDefaults = { layers: 3, peak: 60, hours: 0, glow: 50, ramp: 150, amber: 0, shift: 0, moon: 5, phase: 1 };
+      if (!g.sky) g.sky = skyDefaults;
+      else for (var skyKey in skyDefaults) if (g.sky[skyKey] == null) g.sky[skyKey] = skyDefaults[skyKey];
     }
   });
   var lamps = opts.lamps || [];
+  var followers = opts.followers || [];
+  var role = opts.role || 'leader';
   var requests = [];
   /* The page's fake clock drives effect expiry too, so a test can tick through a whole effect. */
   var currentNow = opts.now || function () { return Date.now(); };
@@ -383,22 +392,15 @@ function makeServer(opts) {
     var d = new Date();
     return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
   }
+  function canMoon(g) {
+    return g.model === 'tuna_blue' || g.model === 'light_rgb' || g.model === 'light_rgbw';
+  }
   function generatedFor(g, source, date) {
     if (typeof opts.generated === 'function') {
       var custom = opts.generated(g.gid, source, date);
       if (custom) return custom;
     }
-    if (source === 1) {
-      return {
-        points: [
-          { minute: 434, ch: [0, 0, 0, 0, 0], enabled: true },
-          { minute: 760, ch: [200, 120, 0, 0, 0], enabled: true },
-          { minute: 1076, ch: [0, 0, 0, 0, 0], enabled: true }
-        ],
-        summary: { sunrise: 434, noon: 760, sunset: 1076, length: 642, always_up: false }
-      };
-    }
-    return {
+    var moon = {
       points: [
         { minute: 1145, ch: [0, 100, 0, 0, 0], enabled: true },
         { minute: 66, ch: [12, 100, 0, 0, 0], enabled: true },
@@ -406,6 +408,23 @@ function makeServer(opts) {
       ],
       summary: { rise: 1145, set: 428, illumination: 0.98 }
     };
+    var sun = {
+      points: [
+        { minute: 434, ch: [0, 0, 0, 0, 0], enabled: true },
+        { minute: 760, ch: [200, 120, 0, 0, 0], enabled: true },
+        { minute: 1076, ch: [0, 0, 0, 0, 0], enabled: true }
+      ],
+      summary: { sunrise: 434, noon: 760, sunset: 1076, length: 642, always_up: false }
+    };
+    var layers = (g.sky && g.sky.layers != null ? g.sky.layers : 3) & (canMoon(g) ? 3 : 1);
+    if (layers === 3) {
+      sun.points = sun.points.concat(moon.points).sort(function (a, b) { return a.minute - b.minute; });
+      sun.summary.moon = moon.summary;
+      return sun;
+    }
+    if (layers === 2) return moon;
+    if (layers === 0) return { points: [], summary: {} };
+    return sun;
   }
   function groupGenerated(g) {
     if (Array.isArray(g.generated)) return cloneSlots(g.generated);
@@ -437,10 +456,10 @@ function makeServer(opts) {
         }
         if ((g.kind || 'bus') !== 'light') {
           item.source = g.source;
-          item.sources = (g.model === 'tuna_blue' || g.model === 'light_rgb' || g.model === 'light_rgbw') ? [0, 1, 2] : [0, 1];
+          item.can_moon = canMoon(g);
           item.source_note = g.source !== 0 && location === null ? 'Set a location' : (g.source_note || '');
           item.sky = {
-            peak: g.sky.peak | 0, hours: g.sky.hours | 0, glow: g.sky.glow | 0,
+            layers: g.sky.layers | 0, peak: g.sky.peak | 0, hours: g.sky.hours | 0, glow: g.sky.glow | 0,
             ramp: g.sky.ramp | 0, amber: g.sky.amber | 0, shift: g.sky.shift | 0, moon: g.sky.moon | 0,
             phase: g.sky.phase | 0
           };
@@ -451,8 +470,15 @@ function makeServer(opts) {
       lamps: lamps.map(function (l) {
         return { kid: l.kid, type: l.type, gid: l.gid, name: l.name || '' };
       }),
+      followers: followers.map(function (l) {
+        return {
+          id: l.id, kid: l.kid || 0, gid: l.gid, name: l.name || '', model: l.model || 'tuna_sun',
+          target: l.target || 'light_rgb', lights: (l.lights || []).slice()
+        };
+      }),
       location: location ? { lat: location.lat, lon: location.lon, source: location.source } : null,
-      bus: { state: 'Controlling', writes: writes, want_writes: writes, known_lamps: lamps.length }
+      bus: { state: role === 'follower' ? 'Follower: following the chain' : 'Controlling',
+        role: role, writes: writes, want_writes: writes, known_lamps: lamps.length }
     };
   }
 
@@ -585,13 +611,12 @@ function makeServer(opts) {
     if (gid === null) throw new HttpError(400, 'invalid parameter: gid');
     var g = findGroup(gid);
     if (!g) throw new HttpError(404, 'unknown group');
-    if ((g.kind || 'bus') === 'light') throw new HttpError(400, 'this program has no sun or moon source');
+    if ((g.kind || 'bus') === 'light') throw new HttpError(400, 'this program has no Sky source');
     return g;
   }
   function parseSource(text) {
     if (text === 'points') return 0;
-    if (text === 'sun') return 1;
-    if (text === 'moon') return 2;
+    if (text === 'sky') return 1;
     throw new HttpError(400, 'invalid parameter: source');
   }
   function handleSource(q) {
@@ -606,6 +631,12 @@ function makeServer(opts) {
       var v = parseUint(q.get(name), max);
       if (v === null) throw new HttpError(400, 'invalid parameter: ' + name);
       return v;
+    }
+    if (q.has('layers')) {
+      var layers = num('layers', 3);
+      if (layers === 0) throw new HttpError(400, 'invalid parameter: layers');
+      if (layers === 2 && !canMoon(g)) throw new HttpError(400, 'the moon needs a light that makes blue');
+      s.layers = layers;
     }
     if (q.has('peak')) s.peak = num('peak', 100);
     if (q.has('hours')) {
@@ -698,6 +729,12 @@ function makeServer(opts) {
       if (u.pathname === '/klink/sky') { handleSky(u.searchParams); return Promise.resolve(response(200, { ok: true })); }
       if (u.pathname === '/klink/source/copy') { handleCopy(u.searchParams); return Promise.resolve(response(200, { ok: true })); }
       if (u.pathname === '/klink/generated') return Promise.resolve(response(200, handleGenerated(u.searchParams)));
+      if (u.pathname === '/klink/identify') {
+        var key = u.searchParams.get('follower');
+        var found = followers.filter(function (l) { return l.id === key; });
+        if (!found.length) throw new HttpError(404, 'unknown follower');
+        return Promise.resolve(response(200, { ok: true }));
+      }
       if (u.pathname === '/klink/preview/done') return Promise.resolve(response(200, { ok: true }));
       if (u.pathname === '/klink/preview') return Promise.resolve(response(200, { ok: true }));
       throw new HttpError(404, 'not found');
@@ -710,6 +747,7 @@ function makeServer(opts) {
     group: group,
     groups: groups,
     lamps: lamps,
+    followers: followers,
     requests: requests,
     fetch: fetch,
     pointRequests: function () {

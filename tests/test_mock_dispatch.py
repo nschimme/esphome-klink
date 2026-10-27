@@ -48,6 +48,19 @@ def main():
     state = json_body(body)
     check("state has groups", isinstance(state.get("groups"), list))
     check("state has bus", isinstance(state.get("bus"), dict))
+    check("state has followers", isinstance(state.get("followers"), list))
+
+    mock_server.FOLLOWERS.append(
+        {"id": "refugium_follow", "kid": 0, "gid": 26, "name": "Sump strip",
+         "model": "refugium", "target": "light_rgb", "lights": ["Sump strip"]}
+    )
+    try:
+        status, content_type, body = request("POST", "/klink/identify?follower=refugium_follow")
+        check("POST follower identify status", status == 200, str(status))
+        status, content_type, body = request("POST", "/klink/identify?follower=missing")
+        check("POST unknown follower identify is 404", status == 404, str(status))
+    finally:
+        mock_server.FOLLOWERS.clear()
 
     status, content_type, body = request("POST", "/klink/mode?gid=101&mode=bogus")
     check("POST /klink/mode bad parameter status", status == 400, str(status))

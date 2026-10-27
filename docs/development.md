@@ -77,11 +77,10 @@ every request, so a reload picks up your edits:
 ```sh
 python3 tools/mock_server.py            # http://127.0.0.1:8080/klink
 python3 tools/mock_server.py 9000       # another port
-python3 tools/mock_server.py --many     # many groups and lamps
-python3 tools/mock_server.py --no-location   # no location: the Sun and Moon "Set a location" state
+python3 tools/mock_server.py --no-location   # no location: the Sky "Set a location" state
 ```
 
-The mock's generated sun and moon days are illustrative shapes, not real astronomy.
+The mock's generated Sky days are illustrative shapes, not real astronomy.
 
 ### Hosted demo
 

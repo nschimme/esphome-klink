@@ -28,12 +28,12 @@ struct OutputSettings {
   uint8_t soft_start{30};  // seconds to fade in from dark after every start (0-120), 0 = no soft start
 };
 
-// Where a program's values come from: the user's own points, or a day generated from the sun or the moon
-// at the device's location.
-enum class ProgramSource : uint8_t { POINTS = 0, SUN = 1, MOON = 2 };
+// Where a program's values come from: the user's own points, or the Sky program at the device's location.
+// Sky is one program with a Sun layer, a Moon layer, or both (see SkySettings::layers).
+enum class ProgramSource : uint8_t { POINTS = 0, SKY = 1 };
 
-// The device-wide location (latitude and longitude in degrees, east positive). One per device so a Sun
-// program and a Moon program on different lights agree.
+// The device-wide location (latitude and longitude in degrees, east positive). One per device so the Sky
+// program on different lights agrees.
 class LocationProvider {
  public:
   virtual ~LocationProvider() = default;
@@ -45,12 +45,13 @@ class LocationProvider {
   virtual float weather_dimming() const { return 0.0f; }
 };
 
-// What the user can tune about the generated sun and moon days. Percent values are of full intensity.
+// What the user can tune about the Sky program. Percent values are of full intensity.
 struct SkySettings {
+  uint8_t layers{3};   // sun and moon layers: 1 sun, 2 moon, 3 both
   uint8_t peak{60};   // sun: brightest intensity at noon, percent (60 = INT 153, the stock preset's peak)
   uint8_t hours{0};   // sun: 0 follows the real sun; 4-16 fixes the day length to that many hours
-  uint8_t glow{100};  // sun: sunrise and sunset glow (red/amber on a Tuna Sun, violet on a Tuna Blue), percent
-  uint8_t amber{0};   // sun, Tuna Sun: amber night glow, percent (0-10)
+  uint8_t glow{50};   // sun: edge tint (red/amber on a Tuna Sun, a little violet on a Tuna Blue), percent
+  uint8_t amber{0};   // sun: night glow, percent (0-10); amber on a Tuna Sun, violet on a Tuna Blue
   uint8_t ramp{15};   // sun: minutes from sunrise to near-peak, in tens (15 = 150 minutes); 0 follows the real sun
   int8_t shift{0};    // sun and moon: minutes added to every point (-120 to 120)
   uint8_t moon{5};    // moon: brightest moonlight, percent of full intensity
@@ -115,11 +116,11 @@ class ProgramHost {
   // its lamps, see KLinkHub::identify_gid).
   virtual bool find() { return false; }
 
-  // Sun and moon programs: hosts without them keep these defaults.
+  // Sky program: hosts without it keep these defaults.
   virtual void set_location_provider(const LocationProvider *provider) { (void) provider; }
   virtual bool has_sources() const { return false; }
-  // The moon needs blue light: only a Tuna Blue or a light that mixes color can show it. The Sun source works
-  // on every program (intensity, color temperature, glow where the light has them).
+  // The moon needs blue light: only a Tuna Blue or a light that mixes color can show it. The Sun layer
+  // works on every program (intensity, color temperature, glow where the light has them).
   virtual bool can_moon() const { return false; }
   virtual ProgramSource source() const { return ProgramSource::POINTS; }
   virtual void set_source(ProgramSource source) { (void) source; }
@@ -131,7 +132,7 @@ class ProgramHost {
   virtual float acclimation_share() const { return 1.0f; }
   virtual void add_on_acclimation_callback(std::function<void()> &&cb) { (void) cb; }
 
-  // Sun and moon days: tuning, any date's day for the page's preview, and today's day for the lamps.
+  // Sky days: tuning, any date's day for the page's preview, and today's day for the lamps.
   virtual SkySettings sky_settings() const { return SkySettings(); }
   virtual void set_sky_settings(const SkySettings &settings) { (void) settings; }
   // The day (points and a JSON summary object) for a local date, whatever the active source: false when there

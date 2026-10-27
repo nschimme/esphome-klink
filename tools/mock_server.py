@@ -8,8 +8,7 @@ components/klink/web/ on every request, so edits show up on reload. Stdlib only:
     python3 tools/mock_server.py            # port 8080
     python3 tools/mock_server.py 9000       # another port
     python3 tools/mock_server.py --slow     # ~150 ms latency per request
-    python3 tools/mock_server.py --many     # 10 groups, 32 lamps, 3 groups without a program
-    python3 tools/mock_server.py --no-location  # the sun and moon sources ask for a location
+    python3 tools/mock_server.py --no-location  # the Sky program asks for a location
 
 Mock-only helpers (not part of the firmware API):
     POST /klink/_mock/writes?on=0|1         toggle "Send to lights" for the API
@@ -48,9 +47,9 @@ GET_ROUTES = ("/klink", "/klink/state", "/klink/snap", "/klink/generated")
 
 COLOR_MODELS = ("tuna_sun", "tuna_blue", "refugium")
 
-# Sun and moon program defaults for bus groups. The generated days below are illustrative, not
+# Sky program defaults for bus groups. The generated days below are illustrative, not
 # astronomy: they only need to move with the date and stay in a sensible range for the page.
-SKY_DEFAULTS = {"peak": 60, "hours": 0, "glow": 100, "ramp": 150, "amber": 0, "shift": 0, "moon": 5, "phase": 1}
+SKY_DEFAULTS = {"layers": 3, "peak": 60, "hours": 0, "glow": 50, "ramp": 150, "amber": 0, "shift": 0, "moon": 5, "phase": 1}
 LOCATION = {"lat": 41.88, "lon": -87.63, "source": "Home Assistant"}
 
 # The effects each model offers (the light's own effect list, without "None").
@@ -111,7 +110,7 @@ def copy_slots(slots):
 
 
 def has_sources_for(kind, model):
-    """A bus group of the Tuna lamps has the sun and moon sources; a Refugium and light programs do not."""
+    """A bus group of the Tuna lamps has the Sky program; a Refugium and light programs do not."""
     return kind != "light" and model != "refugium"
 
 
@@ -145,7 +144,7 @@ def make_group(gid, name, model, labels, slots, kind="bus"):
         "acclimation": {"on": False, "start": 30, "days": 14, "share": 100},
     }
     if has_sources_for(kind, model):
-        # Only a Tuna group has the sun and moon program sources.
+        # Only a Tuna group has the Sky program.
         group["source"] = 0
         group["sky"] = dict(SKY_DEFAULTS)
     return group
@@ -164,7 +163,7 @@ LIGHT_RGB_SLOTS = [
 
 
 def light_groups():
-    """The light programs every mock run starts with, plus the --many-only CT program."""
+    """The light programs every mock run starts with."""
     return [
         make_group(
             101,
@@ -175,26 +174,6 @@ def light_groups():
             kind="light",
         ),
     ]
-
-
-def hallway_group():
-    return make_group(
-        102,
-        "Hallway",
-        "light_ct",
-        ["int", "ct", None, None, None],
-        [
-            point(7 * 60, [30, 40, 0, 0, 0]),
-            point(9 * 60, [180, 128, 0, 0, 0]),
-            point(18 * 60, [210, 160, 0, 0, 0]),
-            point(22 * 60, [60, 0, 0, 0, 0]),
-            point(23 * 60, [0, 0, 0, 0, 0], False),
-            point(0, [0, 0, 0, 0, 0], False),
-            point(0, [0, 0, 0, 0, 0], False),
-            point(0, [0, 0, 0, 0, 0], False),
-        ],
-        kind="light",
-    )
 
 
 GROUPS = [
@@ -269,83 +248,12 @@ LAMPS = [
     {"kid": 18000004, "type": 3, "gid": 26, "name": ""},
 ]
 
+# Native ESPHome lights bound with `klink: followers:`. Empty in the leader demo: a leader and a
+# follower are separate boards. Set this list (and `ROLE`) to preview the follower page.
+FOLLOWERS = []
+ROLE = "leader"
+
 BUS = {"writes": True, "conflict": False, "scanning_until": 0.0, "scan_note": ""}
-
-
-# ---- --many laboratory ------------------------------------------------------------------------
-
-
-def many_slots():
-    """Eight slots, six enabled, valid for either model (c2 is ignored on Tuna Sun)."""
-    return [
-        point(8 * 60, [30, 60, 0, 0, 0]),
-        point(10 * 60 + 30, [150, 120, 0, 5, 15]),
-        point(13 * 60, [210, 170, 0, 20, 35]),
-        point(16 * 60, [170, 140, 0, 10, 25]),
-        point(19 * 60, [70, 70, 0, 0, 10]),
-        point(21 * 60 + 30, [8, 12, 0, 0, 0]),
-        point(0, [0, 0, 0, 0, 0], False),
-        point(0, [0, 0, 0, 0, 0], False),
-    ]
-
-
-MANY_GROUPS = (
-    (1, "Tuna Blue", "tuna_blue"),
-    (2, "Tuna Sun", "tuna_sun"),
-    (3, "Reef 3", "tuna_sun"),
-    (4, "Reef 4", "tuna_blue"),
-    (5, "Reef 5", "tuna_sun"),
-    (6, "Reef 6", "tuna_blue"),
-    (7, "Reef 7", "tuna_sun"),
-    (8, "Reef 8", "tuna_blue"),
-    (9, "Reef 9", "tuna_sun"),
-    (10, "Reef 10", "tuna_blue"),
-)
-
-LABELS = {
-    "tuna_sun": ["int", "clr", None, "r", "am"],
-    "tuna_blue": ["int", "clr", "vio", "r", "grn"],
-    "refugium": ["int", "clr", None, "w", "grn"],
-}
-
-
-def many_groups():
-    return [
-        make_group(gid, name, model, LABELS[model], many_slots())
-        for gid, name, model in MANY_GROUPS
-    ] + light_groups() + [hallway_group()]
-
-
-def many_lamps():
-    """32 lamps: two in each configured group, four in each unconfigured group 11, 12 and 20."""
-    lamps = []
-    kid = 18000001
-    placement = [(gid, 2) for gid, _, _ in MANY_GROUPS] + [(11, 4), (12, 4), (20, 4)]
-    named = {18000002: "Left", 18000003: "Right", 18000008: "Reef left", 18000009: "Reef right"}
-    types = {1: 1, 2: 2}
-    for gid, count in placement:
-        if gid not in types:
-            types[gid] = 1 if gid % 2 else 2
-        for _ in range(count):
-            lamps.append(
-                {
-                    "kid": kid,
-                    "type": types[gid],
-                    "gid": gid,
-                    "name": named.get(kid, ""),
-                }
-            )
-            kid += 1
-    return lamps
-
-
-def use_many():
-    """Replace the default two groups with the large laboratory used by --many."""
-    GROUPS[:] = many_groups()
-    LAMPS[:] = many_lamps()
-    BUS["writes"] = True
-    BUS["conflict"] = False
-    BUS["scan_note"] = ""
 
 LOCK = threading.Lock()
 SLOW_SECONDS = 0.0
@@ -606,26 +514,66 @@ def parse_date(text):
     return year, month, day
 
 
+def _sky_value(group, name, default, low, high):
+    value = group.get("sky", {}).get(name, default)
+    try:
+        value = int(value)
+    except (TypeError, ValueError):
+        value = default
+    return max(low, min(high, value))
+
+
 def sun_generated(group, date_text):
     year, month, day = parse_date(date_text)
     doy = day_of_year(year, month, day)
     noon = 12 * 60 + 40
-    hours = group.get("sky", {}).get("hours", 0)
+    hours = _sky_value(group, "hours", 0, 0, 16)
+    peak = _sky_value(group, "peak", 60, 0, 100)
+    glow = _sky_value(group, "glow", 50, 0, 100)
+    ramp = _sky_value(group, "ramp", 150, 0, 240)
+    shift = _sky_value(group, "shift", 0, -120, 120)
+    amber = _sky_value(group, "amber", 0, 0, 10)
     if hours:
         length = hours * 60
     else:
         length = int(round(720 + 180 * math.sin(2 * math.pi * (doy - 80) / 365.0)))
     sunrise = max(0, min(1439, noon - length // 2))
     sunset = max(0, min(1439, noon + length // 2))
+    # The shoulder where the ramp gets near the peak: the firmware moves it ramp minutes from sunrise
+    # and sunset, never closer than half an hour to noon. 0 follows the real sun's short climb.
+    reach = ramp if ramp else 40
+    shoulder_am = min(noon - 30, sunrise + reach)
+    if shoulder_am <= sunrise:
+        shoulder_am = sunrise
+    shoulder_pm = max(noon + 30, sunset - reach)
+    if shoulder_pm >= sunset:
+        shoulder_pm = sunset
     minutes = [
-        sunrise - 100, sunrise - 60, sunrise - 30, sunrise, sunrise + 60,
-        noon, sunset - 60, sunset, sunset + 30, sunset + 60, sunset + 100,
+        sunrise - 100, sunrise - 60, sunrise - 30, sunrise, shoulder_am,
+        noon, shoulder_pm, sunset, sunset + 30, sunset + 60, sunset + 100,
     ]
-    levels = [0, 5, 40, 90, 180, 220, 180, 90, 40, 5, 0]
-    colors = [0, 20, 60, 90, 110, 130, 110, 90, 60, 20, 0]
+    levels = [0.0, 0.04, 0.15, 0.35, 0.85, 1.0, 0.85, 0.35, 0.15, 0.04, 0.0]
+    temps = [0.0, 0.0, 0.0, 0.2, 0.8, 1.0, 0.8, 0.2, 0.0, 0.0, 0.0]
+    glows = [0.0, 0.10, 0.60, 1.0, 0.0, 0.0, 0.0, 1.0, 0.60, 0.10, 0.0]
+    blue = group.get("model") == "tuna_blue"
+    night = int(round(amber * 2.55))
     points = []
-    for minute, level, color in zip(minutes, levels, colors):
-        points.append(point(max(0, min(1439, minute)), [level, color, 0, 0, 0]))
+    # Mirror the shipped My points curve: violet and the red/green traces follow intensity, while
+    # red and amber are stronger at the edges. The default glow 50 gives 10 % red and 30 % amber.
+    clr_cool = 178 if blue else 89
+    for minute, level, temp, glow_at in zip(minutes, levels, temps, glows):
+        intensity = int(round(level * peak * 2.55))
+        color = int(round(temp * clr_cool))
+        night_at = night if not level else max(0, int(round(night * (1.0 - level))))
+        if blue:
+            violet = int(round(60 * level + glow_at * glow * 0.1))
+            trace = int(round(5 * level))
+            channels = [intensity, color, max(violet, night_at), trace, trace]
+        else:
+            red = max(int(round(8 * level)), int(round(glow_at * glow * 0.2)))
+            amber = max(int(round(15 * level)), int(round(glow_at * glow * 0.6)))
+            channels = [intensity, color, 0, red, max(amber, night_at)]
+        points.append(point((minute + shift) % 1440, channels))
     summary = {
         "sunrise": sunrise,
         "noon": noon,
@@ -639,25 +587,47 @@ def sun_generated(group, date_text):
 def moon_generated(group, date_text):
     year, month, day = parse_date(date_text)
     doy = day_of_year(year, month, day)
-    rise = 120 + (doy * 7) % 360
-    moon_set = rise + 240
+    shift = _sky_value(group, "shift", 0, -120, 120)
+    # An evening-to-early-morning window, so the illustrative moon is up when it is dark.
+    rise = 1080 + (doy * 7) % 240
+    moon_set = rise + 300
     peak = rise + (moon_set - rise) // 2
     illumination = round((1 - math.cos(2 * math.pi * doy / 29.5)) / 2, 2)
     sky = group.get("sky", {})
     top = 255.0 * sky.get("moon", 0) / 100.0 * (illumination if sky.get("phase", 1) else 1.0)
     points = [
-        point(rise, [0, 255, 0, 0, 0]),
-        point(peak, [int(round(top)), 255, 0, 0, 0]),
-        point(moon_set, [0, 255, 0, 0, 0]),
+        point((rise + shift) % 1440, [0, 255, 0, 0, 0]),
+        point((peak + shift) % 1440, [int(round(top)), 255, 0, 0, 0]),
+        point((moon_set + shift) % 1440, [0, 255, 0, 0, 0]),
     ]
-    summary = {"rise": rise, "set": moon_set, "illumination": illumination}
+    summary = {"rise": rise % 1440, "set": moon_set % 1440, "illumination": illumination}
     return {"points": points, "summary": summary}
 
 
 def generated_day(group, source, date_text):
     if source == 1:
+        sky = group.get("sky", {})
+        layers = sky.get("layers", 3) & (3 if can_moon(group) else 1)
+        if layers == 3:
+            day = sun_generated(group, date_text)
+            # The illustrative moon window may fall in daylight, so keep only the points outside the
+            # sun's day.
+            moon = moon_generated(group, date_text)
+            sunrise = day["summary"]["sunrise"]
+            sunset = day["summary"]["sunset"]
+            dark = [p for p in moon["points"] if p["minute"] <= sunrise or p["minute"] >= sunset]
+            if dark:
+                day["points"] = sorted(day["points"] + dark, key=lambda p: p["minute"])
+                day["summary"]["moon"] = moon["summary"]
+            else:
+                day["summary"]["moon"] = {"rise": -1, "set": -1, "illumination": moon["summary"]["illumination"]}
+            return day
+        if layers == 2:
+            return moon_generated(group, date_text)
+        if layers == 0:
+            return {"points": [], "summary": {}}
         return sun_generated(group, date_text)
-    return moon_generated(group, date_text)
+    return {"points": [], "summary": {}}
 
 
 def source_note(group):
@@ -704,7 +674,7 @@ def state_json():
             entry["output"] = group["output"]
         if "source" in group:
             entry["source"] = group["source"]
-            entry["sources"] = [0, 1, 2] if can_moon(group) else [0, 1]
+            entry["can_moon"] = can_moon(group)
             entry["source_note"] = source_note(group)
             entry["sky"] = dict(group["sky"])
             if group["source"] != 0 and LOCATION is not None:
@@ -714,8 +684,15 @@ def state_json():
     return {
         "groups": groups,
         "lamps": lamps,
+        "followers": [dict(l) for l in FOLLOWERS],
         "location": None if LOCATION is None else dict(LOCATION),
-        "bus": {"state": bus_state_text(), "writes": BUS["writes"], "known_lamps": len(LAMPS)},
+        "bus": {
+            "state": bus_state_text(),
+            "role": ROLE,
+            "writes": BUS["writes"],
+            "want_writes": BUS["writes"],
+            "known_lamps": len(LAMPS),
+        },
     }
 
 
@@ -828,19 +805,19 @@ def handle_acclimation(query):
     state["share"] = start if on else 100
 
 
-# ---- sun and moon sources ---------------------------------------------------------------------
+# ---- Sky program: sun and moon layers ----------------------------------------------------------
 
-SOURCE_NAMES = {"points": 0, "sun": 1, "moon": 2}
+SOURCE_NAMES = {"points": 0, "sky": 1}
 GEN_SEEN = set()
 GEN_RESULTS = {}
 
 
 def require_sky_group(query):
-    """The group named by gid, when it has the sun and moon sources."""
+    """The group named by gid, when it has the Sky program."""
     gid = require_program_gid(query, "gid")
     group = require_group(gid)
     if "source" not in group:
-        raise HttpError(400, "this program has no sun or moon source")
+        raise HttpError(400, "this program has no Sky source")
     return group
 
 
@@ -860,16 +837,20 @@ def handle_source(query):
     group = require_sky_group(query)
     if "source" not in query:
         raise HttpError(400, "invalid parameter: source")
-    source = parse_source(query["source"][0])
-    if source == 2 and not can_moon(group):
-        raise HttpError(400, "the moon needs a light that makes blue")
-    group["source"] = source
+    group["source"] = parse_source(query["source"][0])
 
 
 def handle_sky(query):
-    """Any subset of the sun and moon settings, validated like the firmware."""
+    """Any subset of the Sky settings, validated like the firmware."""
     group = require_sky_group(query)
     settings = dict(group["sky"])
+    if "layers" in query:
+        layers = require_uint(query, "layers", 3)
+        if layers == 0:
+            raise HttpError(400, "invalid parameter: layers")
+        if layers == 2 and not can_moon(group):
+            raise HttpError(400, "the moon needs a light that makes blue")
+        settings["layers"] = layers
     if "peak" in query:
         settings["peak"] = require_uint(query, "peak", 100)
     if "hours" in query:
@@ -938,7 +919,9 @@ def handle_generated(query):
         raise HttpError(400, "invalid parameter: date")
     if LOCATION is None:
         raise HttpError(409, "no location set")
-    key = (group["gid"], source, date_text)
+    settings = group.get("sky", {})
+    sky_key = tuple(settings.get(n) for n in ("layers", "peak", "hours", "glow", "amber", "ramp", "shift", "moon", "phase"))
+    key = (group["gid"], source, date_text, sky_key)
     if key not in GEN_SEEN:
         GEN_SEEN.add(key)
         return {"pending": True}
@@ -966,8 +949,14 @@ def parse_effect_minutes(text):
 def handle_identify(query):
     has_kid = "kid" in query
     has_gid = "gid" in query
-    if has_kid == has_gid:
-        raise HttpError(400, "provide exactly one of kid or gid")
+    has_follower = "follower" in query
+    if int(has_kid) + int(has_gid) + int(has_follower) != 1:
+        raise HttpError(400, "provide exactly one of kid, gid or follower")
+    if has_follower:
+        key = query["follower"][0]
+        if not any(lamp["id"] == key for lamp in FOLLOWERS):
+            raise HttpError(404, "unknown follower")
+        return
     if has_gid:
         value = require_uint(query, "gid", PROGRAM_ID_MAX)
         if is_program_id(value):
@@ -1324,18 +1313,11 @@ def main(argv=None):
     parser.add_argument("--host", default="127.0.0.1", help="bind address (default 127.0.0.1)")
     parser.add_argument("--slow", action="store_true", help="add ~150 ms of latency to every request")
     parser.add_argument(
-        "--many",
-        action="store_true",
-        help="10 configured groups, 32 lamps and 3 groups this controller has no program for",
-    )
-    parser.add_argument(
         "--no-location",
         action="store_true",
-        help="report no location, so the sun and moon sources ask for one",
+        help="report no location, so the Sky program asks for one",
     )
     args = parser.parse_args(argv)
-    if args.many:
-        use_many()
     if args.no_location:
         LOCATION = None
     SLOW_SECONDS = 0.15 if args.slow else 0.0

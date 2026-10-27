@@ -42,7 +42,7 @@ struct SunParams {
   int glow = 100;      // percent, full scale of the red/amber/violet glow channels
   int dip = 0;         // percent taken off the noon intensity, for a midday siesta
   int shift_min = 0;   // minutes added to every point (e.g. the user's local offset)
-  int night_amber = 0;  // percent, DYN_SUN only: amber floor at the dark end of the night
+  int night_amber = 0;  // percent, night floor at the dark end (amber on DYN_SUN, violet on DYN_BLUE)
   // Minutes from sunrise to near-peak intensity (and the same before sunset): a tank wants a gentler morning
   // than the real sun gives. 0 keeps the real sun, which reaches 85 % within about 40 minutes.
   int ramp_min = 0;
@@ -90,8 +90,9 @@ inline void dyn_rgb(int clr, double glow_fraction, bool moon, int out[3]) {
 }
 
 // One sun point: intensity and color interpolate between the floor/peak and warm/cool spans, the
-// glow channels follow g (0..1) times the glow percent. `f` is the point's intensity fraction; on a
-// Tuna Sun it lifts amber at the dark end of the night (night_amber, full at f = 0 and gone by 0.15).
+// glow channels follow g (0..1) times the glow percent. `f` is the point's intensity fraction; at the
+// dark end of the night night_amber lifts amber (Tuna Sun) or violet (Tuna Blue), full at f = 0 and
+// gone by 0.15.
 inline SchedulePoint dyn_sun_point(int minute, int inten, int clr, double g, double f,
                                    const SunParams &p, DynModel model) {
   SchedulePoint pt;
@@ -110,12 +111,23 @@ inline SchedulePoint dyn_sun_point(int minute, int inten, int clr, double g, dou
     for (int k = 0; k < 3; k++)
       pt.channels[2 + k] = clamp_channel(2 + k, rgb[k]);
   } else if (model == DYN_SUN) {
-    pt.channels[3] = clamp_channel(3, dyn_round(glow * 0.5));
-    int glow_amber = dyn_round(glow);
+    /* The shipped curve's midday red and amber, plus the stronger edge tint from the glow setting. */
+    int red = dyn_round(8.0 * f);
+    int edge_red = dyn_round(glow * 0.2);
+    pt.channels[3] = clamp_channel(3, red > edge_red ? red : edge_red);
+    int amber = dyn_round(15.0 * f);
+    int edge_amber = dyn_round(glow * 0.6);
+    int body_amber = amber > edge_amber ? amber : edge_amber;
     int night = dyn_round(p.night_amber * std::max(0.0, 1.0 - f / 0.15));
-    pt.channels[4] = clamp_channel(4, night > glow_amber ? night : glow_amber);
+    pt.channels[4] = clamp_channel(4, night > body_amber ? night : body_amber);
   } else if (model == DYN_BLUE) {
-    pt.channels[2] = clamp_channel(2, dyn_round(glow));
+    /* Violet follows intensity like the shipped reef curve, with a little extra at the edges. */
+    int violet = dyn_round(60.0 * f + glow * 0.1);
+    int night = dyn_round(p.night_amber * std::max(0.0, 1.0 - f / 0.15));
+    pt.channels[2] = clamp_channel(2, violet > night ? violet : night);
+    int trace = dyn_round(5.0 * f);
+    pt.channels[3] = clamp_channel(3, trace);
+    pt.channels[4] = clamp_channel(4, trace);
   }
   pt.enabled = true;
   return pt;
@@ -171,10 +183,12 @@ inline std::vector<SchedulePoint> sun_points(const SunDay &real_day, const SunPa
   std::vector<SchedulePoint> out;
   const int span = p.peak_int - p.floor_int;
   const double dip_scale = 1.0 - p.dip / 100.0;
+  // The shipped My points curve uses a warmer Tuna Sun and a cooler Tuna Blue at the peak.
+  const int clr_cool = model == DYN_SUN ? 89 : (model == DYN_BLUE ? 178 : p.clr_cool);
 
   if (day.always_up) {
     out.push_back(dyn_sun_point(720 + p.shift_min, dyn_round(p.floor_int + dip_scale * span),
-                                dyn_round(p.clr_cool), 0.0, dip_scale, p, model));
+                                dyn_round(clr_cool), 0.0, dip_scale, p, model));
     return out;
   }
 
@@ -200,7 +214,7 @@ inline std::vector<SchedulePoint> sun_points(const SunDay &real_day, const SunPa
     if (events[i].minute < 0)
       continue;
     int inten = dyn_round(p.floor_int + events[i].f * span);
-    int clr = dyn_round(p.clr_warm + events[i].c * (p.clr_cool - p.clr_warm));
+    int clr = dyn_round(p.clr_warm + events[i].c * (clr_cool - p.clr_warm));
     out.push_back(dyn_sun_point(events[i].minute + p.shift_min, inten, clr, events[i].g,
                                 events[i].f, p, model));
   }
@@ -257,6 +271,17 @@ inline std::vector<SchedulePoint> moon_points(const MoonNight &n, const MoonPara
   out.push_back(dyn_moon_point(n.rise + p.shift_min, 0, 0, 0, p, model));
   out.push_back(dyn_moon_point(peak + p.shift_min, peak_int, violet, amber, p, model));
   out.push_back(dyn_moon_point(n.set + p.shift_min, 0, 0, 0, p, model));
+  dyn_finish(out);
+  return out;
+}
+
+// The sun's day with the moon lifted into its dark hours: the union of both curves. The caller only
+// passes a night with a rise and a set; dyn_finish sorts the points and nudges any that share a minute.
+inline std::vector<SchedulePoint> sun_moon_points(const SunDay &day, const MoonNight &night,
+                                                  const SunParams &sun, const MoonParams &moon, DynModel model) {
+  std::vector<SchedulePoint> out = sun_points(day, sun, model);
+  std::vector<SchedulePoint> lunar = moon_points(night, moon, model);
+  out.insert(out.end(), lunar.begin(), lunar.end());
   dyn_finish(out);
   return out;
 }

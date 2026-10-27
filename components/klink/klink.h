@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -106,6 +107,18 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
   // no bus traffic (its UART hears its own requests echoed, so it must never answer itself).
   void add_lamp(KLinkLightFollower *light, uint32_t kid, uint8_t gid, uint8_t type, const std::string &model,
                 const std::string &key);
+  // Every `followers:` entry, lamp or not. The page lists these as the board's follower lights and
+  // can dip them without touching the bus, also on a follower.
+  void register_follower(KLinkLightFollower *follower) { followers_.push_back(follower); }
+  const std::vector<KLinkLightFollower *> &followers() const { return followers_; }
+  bool has_follower(const std::string &key) const;
+  // The KID of the lamp this entry answers for, or 0 for a `lamp: false` entry.
+  uint32_t follower_kid(const std::string &key) const;
+  bool has_local_gid(uint8_t gid) const;
+  bool has_local_kid(uint32_t kid) const;
+  bool flash_local(const std::string &key);
+  bool flash_local_gid(uint8_t gid);
+  bool flash_local_kid(uint32_t kid);
   // Delay before a follower sends a lamp reply; it never overlaps another reply on the one UART.
   void set_lamp_reply_delay(uint32_t ms) { lamp_reply_delay_ms_ = ms; }
   bool controlling() const { return guard_.controlling(); }
@@ -147,7 +160,7 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
     program->set_location_provider(this);
   }
 
-  // Device-wide location for the sun and moon programs. Per coordinate: a value entered in the latitude
+  // Device-wide location for the Sky program. Per coordinate: a value entered in the latitude
   // and longitude entities wins over the one imported from Home Assistant (zone.home), which wins over the
   // YAML default. NaN clears a source.
   struct Coordinate {
@@ -316,6 +329,7 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
   uint32_t lamp_reply_delay_ms_{5};
   uint32_t lamp_reply_seq_{0};
   std::vector<HubLamp> own_lamps_;
+  std::vector<KLinkLightFollower *> followers_;
   struct CachedGroup {
     bool valid{false};
     uint8_t channels[5]{0, 0, 0, 0, 0};
@@ -471,7 +485,7 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
     this->effect_end_ms_ = duration_ms == 0 ? 0 : millis() + duration_ms;
   }
   // Output options (brightness curve, transition time and style), set by the entities.
-  // The sun and moon programs are written for the Tuna lamps' channels; a Refugium runs My points.
+  // The Sky program is written for the Tuna lamps' channels; a Refugium runs My points.
   bool has_sources() const override { return model_ != GroupModel::REFUGIUM; }
   bool can_moon() const override { return model_ == GroupModel::TUNA_BLUE; }
   bool has_output_options() const override { return true; }
@@ -650,7 +664,7 @@ class KLinkEffectDurationNumber : public number::Number, public Component {
   ProgramHost *group_{nullptr};
 };
 
-// Where the schedule comes from: My points, the sun at the device's location, or the moon.
+// Where the schedule comes from: My points, or the Sky program (sun, moon, or both).
 class KLinkSourceSelect : public select::Select, public Component {
  public:
   void set_group(ProgramHost *group) { group_ = group; }
@@ -659,7 +673,13 @@ class KLinkSourceSelect : public select::Select, public Component {
   float get_setup_priority() const override { return setup_priority::DATA - 1.0f; }
 
  protected:
-  void control(size_t index) override { this->group_->set_source(static_cast<ProgramSource>(index > 2 ? 2 : index)); }
+  void control(size_t index) override {
+    /* Home Assistant only picks the program: My points, or Sky with its Sun/Moon layers as set on the page. */
+    if (index == 0)
+      this->group_->set_source(ProgramSource::POINTS);
+    else
+      this->group_->set_source(ProgramSource::SKY);
+  }
   ProgramHost *group_{nullptr};
 };
 
@@ -973,9 +993,16 @@ class KLinkLightFollower : public Component {
   void set_hub(KLinkHub *hub) { hub_ = hub; }
   void set_gid(uint8_t gid) { gid_ = gid; }
   void set_model(GroupModel model) { model_ = model; }
+  void set_key(const std::string &key) { key_ = key; }
+  const std::string &key() const { return key_; }
+  uint8_t gid() const { return gid_; }
+  const char *model_name() const;
+  const char *target_model_name() const;
+  std::string name() const;
+  std::vector<std::string> light_names() const;
   void add_light(light::LightState *light) { lights_.push_back(light); }
   void set_transition_ms(uint32_t ms) { transition_ms_ = ms; }
-  // Lamp mode: dip to off for a moment and restore, as a real lamp does when identified.
+  // Lamp mode: dip when on, flash when off, then restore, as a real lamp does when identified.
   void flash_();
 
   void setup() override;
@@ -983,17 +1010,37 @@ class KLinkLightFollower : public Component {
   float get_setup_priority() const override { return setup_priority::DATA; }
 
  protected:
+  // The listener interface carries no light pointer, so each light gets its own tiny object. The
+  // objects are owned by watchers_ and never moved after registration: remote_values_listeners_
+  // in LightState keeps the raw pointers.
+  struct Watcher : public light::LightRemoteValuesListener {
+    KLinkLightFollower *owner{nullptr};
+    light::LightState *light{nullptr};
+    virtual ~Watcher() = default;
+    void on_light_remote_values_update() override { this->owner->light_changed_(); }
+  };
+
   void apply_(const uint8_t channels[5]);
+  // Home Assistant (or a local automation) changed a bound light: put the group's last value back.
+  void light_changed_();
   KLinkHub *hub_{nullptr};
   uint8_t gid_{0};
   GroupModel model_{GroupModel::TUNA_SUN};
+  std::string key_;
   std::vector<light::LightState *> lights_;
   std::vector<uint8_t> caps_;
   std::vector<kessil::klink::CtRange> ranges_;
+  std::vector<std::unique_ptr<Watcher>> watchers_;
   std::vector<light::LightColorValues> saved_;  // what flash_() restores
   bool flash_pending_{false};
   bool have_latest_{false};  // a group write arrived during the dip
   uint8_t latest_[5];
+  // The last group value, so a local command can be answered with the program it belongs to.
+  bool have_last_{false};
+  uint8_t last_[5]{0, 0, 0, 0, 0};
+  // True while perform() runs: the listeners fire synchronously and must not treat our own write as
+  // a local command.
+  bool applying_{false};
   kessil::klink::LightModel output_model_{kessil::klink::LightModel::BRIGHTNESS};
   uint32_t transition_ms_{0};
 };

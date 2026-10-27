@@ -426,11 +426,12 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
       const SkySettings k = group->sky_settings();
       out += ",\"source\":";
       out += std::to_string(static_cast<int>(group->source()));
-      out += group->can_moon() ? ",\"sources\":[0,1,2]" : ",\"sources\":[0,1]";
+      out += group->can_moon() ? ",\"can_moon\":true" : ",\"can_moon\":false";
       out += ",\"source_note\":";
       append_quoted(out, group->source_note());
-      out += ",\"sky\":{\"peak\":" + std::to_string(k.peak) + ",\"hours\":" + std::to_string(k.hours) +
-             ",\"glow\":" + std::to_string(k.glow) + ",\"amber\":" + std::to_string(k.amber) + ",\"ramp\":" + std::to_string(k.ramp * 10) +
+      out += ",\"sky\":{\"layers\":" + std::to_string(k.layers) + ",\"peak\":" + std::to_string(k.peak) +
+             ",\"hours\":" + std::to_string(k.hours) + ",\"glow\":" + std::to_string(k.glow) +
+             ",\"amber\":" + std::to_string(k.amber) + ",\"ramp\":" + std::to_string(k.ramp * 10) +
              ",\"shift\":" + std::to_string(k.shift) + ",\"moon\":" + std::to_string(k.moon) +
              ",\"phase\":" + std::to_string(k.phase) + "}";
       // Today's generated day, read-only; absent while My points runs the lamps.
@@ -521,6 +522,35 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
     else
       out += "null";
     out += '}';
+  }
+  out += "],\"followers\":[";
+  bool first_local = true;
+  for (auto *follower : this->hub_->followers()) {
+    if (follower == nullptr)
+      continue;
+    if (!first_local)
+      out += ',';
+    first_local = false;
+    out += "{\"id\":";
+    append_quoted(out, follower->key());
+    out += ",\"kid\":";
+    out += std::to_string(this->hub_->follower_kid(follower->key()));
+    out += ",\"gid\":";
+    out += std::to_string(follower->gid());
+    out += ",\"name\":";
+    append_quoted(out, follower->name());
+    out += ",\"model\":";
+    append_quoted(out, follower->model_name());
+    out += ",\"target\":";
+    append_quoted(out, follower->target_model_name());
+    out += ",\"lights\":[";
+    const std::vector<std::string> light_names = follower->light_names();
+    for (size_t i = 0; i < light_names.size(); i++) {
+      if (i)
+        out += ',';
+      append_quoted(out, light_names[i]);
+    }
+    out += "]}";
   }
   {
     // The device's location, rounded to 0.01 degrees (about a kilometer): enough for the sky, and the page is
@@ -693,13 +723,12 @@ void KLinkWeb::handle_output(AsyncWebServerRequest *request) {
 
 static bool source_from_name(const std::string &text, ProgramSource &out) {
   if (text == "points" || text == "0") out = ProgramSource::POINTS;
-  else if (text == "sun" || text == "1") out = ProgramSource::SUN;
-  else if (text == "moon" || text == "2") out = ProgramSource::MOON;
+  else if (text == "sky" || text == "1") out = ProgramSource::SKY;
   else return false;
   return true;
 }
 
-// The group whose request names a program that can run on the sun or moon; sends the error otherwise.
+// The group whose request names a program with the Sky source; sends the error otherwise.
 ProgramHost *KLinkWeb::find_sky_group(AsyncWebServerRequest *request) {
   uint32_t gid;
   if (!this->read_program_gid(request, "gid", gid))
@@ -710,13 +739,13 @@ ProgramHost *KLinkWeb::find_sky_group(AsyncWebServerRequest *request) {
     return nullptr;
   }
   if (!group->has_sources()) {
-    send_error(request, 400, "this program has no sun or moon source");
+    send_error(request, 400, "this program has no Sky source");
     return nullptr;
   }
   return group;
 }
 
-// POST /klink/source?gid=&source=points|sun|moon
+// POST /klink/source?gid=&source=points|sky
 void KLinkWeb::handle_source(AsyncWebServerRequest *request) {
   ProgramHost *group = this->find_sky_group(request);
   if (group == nullptr)
@@ -726,21 +755,30 @@ void KLinkWeb::handle_source(AsyncWebServerRequest *request) {
     send_error(request, 400, "invalid parameter: source");
     return;
   }
-  if (source == ProgramSource::MOON && !group->can_moon()) {
-    send_error(request, 400, "the moon needs a light that makes blue");
-    return;
-  }
   this->defer([group, source]() { group->set_source(source); });
   this->send_ok(request);
 }
 
-// POST /klink/sky?gid=&peak=&hours=&glow=&amber=&ramp=&shift=&moon=&phase=: any subset of the sun and moon settings.
+// POST /klink/sky?gid=&layers=&peak=&hours=&glow=&amber=&ramp=&shift=&moon=&phase=: any subset of the
+// Sky settings.
 void KLinkWeb::handle_sky(AsyncWebServerRequest *request) {
   ProgramHost *group = this->find_sky_group(request);
   if (group == nullptr)
     return;
   SkySettings s = group->sky_settings();
   uint32_t value;
+  if (request->hasArg("layers")) {
+    if (!this->read_uint_arg(request, "layers", 3, value)) return;
+    if (value == 0) {
+      send_error(request, 400, "invalid parameter: layers");
+      return;
+    }
+    if (value == 2 && !group->can_moon()) {
+      send_error(request, 400, "the moon needs a light that makes blue");
+      return;
+    }
+    s.layers = static_cast<uint8_t>(value);
+  }
   if (request->hasArg("peak")) {
     if (!this->read_uint_arg(request, "peak", 100, value)) return;
     s.peak = static_cast<uint8_t>(value);
@@ -800,7 +838,7 @@ void KLinkWeb::handle_source_copy(AsyncWebServerRequest *request) {
   this->send_ok(request);
 }
 
-// GET /klink/generated?gid=&source=sun|moon&date=YYYY-MM-DD: that day's points and event summary, for the
+// GET /klink/generated?gid=&source=sky&date=YYYY-MM-DD: that day's points and event summary, for the
 // page's preview. Read-only.
 void KLinkWeb::handle_generated(AsyncWebServerRequest *request) {
   ProgramHost *group = this->find_sky_group(request);
@@ -808,7 +846,7 @@ void KLinkWeb::handle_generated(AsyncWebServerRequest *request) {
     return;
   ProgramSource source;
   if (!request->hasArg("source") || !source_from_name(arg_string(request, "source"), source) ||
-      source == ProgramSource::POINTS || (source == ProgramSource::MOON && !group->can_moon())) {
+      source == ProgramSource::POINTS) {
     send_error(request, 400, "invalid parameter: source");
     return;
   }
@@ -819,9 +857,15 @@ void KLinkWeb::handle_generated(AsyncWebServerRequest *request) {
     send_error(request, 400, "invalid parameter: date");
     return;
   }
-  char key[48];
-  std::snprintf(key, sizeof(key), "%u/%d/%04d-%02d-%02d", static_cast<unsigned>(group->gid()), static_cast<int>(source), y, m,
-                d);
+  // The settings are part of the key: a day computed with other settings is a different answer, so an
+  // edited peak, glow, ramp or shift can never be served from the one-entry cache below.
+  const SkySettings sky = group->sky_settings();
+  char key[128];
+  std::snprintf(key, sizeof(key), "%u/%d/%04d-%02d-%02d/%u/%u/%u/%u/%u/%u/%d/%u/%u",
+                static_cast<unsigned>(group->gid()), static_cast<int>(source), y, m, d,
+                static_cast<unsigned>(sky.layers), static_cast<unsigned>(sky.peak), static_cast<unsigned>(sky.hours),
+                static_cast<unsigned>(sky.glow), static_cast<unsigned>(sky.amber), static_cast<unsigned>(sky.ramp),
+                static_cast<int>(sky.shift), static_cast<unsigned>(sky.moon), static_cast<unsigned>(sky.phase));
   if (this->gen_key_ == key) {
     if (this->gen_state_ == 2) {
       send_json(request, 200, this->gen_json_);
@@ -911,8 +955,22 @@ void KLinkWeb::handle_effect_stop(AsyncWebServerRequest *request) {
 void KLinkWeb::handle_identify(AsyncWebServerRequest *request) {
   const bool has_kid = request->hasArg("kid");
   const bool has_gid = request->hasArg("gid");
-  if (has_kid == has_gid) {
-    send_error(request, 400, "provide exactly one of kid or gid");
+  const bool has_follower_id = request->hasArg("follower");
+  if (static_cast<int>(has_kid) + static_cast<int>(has_gid) + static_cast<int>(has_follower_id) != 1) {
+    send_error(request, 400, "provide exactly one of kid, gid or follower");
+    return;
+  }
+  if (has_follower_id) {
+    // A `followers:` entry dips its own lights. This never touches the bus, so it also works on a
+    // follower, where the page calls it "Find these lights".
+    const std::string key = arg_string(request, "follower");
+    KLinkHub *hub = this->hub_;
+    if (!hub->has_follower(key)) {
+      send_error(request, 404, "unknown follower");
+      return;
+    }
+    this->defer([hub, key]() { hub->flash_local(key); });
+    this->send_ok(request);
     return;
   }
   uint32_t value;
@@ -938,11 +996,28 @@ void KLinkWeb::handle_identify(AsyncWebServerRequest *request) {
     if (!this->read_lamp_gid(request, "gid", value))
       return;
   }
-  if (!this->hub_->writes_enabled()) {
-    send_error(request, 409, this->hub_->is_follower() ? "This device is a follower" : "Send to lights is off");
+  KLinkHub *hub = this->hub_;
+  if (this->hub_->is_follower()) {
+    // Nothing goes on the bus: dip the board's own lights that follow this lamp or group.
+    const uint8_t gid = static_cast<uint8_t>(value);
+    const bool any = has_kid ? hub->has_local_kid(value) : hub->has_local_gid(gid);
+    if (!any) {
+      send_error(request, 404, has_kid ? "no such local lamp" : "no follower lights in that group");
+      return;
+    }
+    this->defer([hub, has_kid, value, gid]() {
+      if (has_kid)
+        hub->flash_local_kid(value);
+      else
+        hub->flash_local_gid(gid);
+    });
+    this->send_ok(request);
     return;
   }
-  KLinkHub *hub = this->hub_;
+  if (!this->hub_->writes_enabled()) {
+    send_error(request, 409, "Send to lights is off");
+    return;
+  }
   if (has_kid) {
     this->defer([hub, value]() { hub->identify(value); });
   } else {
@@ -1195,6 +1270,16 @@ void KLinkWeb::handle_retry(AsyncWebServerRequest *request) {
 
 void KLinkWeb::handle_scan(AsyncWebServerRequest *request) {
   KLinkHub *hub = this->hub_;
+  if (hub->is_follower()) {
+    send_error(request, 400, "this device is a follower; scan on the chain leader");
+    return;
+  }
+  if (!hub->writes_enabled()) {
+    // A scan needs the leader to control the bus. Say why instead of accepting a request the main
+    // loop will refuse, which used to look like the button did nothing.
+    send_error(request, 409, hub->state_text());
+    return;
+  }
   this->defer([hub]() { hub->start_scan(); });
   this->send_ok(request);
 }

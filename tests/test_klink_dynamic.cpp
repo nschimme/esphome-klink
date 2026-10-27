@@ -189,7 +189,7 @@ int main() {
     check("Tromso 06-21 point at 12:00", !pts.empty() && pts[0].minute == 720);
     check("Tromso 06-21 INT is peak",
           !pts.empty() && pts[0].channels[0] == static_cast<uint8_t>(def.peak_int));
-    check("Tromso 06-21 CLR is cool", !pts.empty() && pts[0].channels[1] == 120);
+    check("Tromso 06-21 CLR is the Tuna Sun cool end", !pts.empty() && pts[0].channels[1] == 89);
   }
 
   // Tromso midwinter: twilight only, so the top of the day is the civil level.
@@ -232,9 +232,11 @@ int main() {
     std::vector<SchedulePoint> sun = sun_points(chi, def, DYN_SUN);
     const SchedulePoint *rise_s = find_point(sun, chi.sunrise);
     const SchedulePoint *noon_s = find_point(sun, chi.noon);
-    check("shape sunrise UI5 == glow", rise_s != nullptr && rise_s->channels[4] == 100);
-    check("shape sunrise UI4 == half glow", rise_s != nullptr && rise_s->channels[3] == 50);
-    check("shape noon UI5 == 0", noon_s != nullptr && noon_s->channels[4] == 0);
+    check("shape sunrise UI5 == edge amber", rise_s != nullptr && rise_s->channels[4] == 60);
+    check("shape sunrise UI4 == edge red", rise_s != nullptr && rise_s->channels[3] == 20);
+    check("shape noon UI5 == midday amber", noon_s != nullptr && noon_s->channels[4] == 15);
+    check("shape noon UI4 == midday red", noon_s != nullptr && noon_s->channels[3] == 8);
+    check("shape sun noon CLR == 89", noon_s != nullptr && noon_s->channels[1] == 89);
     check("shape generic UI3-UI5 == 0",
           noon != nullptr && noon->channels[2] == 0 && noon->channels[3] == 0 &&
               noon->channels[4] == 0);
@@ -242,10 +244,11 @@ int main() {
     std::vector<SchedulePoint> blue = sun_points(chi, def, DYN_BLUE);
     const SchedulePoint *rise_b = find_point(blue, chi.sunrise);
     const SchedulePoint *noon_b = find_point(blue, chi.noon);
-    check("shape blue sunrise UI3 == glow", rise_b != nullptr && rise_b->channels[2] == 100);
-    check("shape blue noon UI3 == 0", noon_b != nullptr && noon_b->channels[2] == 0);
-    check("shape blue UI4/UI5 == 0",
-          noon_b != nullptr && noon_b->channels[3] == 0 && noon_b->channels[4] == 0);
+    check("shape blue sunrise UI3 == intensity + edge violet", rise_b != nullptr && rise_b->channels[2] == 31);
+    check("shape blue noon UI3 == peak violet", noon_b != nullptr && noon_b->channels[2] == 60);
+    check("shape blue UI4/UI5 trace the peak",
+          noon_b != nullptr && noon_b->channels[3] == 5 && noon_b->channels[4] == 5);
+    check("shape blue noon CLR == 178", noon_b != nullptr && noon_b->channels[1] == 178);
   }
 
   // night_amber: a Tuna Sun amber floor that fades out by the civil level. Glow off, so only the
@@ -267,8 +270,8 @@ int main() {
     const SchedulePoint *rise = find_point(pts, chi.sunrise);
     check("night_amber 5 astro UI5 == 5", astro != nullptr && astro->channels[4] == 5);
     check("night_amber 5 nautical UI5 == 4", nautical != nullptr && nautical->channels[4] == 4);
-    check("night_amber 5 civil UI5 == 0", civil != nullptr && civil->channels[4] == 0);
-    check("night_amber 5 sunrise UI5 == 0", rise != nullptr && rise->channels[4] == 0);
+    check("night_amber 5 civil UI5 == 2", civil != nullptr && civil->channels[4] == 2);
+    check("night_amber 5 sunrise UI5 == 5", rise != nullptr && rise->channels[4] == 5);
     const SchedulePoint *astro_pm = find_point(pts, chi.astro_dusk);
     check("night_amber 5 astro dusk UI5 == 5", astro_pm != nullptr && astro_pm->channels[4] == 5);
 
@@ -277,7 +280,26 @@ int main() {
     glow.night_amber = 5;
     std::vector<SchedulePoint> g = sun_points(chi, glow, DYN_SUN);
     const SchedulePoint *rise_g = find_point(g, chi.sunrise);
-    check("night_amber 5 keeps glow amber", rise_g != nullptr && rise_g->channels[4] == 100);
+    check("night_amber 5 keeps edge glow amber", rise_g != nullptr && rise_g->channels[4] == 60);
+
+    // On a Tuna Blue the same floor lifts violet instead.
+    SunParams blue;
+    blue.glow = 0;
+    blue.night_amber = 5;
+    std::vector<SchedulePoint> blue_pts = sun_points(chi, blue, DYN_BLUE);
+    const SchedulePoint *blue_astro = find_point(blue_pts, chi.astro_dawn);
+    const SchedulePoint *blue_nautical = find_point(blue_pts, chi.nautical_dawn);
+    const SchedulePoint *blue_civil = find_point(blue_pts, chi.civil_dawn);
+    const SchedulePoint *blue_rise = find_point(blue_pts, chi.sunrise);
+    check("blue night_amber 5 astro UI3 == 5", blue_astro != nullptr && blue_astro->channels[2] == 5);
+    check("blue night_amber 5 nautical UI3 == 4", blue_nautical != nullptr && blue_nautical->channels[2] == 4);
+    check("blue night_amber 5 civil UI3 == 9", blue_civil != nullptr && blue_civil->channels[2] == 9);
+    check("blue night_amber 5 sunrise UI3 == 21", blue_rise != nullptr && blue_rise->channels[2] == 21);
+    SunParams blue_glow;
+    blue_glow.night_amber = 5;
+    std::vector<SchedulePoint> blue_g = sun_points(chi, blue_glow, DYN_BLUE);
+    const SchedulePoint *blue_rise_g = find_point(blue_g, chi.sunrise);
+    check("blue night_amber 5 keeps edge glow violet", blue_rise_g != nullptr && blue_rise_g->channels[2] == 31);
   }
 
   // dip: midday siesta at 20 percent.
@@ -369,6 +391,31 @@ int main() {
     const SchedulePoint *peak_b = find_point(mb, 518);
     check("moon amber ignored by blue", peak_b != nullptr && peak_b->channels[4] == 0 &&
                                             peak_b->channels[2] == 10);
+  }
+
+  // Sun + Moon: one curve with the sun by day and the moon lifted into the dark hours.
+  {
+    MoonNight night;
+    night.rise = 1150;   // just after sunset on the reference day
+    night.set = 153;     // before sunrise the next morning
+    night.illumination = 0.5;
+    std::vector<SchedulePoint> merged = sun_moon_points(chi, night, def, mp, DYN_BLUE);
+    const SchedulePoint *noon = find_point(merged, chi.noon);
+    const SchedulePoint *moon_peak = find_point(merged, 1371);
+    check("sun+moon keeps the sun's noon", noon != nullptr && noon->channels[0] == 130);
+    check("sun+moon has the moon peak", moon_peak != nullptr && moon_peak->channels[0] == 6);
+    check("sun+moon moon peak is violet", moon_peak != nullptr && moon_peak->channels[2] == 30);
+    check("sun+moon fits the slots", merged.size() <= 16);
+    bool sorted = true;
+    for (size_t i = 1; i < merged.size(); i++)
+      if (merged[i].minute <= merged[i - 1].minute)
+        sorted = false;
+    check("sun+moon points sorted and distinct", sorted);
+    uint8_t night_out[NUM_CHANNELS] = {0, 0, 0, 0, 0};
+    uint8_t sun_out[NUM_CHANNELS] = {0, 0, 0, 0, 0};
+    std::vector<SchedulePoint> sun_only = sun_points(chi, def, DYN_BLUE);
+    check("moon lights part of the night", schedule_compute(merged, 1380 * 60, night_out) && night_out[0] > 0);
+    check("sun alone is dark there", schedule_compute(sun_only, 1380 * 60, sun_out) && sun_out[0] == 0);
   }
 
   // Moon crossing midnight: set 300 comes before rise 1100, so the peak lands at 1420.

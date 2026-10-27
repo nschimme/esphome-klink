@@ -14,7 +14,7 @@ This page takes you from a board in a box to lamps running a daily program.
 |---|---|
 | **Group** | One or more lamps of the same model that always get the same values. A board can control several groups. |
 | **Point** | A time of day with the values the lamp should have then. The lamp moves in straight lines between points. |
-| **Source** | Where a group's points come from: your own (**My points**), the **Sun** or the **Moon**. |
+| **Source** | Where a group's points come from: your own (**My points**) or the **Sky** program, whose Sun and Moon layers can be on together or separately. |
 | **INT** | Intensity: how bright the lamp is. |
 | **CLR** | Color: on a Tuna Sun, 0 is the warm end and 255 the cool end. |
 | **Send to lights** | The switch that lets the controller write to the lamps. Off is a dry run that only logs what it would send, which makes the first connection safe. |
@@ -244,7 +244,7 @@ the board starts again it resumes the program, fading the lamps in if soft start
 | Symptom | What to check |
 |---|---|
 | Nothing reaches the lamps | **Send to lights** is off, or **Bus state** reports a conflict. Turn it on, or press **Retry** after unplugging the other controller. |
-| **Known lamps** stays 0 | The scan starts once **Send to lights** is on and the bus has been quiet. Check the cable and that the lamp is powered, then use Settings -> rescan. |
+| **Known lamps** stays 0 | The scan starts once **Send to lights** is on and the bus has been quiet. Check the cable and that the lamp is powered, then use Settings -> Scan bus. |
 | The program does not follow the time | The clock is not set yet (the status line says "waiting for clock"), or `timezone` is wrong. |
-| Sun and Moon say "Set a location" | No location is known; see [daily programs](daily-programs.md#location). |
+| Sky says "Set a location" | No location is known; see [daily programs](daily-programs.md#location). |
 | Home Assistant shows no entities | The device and Home Assistant must be on the same network, with the ESPHome integration added. |

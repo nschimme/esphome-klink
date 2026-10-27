@@ -2,7 +2,7 @@
 
 A **light program** runs the same daily program on ordinary ESPHome lights, with no K-Link bus at all. Everything a
 lamp group has works the same: the point editor, **Mode** (Program, Manual, Off), the **Status** text, live preview,
-the curve editor on the web page, sun and moon sources, acclimation and weather. It is not gated by **Send to
+the curve editor on the web page, the Sky program, acclimation and weather. It is not gated by **Send to
 lights**, which only affects bus frames.
 
 A good use is a refugium or sump strip, a quarantine or nano light, a moonlight, or a planted-tank
@@ -26,7 +26,7 @@ that matches its lights, and use one model per program.
 On `ct`, CT 0 is the warm end and 255 the cold end. Colors are percentages. A point text is
 `HH:MM int=… r=… g=… b=…` with any subset of the model's channels (the rest 0), or `off`.
 
-The **Sun** source works on every model. The **Moon** source needs blue, so it is offered on `rgb` and `rgbw`.
+The **Sun** layer works on every model. The **Moon** layer needs blue, so it is offered on `rgb` and `rgbw`.
 
 ## Manual detection
 
