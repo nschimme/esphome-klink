@@ -1,6 +1,9 @@
 # A DIY refugium strip that follows a lamp-free K-Link group on the chain leader.
 # The leader includes common/refugium-channel.yaml (GID 3, reverse photoperiod); this board is a
-# follower and never transmits. See docs/diy-lights.md.
+# follower. Its `followers:` entry is a lamp by default, so the leader also sees the strip as a Tuna
+# Sun lamp it can scan, assign and identify. Add `lamp: false` to the entry to make it a plain
+# follower: it still follows GID 3, but it never answers a scan and never transmits.
+# See docs/diy-lights.md.
 substitutions:
   name: diy-refugium-strip
   friendly_name: Refugium strip
@@ -33,3 +36,5 @@ klink:
       model: tuna_sun     # warm white plus red/amber for macroalgae
       lights: [refugium_strip]
       transition: 1s
+      # A lamp by default (see the header). `lamp: false` here makes it a plain, silent follower;
+      # the gid may then be any group id, not only one that fits a lamp type.

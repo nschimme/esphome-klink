@@ -143,6 +143,8 @@ jobs:
           - examples/three-groups.yaml
           - examples/light-program.yaml
           - examples/follower.yaml
+          - examples/lamp-mode.yaml
+          - examples/leader-lamp.yaml
           - examples/diy-planted-strip.yaml
           - examples/diy-refugium-strip.yaml
           - examples/refugium-leader.yaml

@@ -38,12 +38,14 @@
 #include "klink_program.h"
 #include "klink_program_base.h"
 #include "klink_schedule.h"
+#include "klink_lamp_responder.h"
 
 namespace esphome {
 namespace klink {
 
 class KLinkHub;
 class KLinkGroup;
+class KLinkLightFollower;
 class KLinkSlotText;
 
 // Adapts the UART to the host-testable bus.
@@ -92,10 +94,20 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
   bool auto_writes() const { return auto_writes_; }
   // One line for the dashboard: what the hub is doing with the bus right now.
   std::string state_text() const;
-  // Leader or follower. A follower never transmits; it only listens to group writes and follows them.
+  // Leader or follower. A follower never sends a beacon or a group write; it only listens to group
+  // writes and follows them, and answers requests addressed to its lamps.
   void set_role(kessil::klink::ChainRole role) { guard_.set_role(role); }
   kessil::klink::ChainRole role() const { return guard_.role(); }
   bool is_follower() const { return guard_.is_follower(); }
+  // Every `followers:` entry is a lamp unless it sets `lamp: false`. `kid` 0 derives a stable one
+  // per entry from the chip MAC and `key` (the entry id) at setup; two devices are very unlikely to
+  // collide, and `kid:` pins one if a scan reports one. A follower answers the leader's
+  // discovery and query frames for its lamps; a leader keeps them in its own inventory instead, with
+  // no bus traffic (its UART hears its own requests echoed, so it must never answer itself).
+  void add_lamp(KLinkLightFollower *light, uint32_t kid, uint8_t gid, uint8_t type, const std::string &model,
+                const std::string &key);
+  // Delay before a follower sends a lamp reply; it never overlaps another reply on the one UART.
+  void set_lamp_reply_delay(uint32_t ms) { lamp_reply_delay_ms_ = ms; }
   bool controlling() const { return guard_.controlling(); }
   void set_beacon_interval_ms(uint32_t ms) { guard_.set_beacon_ms(ms); }
   void set_claim_confirm_ms(uint32_t ms) { guard_.set_claim_confirm_ms(ms); }
@@ -236,11 +248,27 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
     uint16_t length;
     uint8_t data[kessil::klink::NAME_BLOB_MAX];
   };
+  // One `followers:` entry that is a lamp, on either role.
+  struct HubLamp {
+    uint32_t kid;
+    uint8_t gid;
+    uint8_t type;
+    std::string model;
+    KLinkLightFollower *light;
+    std::string key;  // the entry id, for the preference and the logs
+    ESPPreferenceObject pref;
+  };
 
   void direct_setup_();
   void direct_drive_(bool on);
   void observe_(const std::vector<uint8_t> &frame);
   void note_group_frame_(uint8_t gid, const uint8_t channels[5]);
+  void handle_lamp_request_(const std::vector<uint8_t> &frame, uint32_t now);
+  bool mac_tail_(uint32_t &tail) const;
+  uint32_t lamp_kid_(const std::string &key) const;
+  bool lamp_kid_taken_(uint32_t kid) const;
+  HubLamp *find_lamp_(uint32_t kid);
+  void setup_lamps_();
   void save_inventory_();
   void save_names_();
   void save_group_names_();
@@ -284,6 +312,10 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
   bool auto_writes_{false};
   uint32_t last_guard_log_ms_{0};
   kessil::klink::ChainGuard guard_;
+  kessil::klink::LampSet lamps_;
+  uint32_t lamp_reply_delay_ms_{5};
+  uint32_t lamp_reply_seq_{0};
+  std::vector<HubLamp> own_lamps_;
   struct CachedGroup {
     bool valid{false};
     uint8_t channels[5]{0, 0, 0, 0, 0};
@@ -932,8 +964,9 @@ template<typename... Ts> class ConfirmAssignmentAction : public Action<Ts...>, p
 
 // A follower binds a K-Link group to one or more ordinary ESPHome lights. It never writes to the
 // bus: it listens for the group's command-1F frames (from the leader, or from another controller
-// while a leader is yielding) and shows them with the class the lights actually support. This is
-// how a follower exposes a native light as RGB, color temperature or brightness-only without the
+// while a leader is yielding) and shows them with the class the lights actually support. When its
+// `followers:` entry is a lamp (the default), it also answers the leader's scan for that lamp. This
+// is how a follower exposes a native light as RGB, color temperature or brightness-only without the
 // user having to pick a model by hand.
 class KLinkLightFollower : public Component {
  public:
@@ -942,6 +975,8 @@ class KLinkLightFollower : public Component {
   void set_model(GroupModel model) { model_ = model; }
   void add_light(light::LightState *light) { lights_.push_back(light); }
   void set_transition_ms(uint32_t ms) { transition_ms_ = ms; }
+  // Lamp mode: dip to off for a moment and restore, as a real lamp does when identified.
+  void flash_();
 
   void setup() override;
   void dump_config() override;
@@ -955,6 +990,10 @@ class KLinkLightFollower : public Component {
   std::vector<light::LightState *> lights_;
   std::vector<uint8_t> caps_;
   std::vector<kessil::klink::CtRange> ranges_;
+  std::vector<light::LightColorValues> saved_;  // what flash_() restores
+  bool flash_pending_{false};
+  bool have_latest_{false};  // a group write arrived during the dip
+  uint8_t latest_[5];
   kessil::klink::LightModel output_model_{kessil::klink::LightModel::BRIGHTNESS};
   uint32_t transition_ms_{0};
 };

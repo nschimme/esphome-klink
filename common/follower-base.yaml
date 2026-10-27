@@ -1,6 +1,7 @@
-# Shared by a follower board: the K-Link hub in listen-only mode and nothing else. A follower never
-# transmits, so it has no Send to lights switch, Retry button, scan or program page. Use it instead of
-# common/base.yaml on every board that is not the chain leader (docs/leader-follower.md).
+# Shared by a follower board: the K-Link hub and nothing else. A follower never starts a frame; it
+# follows the leader's group writes and answers the leader's scan for its lamps. It has no Send to
+# lights switch, Retry button, scan or program page. Use it instead of common/base.yaml on every board
+# that is not the chain leader (docs/leader-follower.md).
 #
 # Substitutions you can override (defaults below):
 #   timezone     only needed when you add a read-only K-Link group light (it wants a clock)
@@ -25,7 +26,8 @@ time:
     id: local_time
     timezone: ${timezone}
 
-# 8N1 at 115200. tx_pin MUST be the D- pad (see common/base.yaml); a follower only ever listens.
+# 8N1 at 115200. tx_pin MUST be the D- pad (see common/base.yaml); a follower only transmits lamp
+# replies.
 uart:
   id: klink_uart
   tx_pin: GPIO${dm_pin}   # D-

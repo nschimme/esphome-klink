@@ -12,7 +12,7 @@ Set these in your own config.
 | `tuna_blue_gid` | `"1"` | the K-Link group the Tuna Blue package controls |
 | `refugium_gid` | `"26"` | the K-Link group the Refugium package controls |
 | `auto_writes` | `"false"` | `"true"`: claim the chain by itself at boot |
-| `role` | `"leader"` | `"leader"` drives the chain; `"follower"` listens only and follows |
+| `role` | `"leader"` | `"leader"` drives the chain; `"follower"` follows it and answers the leader's scan for its lamps |
 | `beacon_interval` | `"1s"` | how often a leader announces itself with the K-Link presence beacon |
 | `claim_confirm` | `"2s"` | how long a leader announces before its first group write |
 | `guard_quiet_time` | `"3s"` | no foreign group write for this long before a leader claims |
@@ -24,7 +24,8 @@ Set these in your own config.
 | Option | Default | Meaning |
 |---|---|---|
 | `web` | `true` | serve the esphome-klink page and its JSON API at `/klink`; `false` leaves them out |
-| `role` | `leader` | `leader` announces, claims and drives the chain. `follower` never transmits: it listens to group writes and follows them. |
+| `role` | `leader` | `leader` announces, claims and drives the chain. `follower` listens to group writes and follows them; every `followers:` entry is a lamp unless it says `lamp: false`, and a follower only answers requests addressed to it. |
+| `lamp_reply_delay` | `5ms` | follower only, 0-30 ms: how long a follower waits before each lamp reply. Rejected on a leader. |
 | `auto_writes` | `false` | claim the chain by itself at boot (leaders only) |
 | `writes_enabled` | `false` | start with sending on; the default is a dry run that only logs frames (leaders only) |
 | `beacon_interval` | `1s` | how often a leader sends the command-34 presence beacon while claiming or controlling |
@@ -37,7 +38,7 @@ Set these in your own config.
 | `direct_drive` | per board | the two pads that carry the bus (`positive_pin`, `negative_pin`) |
 | `on_lamp_found`, `on_scan_done` | unset | automations run when a scan finds a lamp or finishes |
 | `programs` | unset | [light programs](light-programs.md) |
-| `followers` | unset | native ESPHome lights that follow a K-Link group; see [leader and follower](leader-follower.md) |
+| `followers` | unset | native ESPHome lights that follow a K-Link group. Each entry is a Kessil lamp unless it says `lamp: false`; one entry is one lamp and one GID, however many lights it lists. See [leader and follower](leader-follower.md#lamp-mode). |
 
 Setup is automatic: **Send to lights** is off by default, and once it is on the first scan starts by itself when no
 lamps are known. For scripting, the actions `klink.scan`, `klink.identify`, `klink.stage_assignment` and

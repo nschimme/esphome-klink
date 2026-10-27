@@ -1,0 +1,36 @@
+# A leader whose own board LED is a lamp in its own lamp list.
+#
+# This is a normal leader: common/base.yaml sets `role: leader` and the Tuna Sun package drives
+# group 2. Every `klink: followers:` entry is a lamp by default, so the board LED is a lamp the
+# leader owns itself, with no bus traffic: the leader's UART hears its own requests echoed, so it
+# never answers itself. The LED shares the Tuna Sun group, so it follows the real lamps in that
+# group. Its record is local to this device, so a rescan cannot leave a stale bus entry behind.
+# See docs/leader-follower.md (Lamp mode).
+substitutions:
+  name: klink-leader-lamp
+  friendly_name: K-Link Leader Lamp
+  timezone: Etc/UTC
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+packages:
+  board: !include ../boards/esp32-c6.yaml
+  network: !include ../common/network-wifi.yaml
+  base: !include ../common/base.yaml
+  display: !include ../common/tuna-sun.yaml
+  rgb: !include ../common/rgb-led.yaml
+
+klink:
+  followers:
+    - id: board_lamp
+      # Initial GID. A GID the leader assigns to the lamp is stored and wins after a reboot.
+      gid: 2
+      # The group model decides the lamp type the leader sees (1 Tuna Blue, 2 Tuna Sun, 3 Refugium)
+      # and the model string reported for command 20.
+      model: tuna_sun
+      lights: [board_led]
+      # No `lamp:` line: a lamp with the defaults. `lamp: {kid: 18000021}` pins the KID (the default
+      # 0 derives a stable one from the chip MAC and entry id); `lamp: false` opts out and makes the
+      # entry a plain follower. `lamp_reply_delay` is a hub option and is rejected on a leader.

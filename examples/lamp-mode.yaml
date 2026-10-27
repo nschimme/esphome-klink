@@ -1,0 +1,43 @@
+# A follower whose board LED is a Kessil lamp to the chain leader.
+#
+# common/follower-base.yaml sets `role: follower`. Every `klink: followers:` entry is a lamp unless
+# it says `lamp: false`, so this board's LED answers the leader's scan as a Tuna Sun lamp: the
+# leader finds it, lists it, assigns it a GID from the web page, and identifies it by dipping the
+# light. Everything sent is a reply to a request addressed to this board; the follower never sends a
+# beacon, a group write or any other request, so the leader's conflict logic is unaffected.
+# The `08` reply reports this config's `esphome: project: version` (0.0.0 when unset) as a 10-byte
+# frame, not a Kessil firmware version.
+#
+# The lamp is unmuted at boot, so the leader's first scan finds it. Its native light follows its
+# current GID, which the leader can change with an assignment. Nothing here has been run on
+# hardware, and a real lamp's reply delay is unmeasured.
+substitutions:
+  name: klink-lamp-mode
+  friendly_name: K-Link Lamp Mode
+  timezone: Etc/UTC
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+packages:
+  board: !include ../boards/esp32-c6.yaml
+  network: !include ../common/network-wifi.yaml
+  base: !include ../common/follower-base.yaml
+  rgb: !include ../common/rgb-led.yaml
+
+klink:
+  # How long a follower waits before each lamp reply; 0-30 ms, default 5 ms.
+  lamp_reply_delay: 5ms
+  followers:
+    - id: led_follow
+      # Initial GID. A GID the leader assigns to the lamp is stored and wins after a reboot.
+      gid: 2
+      # The group model decides the lamp type the leader sees (1 Tuna Blue, 2 Tuna Sun, 3 Refugium)
+      # and the model string answered for command 20.
+      model: tuna_sun
+      # Several lights here would still be one lamp: one KID, one GID, one row in the leader's list.
+      lights: [board_led]
+      # This entry is a lamp by default. Either alternative below, commented out:
+      # lamp: {kid: 18000021}   # pin the KID instead of deriving it from the chip MAC and entry id
+      # lamp: false             # a plain follower: follows GID 2 and never answers a scan

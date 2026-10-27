@@ -111,6 +111,11 @@ klink:
 follower derives RGB, color temperature, or brightness from the strip itself. To follow the display
 instead, use its group id; for an independent schedule, use the channel above or a standalone program.
 
+Every `followers:` entry is a lamp by default, so this strip also answers the leader's scan and the
+leader lists it as a lamp of the entry's model; it can then be assigned a GID like any lamp. Add
+`lamp: false` to the entry if the strip should only follow the channel: it then never answers a scan
+and never transmits at all.
+
 ## Wiring
 
 ```text
@@ -144,6 +149,9 @@ ESPHome `pwm` outputs.
 
 - **Follower color is an approximation** of the source Kessil model on different LEDs; it is not a
   colorimeter match.
-- Follower limits: no scan, assign, identify, or takeover; holds last value if the leader disappears.
+- Follower limits: it does not scan, assign or take over; it holds its last value if the leader
+  disappears. A follower lamp is scanned, assigned and identified by the leader (see
+  [leader and follower](leader-follower.md#lamp-mode)); a `lamp: false` entry is not, and never
+  transmits.
 - Examples pass `esphome config` and build; they have not been run on a tank yet.
 - Roles and claiming: [leader and follower](leader-follower.md).
