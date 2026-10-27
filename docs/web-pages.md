@@ -73,4 +73,4 @@ group, 409 refused). State changes run on the device's main loop.
 | `POST /klink/groupname` | `gid`, `name` | Names a group on the page (24 bytes at most; an empty name restores the configured name). Home Assistant keeps the name from the YAML. |
 | `POST /klink/scan` | | Scans the bus for lamps. |
 | `POST /klink/writes` | `on=0\|1` | Send to lights. |
-| `POST /klink/retry` | | Clears a bus conflict. |
+| `POST /klink/retry` | | Claims the chain again after a conflict. |

@@ -11,7 +11,12 @@ Set these in your own config.
 | `tuna_sun_gid` | `"2"` | the K-Link group the Tuna Sun package controls |
 | `tuna_blue_gid` | `"1"` | the K-Link group the Tuna Blue package controls |
 | `refugium_gid` | `"26"` | the K-Link group the Refugium package controls |
-| `auto_writes` | `"false"` | `"true"`: listen first and take over the bus when it is quiet |
+| `auto_writes` | `"false"` | `"true"`: claim the chain by itself at boot |
+| `role` | `"leader"` | `"leader"` drives the chain; `"follower"` listens only and follows |
+| `beacon_interval` | `"1s"` | how often a leader announces itself with the K-Link presence beacon |
+| `claim_confirm` | `"2s"` | how long a leader announces before its first group write |
+| `guard_quiet_time` | `"3s"` | no foreign group write for this long before a leader claims |
+| `conflict_release` | `"10s"` | after a foreign write while controlling, wait this long before claiming again |
 | `klink_ref` | `main` | the branch or tag of this repository the component is fetched from |
 
 ## Options under `klink:`
@@ -19,25 +24,35 @@ Set these in your own config.
 | Option | Default | Meaning |
 |---|---|---|
 | `web` | `true` | serve the esphome-klink page and its JSON API at `/klink`; `false` leaves them out |
-| `auto_writes` | `false` | take over the bus by itself once it has been quiet (overrides the **Send to lights** switch) |
-| `writes_enabled` | `false` | start with sending on; the default is a dry run that only logs frames |
-| `guard_quiet_time` | `15s` | how long the bus must be free of other controllers before writes start, and stay stopped after one is heard |
+| `role` | `leader` | `leader` announces, claims and drives the chain. `follower` never transmits: it listens to group writes and follows them. |
+| `auto_writes` | `false` | claim the chain by itself at boot (leaders only) |
+| `writes_enabled` | `false` | start with sending on; the default is a dry run that only logs frames (leaders only) |
+| `beacon_interval` | `1s` | how often a leader sends the command-34 presence beacon while claiming or controlling |
+| `claim_confirm` | `2s` | how long a leader announces itself before its first group write |
+| `guard_quiet_time` | `3s` | how long no foreign group write must be heard before a leader claims. A foreign beacon alone does not count: an AP9X may keep announcing while it yields. |
+| `conflict_release` | `10s` | if another controller writes while this leader is controlling, writes pause and the leader tries again after this long without a foreign write |
 | `monitor` | `false` | log every frame heard on the bus, with a millisecond stamp |
 | `latitude`, `longitude` | unset | a default location for the sun and moon programs (give both) |
 | `timezone` | unset | the time zone whose representative city is the last-resort location (the packages pass `${timezone}`) |
 | `direct_drive` | per board | the two pads that carry the bus (`positive_pin`, `negative_pin`) |
 | `on_lamp_found`, `on_scan_done` | unset | automations run when a scan finds a lamp or finishes |
 | `programs` | unset | [light programs](light-programs.md) |
+| `followers` | unset | native ESPHome lights that follow a K-Link group; see [leader and follower](leader-follower.md) |
 
-Setup is automatic: **Send to lights** is off by default, and once it is on and the bus has been quiet, the first scan
-starts by itself when no lamps are known. For scripting, the actions `klink.scan`, `klink.identify`,
-`klink.stage_assignment` and `klink.confirm_assignment` are available.
+Setup is automatic: **Send to lights** is off by default, and once it is on the first scan starts by itself when no
+lamps are known. For scripting, the actions `klink.scan`, `klink.identify`, `klink.stage_assignment` and
+`klink.confirm_assignment` are available.
+
+A leader announces itself with the K-Link presence beacon, so an AP9X that is acting as the chain controller hands
+control over. The beacon commands no lamp. A Spectral Controller X or Wi-Fi dongle does not hand over; their group
+writes still pause this leader. See [leader and follower](leader-follower.md) for multiple esphome-klink devices.
 
 ## Lamp groups and templates
 
-`common/tuna-sun.yaml` and `common/tuna-blue.yaml` are the model packages: one group each, using the default group
-ids. They are thin wrappers around the reusable templates `common/group-tuna-sun.yaml` and
-`common/group-tuna-blue.yaml`, which you can include directly to add more groups.
+`common/tuna-sun.yaml`, `common/tuna-blue.yaml` and `common/refugium.yaml` are the model
+packages: one group each, using the default group ids. They are thin wrappers around the reusable templates
+`common/group-tuna-sun.yaml`, `common/group-tuna-blue.yaml` and
+`common/group-refugium.yaml`, which you can include directly to add more groups.
 
 ### Several groups on one board
 
@@ -73,8 +88,9 @@ packages:
 
 Custom groups use K-Link group ids **3 to 25**; ids 1, 2 and 26 are the defaults of the Tuna Blue, Tuna Sun and
 Refugium packages (change those with `tuna_blue_gid`, `tuna_sun_gid` and `refugium_gid`). A group cannot mix lamp
-types: a Tuna Sun group contains only Tuna Sun lamps, a Tuna Blue group only Tuna Blue lamps, and a Refugium group
-only Refugium lamps. Move a lamp to a group in the web page's Settings tab. See
+types: a Tuna Sun group contains only type-2 lamps and a Refugium group only type-3 lamps. The AP9X reports the same
+type 1 as a Tuna Blue and uses the Tuna Blue package, so a type-1 group may contain Tuna Blue lamps, AP9X lamps, or
+both. Move a lamp to a group in the web page's Settings tab. See
 [`examples/two-groups.yaml`](../examples/two-groups.yaml) and
 [`examples/three-groups.yaml`](../examples/three-groups.yaml).
 

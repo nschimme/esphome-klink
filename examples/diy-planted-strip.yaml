@@ -1,0 +1,42 @@
+# A DIY planted-tank strip with its own daily program. This is a standalone light: no K-Link lamp,
+# no chain traffic. It gets the point editor, Mode, status, Sun/Moon, acclimation and effects.
+#
+# Use an RGBW strip for a planted tank (white for viewing, red/blue for growth); a plain RGB or a
+# tunable-white strip works too, with the matching program template. See docs/diy-lights.md for
+# wiring, spectrum and safety notes.
+substitutions:
+  name: diy-planted-strip
+  friendly_name: Planted tank strip
+  timezone: Etc/UTC
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+packages:
+  board: !include ../boards/esp32-c6.yaml
+  network: !include ../common/network-wifi.yaml
+  base: !include ../common/base.yaml
+  program: !include
+    file: ../common/program-light-rgbw.yaml
+    vars: {id: planted_program, name: "Planted strip", lights: [planted_strip]}
+
+light:
+  # A 60-LED SK6812 RGBW strip on GPIO4, from its own 5 V supply. Change pin, count, chipset and
+  # colour order for your strip.
+  - platform: esp32_rmt_led_strip
+    id: planted_strip
+    name: "Planted strip"
+    pin: GPIO4
+    num_leds: 60
+    chipset: SK6812
+    rgb_order: GRB
+    restore_mode: ALWAYS_OFF
+    default_transition_length: 1s
+    effects:
+      - pulse:
+      - random:
+      - klink_storm:
+      - klink_cloud:
+      - klink_aurora:
+      - klink_rainbow:

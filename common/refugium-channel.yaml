@@ -1,0 +1,56 @@
+# A lamp-free K-Link group for a DIY refugium or sump strip. Include it on the chain leader; any
+# follower strip bound to this GID follows the schedule below. No Kessil lamp is assigned, but the
+# leader still writes the group's five channels on the bus.
+#
+# The default is a reverse photoperiod: on at 20:00, off at 08:00, so the refugium grows while the
+# display is dark. Edit the points on the leader's web page or in Home Assistant.
+#
+# Include with:
+#   packages:
+#     refugium: !include common/refugium-channel.yaml
+# Override the group id if 3 is already used:
+#   substitutions:
+#     refugium_channel_gid: "4"
+substitutions:
+  refugium_channel_gid: "3"
+
+light:
+  - platform: klink
+    output_id: refugium_channel
+    klink_id: kl
+    name: "Refugium channel"
+    gid: ${refugium_channel_gid}
+    time_id: local_time
+    model: tuna_sun
+    slots: 4
+    web_server: { sorting_group_id: controls }
+
+text:
+  - { platform: klink, group: refugium_channel, slot: 1, name: "Refugium on", initial_value: "20:00 int=140 clr=0 r=40 am=20", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: refugium_channel, slot: 2, name: "Refugium off", initial_value: "08:00 int=0 clr=0 r=0 am=0", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: refugium_channel, slot: 3, name: "Refugium point 3", initial_value: "off", disabled_by_default: true, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: refugium_channel, slot: 4, name: "Refugium point 4", initial_value: "off", disabled_by_default: true, web_server: { sorting_group_id: program } }
+
+select:
+  - { platform: klink, group: refugium_channel, type: mode, name: "Refugium mode", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: refugium_channel, type: source, name: "Refugium source", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: refugium_channel, name: "Refugium point", web_server: { sorting_group_id: program } }
+
+text_sensor:
+  - { platform: klink, group: refugium_channel, type: status, name: "Refugium status", web_server: { sorting_group_id: controls } }
+
+datetime:
+  - { platform: klink, group: refugium_channel, type: time, name: "Refugium point time", entity_category: config, web_server: { sorting_group_id: program } }
+
+number:
+  - { platform: klink, group: refugium_channel, point_channel: 1, name: "Refugium point INT (0-255)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: refugium_channel, point_channel: 2, name: "Refugium point CLR (0-255)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: refugium_channel, point_channel: 4, name: "Refugium point red (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: refugium_channel, point_channel: 5, name: "Refugium point amber (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+
+switch:
+  - platform: klink
+    type: point_enabled
+    group: refugium_channel
+    name: "Refugium point enabled"
+    web_server: { sorting_group_id: program }

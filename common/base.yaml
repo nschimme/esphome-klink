@@ -3,14 +3,25 @@
 #
 # Substitutions you can override (defaults below):
 #   timezone     the schedule runs on local time, so set your own, e.g. Europe/Berlin
-#   auto_writes  "true" = listen first and take over the bus by itself once it has been quiet;
+#   auto_writes  "true" = announce and claim the chain by itself at boot;
 #                "false" = never transmit until you turn the "Send to lights" switch on
+#   role         "leader" (default) drives the chain. For a follower board use common/follower-base.yaml
+#                instead of this file: it keeps only the listen-only hub
 #   klink_ref    the git branch, tag or commit of this repository to take the component from
 #                (default main); set it to test a branch, e.g. klink_ref: ux-redesign
 substitutions:
   timezone: Etc/UTC
   auto_writes: "false"
   klink_ref: main
+  # leader: announce, claim and drive the chain. follower: listen only and follow the leader.
+  role: leader
+  # Chain timing. A leader announces itself, waits for claim_confirm, then writes if no other
+  # controller has written for guard_quiet_time. A foreign write while controlling pauses this
+  # leader; it tries again after conflict_release.
+  beacon_interval: "1s"
+  claim_confirm: "2s"
+  guard_quiet_time: "3s"
+  conflict_release: "10s"
 
 external_components:
   - source:
@@ -56,6 +67,11 @@ klink:
   uart_id: klink_uart
   timezone: ${timezone}
   auto_writes: ${auto_writes}
+  role: ${role}
+  beacon_interval: ${beacon_interval}
+  claim_confirm: ${claim_confirm}
+  guard_quiet_time: ${guard_quiet_time}
+  conflict_release: ${conflict_release}
   direct_drive:
     positive_pin: ${dp_pin}
     negative_pin: ${dm_pin}

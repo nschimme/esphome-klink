@@ -1,0 +1,45 @@
+# A listen-only esphome-klink device on the same K-Link chain as a leader.
+#
+# common/follower-base.yaml sets `role: follower` on the hub (use it instead of common/base.yaml). A
+# follower never transmits: no controller beacon, no group writes, no scan, no assignment. It listens to the
+# leader's group writes and follows them.
+#
+# Two follower outputs are shown:
+#   * a K-Link group light below is read-only and shows a group's state (here GID 2, Tuna Sun);
+#   * `klink: followers:` drives an ordinary ESPHome light (the board LED) from a group. It derives
+#     the light's class from the light itself: RGB, color temperature or brightness only.
+#
+# The leader must be configured for the same GIDs. To drive native lights on this follower, give the
+# leader a group with the follower's GID (a group with no lamps works as a bus channel).
+substitutions:
+  name: klink-follower
+  friendly_name: K-Link Follower
+  timezone: Etc/UTC
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+packages:
+  board: !include ../boards/esp32-c6.yaml
+  network: !include ../common/network-wifi.yaml
+  base: !include ../common/follower-base.yaml
+  rgb: !include ../common/rgb-led.yaml
+
+klink:
+  followers:
+    - id: led_follow
+      gid: 2
+      model: tuna_sun
+      lights: [board_led]
+
+light:
+  # A read-only view of the leader's Tuna Sun group. No slots or point entities are needed on a
+  # follower; the light follows GID 2 and answers a local command with the last value it saw.
+  - platform: klink
+    klink_id: kl
+    name: "Tuna Sun (follow)"
+    gid: 2
+    time_id: local_time
+    model: tuna_sun
+    slots: 1

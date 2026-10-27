@@ -540,8 +540,12 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
   }
   out += ",\"bus\":{\"state\":";
   append_quoted(out, this->hub_->state_text());
+  out += ",\"role\":";
+  append_quoted(out, this->hub_->is_follower() ? "follower" : "leader");
   out += ",\"writes\":";
   out += this->hub_->writes_enabled() ? "true" : "false";
+  out += ",\"want_writes\":";
+  out += this->hub_->want_writes() ? "true" : "false";
   out += ",\"known_lamps\":";
   out += std::to_string(this->hub_->lamps().size());
   out += "}}";
@@ -935,7 +939,7 @@ void KLinkWeb::handle_identify(AsyncWebServerRequest *request) {
       return;
   }
   if (!this->hub_->writes_enabled()) {
-    send_error(request, 409, "Send to lights is off");
+    send_error(request, 409, this->hub_->is_follower() ? "This device is a follower" : "Send to lights is off");
     return;
   }
   KLinkHub *hub = this->hub_;

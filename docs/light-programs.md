@@ -5,8 +5,10 @@ lamp group has works the same: the point editor, **Mode** (Program, Manual, Off)
 the curve editor on the web page, sun and moon sources, acclimation and weather. It is not gated by **Send to
 lights**, which only affects bus frames.
 
-A good use is a night light that follows the moon, or a desk light that follows the sun. It is tested on the
-on-board RGB LED of an ESP32-C6; other light types compile and validate but are untested.
+A good use is a refugium or sump strip, a quarantine or nano light, a moonlight, or a planted-tank
+strip. It is tested on the on-board RGB LED of an ESP32-C6; other light types compile and validate
+but are untested. For reef and planted builds, including the chain-follower option, see
+[DIY lights](diy-lights.md).
 
 Several lights can form one program. They all receive the same values, exactly like lamps in one group. A light
 that cannot do one of the program's channels ignores that channel; the others still get it. Give each program a model

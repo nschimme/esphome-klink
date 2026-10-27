@@ -12,7 +12,7 @@ from esphome.const import (
     CONF_TIME_ID,
 )
 
-from . import CONF_GID, CONF_KLINK_ID, KLinkHub, ProgramHost, klink_ns
+from . import CONF_GID, CONF_KLINK_ID, GROUP_MODELS, KLinkHub, ProgramHost, klink_ns
 from .effects import EFFECTS, KLinkEffect  # noqa: F401  (the effects register when the component loads)
 
 DEPENDENCIES = ["klink"]
@@ -26,12 +26,7 @@ CONF_MODEL = "model"
 # ProgramHost is declared in __init__.py so the hub schema can define KLinkLightProgram without a
 # circular import; it stays importable from here for the platform modules.
 KLinkGroup = klink_ns.class_("KLinkGroup", ProgramHost, light.LightOutput, cg.Component)
-GroupModel = klink_ns.enum("GroupModel", is_class=True)
-MODELS = {
-    "tuna_sun": GroupModel.TUNA_SUN,  # tested: UI1 intensity, UI2 color temperature, UI4 red, UI5 amber
-    "tuna_blue": GroupModel.TUNA_BLUE,  # untested on a lamp: UI3 violet, UI4 red, UI5 green
-    "refugium": GroupModel.REFUGIUM,  # untested on a lamp: UI2 blue to red (0-240), UI4 white, UI5 green
-}
+MODELS = GROUP_MODELS
 
 
 CONFIG_SCHEMA = (

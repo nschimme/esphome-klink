@@ -48,15 +48,19 @@ function toast(msg,kind,actionLabel,actionFn){
   setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t);},(kind==='err'||actionLabel)?6000:3500);
 }
 function setText(el,text){if(el.textContent!==text)el.textContent=text;}
+// A follower never transmits: scanning, flashing lamps, moving lamps and Send to lights belong to the leader.
+function isFollower(){return !!(state&&state.bus&&state.bus.role==='follower');}
+function leaderOnly(key){return /^(find-|id-|assign-|scan$|writes$|retry$)/.test(key);}
 function updateBusy(){
   var els=document.querySelectorAll('[data-busy]'),i,v;
   for(i=0;i<els.length;i++){
-    v=!!busy[els[i].getAttribute('data-busy')];
+    v=!!busy[els[i].getAttribute('data-busy')]||(isFollower()&&leaderOnly(els[i].getAttribute('data-busy')));
     if(els[i].disabled!==v) els[i].disabled=v;
   }
 }
 function act(key,path,params,okMsg,after){
   if(busy[key]) return;
+  if(isFollower()&&leaderOnly(key)){toast('This device is a follower. Do this on the chain leader.','err');if(after)after(null);return;}
   busy[key]=true;updateBusy();
   req(path,params).then(function(){
     busy[key]=false;updateBusy();
@@ -110,7 +114,8 @@ function interp(slots,minute){
 }
 function computeOutput(g,minute){
   var m=minute===undefined?g.now_minute:minute;
-  var out=interp(g.slots,m);
+  /* With Sun or Moon as the source the lamps follow today's generated day, not My points. */
+  var out=interp(genOn(g)&&g.generated&&g.generated.length?g.generated:g.slots,m);
   if(!out) return null;
   for(var i=0;i<5;i++){
     var max=g.max&&typeof g.max[i]==='number'?g.max[i]:255;
@@ -173,14 +178,16 @@ function renderHeader(){
   for(var i=0;i<gs.length;i++){
     if(gs[i].kind==='light') anyLight=true; else lightOnly=false;
   }
-  byId('writes-banner').hidden=!state||!!state.bus.writes||(gs.length>0&&lightOnly);
+  var follower=!!(state&&state.bus.role==='follower');
+  byId('writes-banner').hidden=!state||follower||!!state.bus.writes||(gs.length>0&&lightOnly);
   if(state&&anyLight&&!lightOnly){
     setText(byId('writes-text'),'Lamps on the K-Link bus are not being sent to yet. Light programs are still controlled here.');
   }
   if(state){
-    var w=!!state.bus.writes;
+    var w=!!state.bus.want_writes;
     setText(byId('writes-toggle'),w?'Turn off':'Turn on');
-    byId('retry-btn').hidden=!/conflict/i.test(state.bus.state||'');
+    byId('retry-btn').hidden=follower||!/conflict/i.test(state.bus.state||'');
+    updateBusy();
     setText(byId('bus-text'),state.bus.state||'');
     setText(byId('bus-count'),String(state.bus.known_lamps||0));
   }
@@ -2760,7 +2767,7 @@ function renderProgram(s){
 }
 byId('writes-on').addEventListener('click',function(){setWrites(true);});
 byId('writes-toggle').addEventListener('click',function(){
-  setWrites(!(state&&state.bus.writes));
+  setWrites(!(state&&state.bus.want_writes));
 });
 byId('scan-btn').addEventListener('click',function(){
   act('scan',API+'/scan',{},'Scan started',null);

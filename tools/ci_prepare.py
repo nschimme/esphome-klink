@@ -3,7 +3,7 @@
 
 The shipped configs pull the component and the shared files from GitHub `main`; CI must test the
 commit under test instead. In ci-work/:
-  * common/base.yaml points external_components at the local components/ directory (ESPHome appends
+  * common/base.yaml and common/follower-base.yaml point external_components at the local components/ directory (ESPHome appends
     external_components lists from packages, so an overlay would load `klink` twice: rewrite instead);
   * every examples/*.yaml with a `remote_package` is rewritten to local `!include`s of the same files
     (with their vars) and moved to the root of the copy, because !include may not leave the config
@@ -28,9 +28,9 @@ def fail(message):
     raise SystemExit("ci_prepare: " + message)
 
 
-def patch_base():
+def patch_base(name="base.yaml"):
     components = (WORK / "components").resolve()
-    base = WORK / "common" / "base.yaml"
+    base = WORK / "common" / name
     override = (
         "# CI override (tools/ci_prepare.py): use the checked-out component.\n"
         "external_components:\n"
@@ -43,7 +43,7 @@ def patch_base():
         r"(?m)^external_components:[ \t]*\n(?:[ \t]+\S.*\n)*", override, base.read_text()
     )
     if count != 1:
-        fail("expected exactly one external_components block in common/base.yaml")
+        fail(f"expected exactly one external_components block in common/{name}")
     base.write_text(text)
 
 
@@ -102,6 +102,7 @@ def main():
     for path in ROOT.glob("kessil-*.yaml"):
         shutil.copy(path, WORK / path.name)
     patch_base()
+    patch_base("follower-base.yaml")
     rewrite_examples()
     write_secrets()
 

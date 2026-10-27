@@ -374,6 +374,48 @@ int main() {
     check("update refresh one ms", needs_light_update(true, a, a, 1, 1));
   }
 
+  // ---- follower appearance ----
+  {
+    // A fake two-colour model: UI2=0 is blue, UI2=255 is blue too (all stops blue), and UI4
+    // is the sole overlay (red). This is enough to prove that the overlay channel is read from
+    // the source model instead of assuming UI3-UI5 are RGB.
+    static const uint8_t stops[17][3] = {
+        {0, 0, 100}, {0, 0, 100}, {0, 0, 100}, {0, 0, 100}, {0, 0, 100}, {0, 0, 100},
+        {0, 0, 100}, {0, 0, 100}, {0, 0, 100}, {0, 0, 100}, {0, 0, 100}, {0, 0, 100},
+        {0, 0, 100}, {0, 0, 100}, {0, 0, 100}, {0, 0, 100}, {0, 0, 100}};
+    static const uint8_t overlay_channel[1] = {3};  // UI4
+    static const uint8_t overlay_rgb[1][3] = {{255, 0, 0}};
+    ColorSpec spec = {stops, 1, overlay_channel, overlay_rgb, 255};
+
+    uint8_t ch[NUM_CHANNELS] = {128, 0, 0, 0, 0};
+    AppearanceValues rgb = appearance_from_channels(spec, ch, LightModel::RGB, kTunable);
+    check("appearance is on from UI1", rgb.on);
+    check("appearance brightness from UI1", near(rgb.brightness, 128.0f / 255.0f));
+    check("appearance base colour is blue", rgb.b > 0.0f && rgb.r == 0.0f && rgb.g == 0.0f);
+
+    ch[3] = 100;  // UI4 is this model's overlay
+    rgb = appearance_from_channels(spec, ch, LightModel::RGB, kTunable);
+    check("appearance overlay makes red", rgb.r == 1.0f && rgb.b < 1.0f);
+
+    ch[3] = 0;
+    ch[2] = 100;  // UI3 is not an overlay on this model
+    rgb = appearance_from_channels(spec, ch, LightModel::RGB, kTunable);
+    check("appearance ignores a non-overlay channel", rgb.r == 0.0f && rgb.b > 0.0f);
+
+    uint8_t off[NUM_CHANNELS] = {0, 0, 0, 0, 0};
+    check("appearance off at UI1 0", !appearance_from_channels(spec, off, LightModel::RGB, kTunable).on);
+
+    uint8_t warm[NUM_CHANNELS] = {255, 0, 0, 0, 0};
+    AppearanceValues ct = appearance_from_channels(spec, warm, LightModel::CT, kTunable);
+    check("appearance CT warm end at UI2 0", near(ct.mireds, 370.0f, 0.01f));
+    warm[1] = 255;
+    ct = appearance_from_channels(spec, warm, LightModel::CT, kTunable);
+    check("appearance CT cold end at UI2 255", near(ct.mireds, 153.0f, 0.01f));
+
+    AppearanceValues bright = appearance_from_channels(spec, ch, LightModel::BRIGHTNESS, kTunable);
+    check("appearance brightness model ignores colour", bright.r == 0.0f && bright.b == 0.0f);
+  }
+
   // ---- program ids ----
   check("program id 100", !is_program_id(100));
   check("program id 101", is_program_id(101));

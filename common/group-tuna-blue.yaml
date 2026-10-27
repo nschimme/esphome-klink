@@ -16,8 +16,8 @@
 # Entity names and ids are built from `name` and `id`: renaming a group changes stored values
 # and Home Assistant entity ids, so keep them stable for an existing group.
 #
-# A group cannot mix lamp types, and custom groups use K-Link group ids 3-25 (1 and 2 are the
-# defaults of the Tuna Blue and Tuna Sun packages).
+# A group cannot mix lamp types; an AP9X is also type 1 and can join this group. Custom groups
+# use K-Link group ids 3-25 (1 and 2 are the defaults of the type-1 and Tuna Sun packages).
 # NOT TESTED on a real Tuna Blue: the channel layout (violet, red, green) is unconfirmed.
 
 light:

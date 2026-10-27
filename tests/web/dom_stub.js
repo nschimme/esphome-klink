@@ -452,7 +452,7 @@ function makeServer(opts) {
         return { kid: l.kid, type: l.type, gid: l.gid, name: l.name || '' };
       }),
       location: location ? { lat: location.lat, lon: location.lon, source: location.source } : null,
-      bus: { state: 'Controlling', writes: writes, known_lamps: lamps.length }
+      bus: { state: 'Controlling', writes: writes, want_writes: writes, known_lamps: lamps.length }
     };
   }
 

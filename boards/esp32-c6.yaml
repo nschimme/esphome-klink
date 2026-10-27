@@ -1,5 +1,7 @@
 # ESP32-C6 on its native USB-C port. The chip's USB data pads carry the bus, so there is no extra
 # hardware: a USB-C cable from the board to the lamp's K-Link port is all that is wired.
+# On a DevKitC-1 with two USB-C ports, use the native "USB" port, not the "UART/COM" bridge port:
+# only the native port is wired to D-/D+ (GPIO12/13).
 # D- is GPIO12 (UART TX) and D+ is GPIO13 (UART RX).
 substitutions:
   dm_pin: "12"

@@ -293,7 +293,11 @@ def emit_cpp(firmware=False):
             "namespace klink {",
             "",
         ]
-    for model, macro in (("tuna_sun", "SUN"), ("tuna_blue", "BLUE"), ("refugium", "REFUGIUM")):
+    for model, macro in (
+        ("tuna_sun", "SUN"),
+        ("tuna_blue", "BLUE"),
+        ("refugium", "REFUGIUM"),
+    ):
         channels = CHANNELS[model]
         lines.append("static const uint8_t COLOR_%s_STOPS[17][3] = {" % macro)
         for rgb in int_stops(model):
