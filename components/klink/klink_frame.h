@@ -189,6 +189,10 @@ inline std::string describe_frame(const std::vector<uint8_t> &f) {
         std::snprintf(buf, sizeof(buf), "firmware version reply: %u.%u", f[5], f[6]);
         return buf;
       }
+      if (f.size() == 10) {
+        std::snprintf(buf, sizeof(buf), "firmware version reply: %u.%u.%u", f[5], f[6], f[7]);
+        return buf;
+      }
       return "firmware version request";
     case CMD_MODEL:
       if (f.size() > 8) {

@@ -6,14 +6,15 @@
 #   auto_writes  "true" = announce and claim the chain by itself at boot;
 #                "false" = never transmit until you turn the "Send to lights" switch on
 #   role         "leader" (default) drives the chain. For a follower board use common/follower-base.yaml
-#                instead of this file: it keeps only the listen-only hub
+#                instead of this file: it keeps only the hub, without the leader controls
 #   klink_ref    the git branch, tag or commit of this repository to take the component from
 #                (default main); set it to test a branch, e.g. klink_ref: ux-redesign
 substitutions:
   timezone: Etc/UTC
   auto_writes: "false"
   klink_ref: main
-  # leader: announce, claim and drive the chain. follower: listen only and follow the leader.
+  # leader: announce, claim and drive the chain. follower: follow the leader's group writes and
+  # answer its scan for this board's lamps.
   role: leader
   # Chain timing. A leader announces itself, waits for claim_confirm, then writes if no other
   # controller has written for guard_quiet_time. A foreign write while controlling pauses this

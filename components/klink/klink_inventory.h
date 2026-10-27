@@ -9,7 +9,8 @@
 namespace kessil {
 namespace klink {
 
-static const size_t MAX_LAMPS = 32;  // K-Link chains are documented up to 32 lights
+static const size_t MAX_LAMPS = 32;  // bus lamps; K-Link chains are documented up to 32 lights
+static const size_t MAX_LOCAL_LAMPS = 16;  // the leader's own lamps, matching the followers: limit
 static const uint8_t MIN_GID = 1;
 static const uint8_t MAX_GID = 40;
 static const uint8_t CUSTOM_GID_MIN = 3;  // 1, 2 and 26 are the per-type defaults
@@ -26,11 +27,24 @@ struct LampRecord {
   uint8_t fw_major;
   uint8_t fw_minor;
   uint8_t fw_patch;
+  // The hub owns this record (the leader's own native light): it is never on the bus and not stored.
+  bool local;
 };
 
 // Default group for a lamp type (type 1 -> 1, type 2 -> 2, type 3 -> 26); 0 for an unknown type.
 inline uint8_t default_gid(uint8_t type) { return type == 1 ? 1 : type == 2 ? 2 : type == 3 ? 26 : 0; }
 inline bool is_default_gid(uint8_t gid) { return gid == 1 || gid == 2 || gid == 26; }
+
+// Whether `gid` is valid for a lamp of `type`, without needing an inventory: in [MIN_GID, MAX_GID],
+// a default gid only for the type whose default it is, any other gid in the custom range. The single
+// source of truth for the group rules; AssignmentError adds the group-type conflict on top.
+inline bool gid_allowed_for_type(uint8_t type, uint8_t gid) {
+  if (gid < MIN_GID || gid > MAX_GID)
+    return false;
+  if (is_default_gid(gid))
+    return gid == default_gid(type);
+  return gid >= CUSTOM_GID_MIN && gid <= CUSTOM_GID_MAX;
+}
 
 // Why an assignment is refused. NONE means the move is allowed.
 enum class AssignmentError : uint8_t {
@@ -72,20 +86,21 @@ class Inventory {
     return nullptr;
   }
 
-  // Insert or update. False when the table is full or the type is not 1-3.
-  bool upsert(uint32_t kid, uint8_t gid, uint8_t type) {
-    if (type < 1 || type > 3)
-      return false;
+  // Insert or update. False when the type is not 1-3 or that kind's capacity is full: MAX_LAMPS for
+  // bus lamps, MAX_LOCAL_LAMPS for local records. Updating keeps `local`.
+  bool upsert(uint32_t kid, uint8_t gid, uint8_t type) { return upsert_(kid, gid, type, false); }
+
+  // Insert or update a record the hub owns (the leader's own light); it is never on the bus, so it
+  // has its own capacity.
+  bool upsert_local(uint32_t kid, uint8_t gid, uint8_t type) { return upsert_(kid, gid, type, true); }
+
+  // Records that are on the bus.
+  size_t bus_lamp_count() const {
+    size_t n = 0;
     for (size_t i = 0; i < lamps_.size(); i++)
-      if (lamps_[i].kid == kid) {
-        lamps_[i].gid = gid;
-        lamps_[i].type = type;
-        return true;
-      }
-    if (lamps_.size() >= MAX_LAMPS)
-      return false;
-    lamps_.push_back(LampRecord{kid, gid, type, std::string(), false, 0, 0, 0});
-    return true;
+      if (!lamps_[i].local)
+        n++;
+    return n;
   }
 
   // Attach the lamp's own report to a known lamp. False when the KID is not in the table.
@@ -117,12 +132,11 @@ class Inventory {
     const LampRecord *lamp = find(kid);
     if (lamp == nullptr)
       return AssignmentError::UNKNOWN_KID;
-    if (gid < MIN_GID || gid > MAX_GID)
-      return AssignmentError::GID_OUT_OF_RANGE;
-    if (is_default_gid(gid) && gid != default_gid(lamp->type))
-      return AssignmentError::WRONG_DEFAULT_GROUP;
-    if (!is_default_gid(gid) && (gid < CUSTOM_GID_MIN || gid > CUSTOM_GID_MAX))
-      return AssignmentError::CUSTOM_GID_RANGE;
+    if (!gid_allowed_for_type(lamp->type, gid)) {
+      if (gid < MIN_GID || gid > MAX_GID)
+        return AssignmentError::GID_OUT_OF_RANGE;
+      return is_default_gid(gid) ? AssignmentError::WRONG_DEFAULT_GROUP : AssignmentError::CUSTOM_GID_RANGE;
+    }
     for (size_t i = 0; i < lamps_.size(); i++)
       if (lamps_[i].gid == gid && lamps_[i].kid != kid && lamps_[i].type != lamp->type)
         return AssignmentError::GROUP_TYPE_CONFLICT;
@@ -135,11 +149,14 @@ class Inventory {
   }
 
   // Blob: version, count, count x (kid BE32, gid, type), CRC-16/CCITT-FALSE over the preceding bytes.
+  // Local records are not stored, so the count is the number of records written.
   std::vector<uint8_t> serialize() const {
     std::vector<uint8_t> b;
     b.push_back(BLOB_VERSION);
-    b.push_back(static_cast<uint8_t>(lamps_.size()));
+    b.push_back(static_cast<uint8_t>(bus_lamp_count()));
     for (size_t i = 0; i < lamps_.size(); i++) {
+      if (lamps_[i].local)
+        continue;
       b.push_back(static_cast<uint8_t>(lamps_[i].kid >> 24));
       b.push_back(static_cast<uint8_t>(lamps_[i].kid >> 16));
       b.push_back(static_cast<uint8_t>(lamps_[i].kid >> 8));
@@ -166,7 +183,7 @@ class Inventory {
       const uint8_t *p = &b[2 + 6 * i];
       LampRecord r = {(static_cast<uint32_t>(p[0]) << 24) | (static_cast<uint32_t>(p[1]) << 16) |
                           (static_cast<uint32_t>(p[2]) << 8) | p[3],
-                      p[4], p[5], std::string(), false, 0, 0, 0};
+                      p[4], p[5], std::string(), false, 0, 0, 0, false};
       if (r.type < 1 || r.type > 3)
         return false;
       parsed.push_back(r);
@@ -186,6 +203,33 @@ class Inventory {
   }
 
  private:
+  // Shared by upsert and upsert_local: an existing record is updated in place and keeps its `local`
+  // flag unless a local upsert asks for it.
+  bool upsert_(uint32_t kid, uint8_t gid, uint8_t type, bool local) {
+    if (type < 1 || type > 3)
+      return false;
+    for (size_t i = 0; i < lamps_.size(); i++)
+      if (lamps_[i].kid == kid) {
+        lamps_[i].gid = gid;
+        lamps_[i].type = type;
+        if (local)
+          lamps_[i].local = true;
+        return true;
+      }
+    if (local) {
+      size_t local_count = 0;
+      for (size_t i = 0; i < lamps_.size(); i++)
+        if (lamps_[i].local)
+          local_count++;
+      if (local_count >= MAX_LOCAL_LAMPS)
+        return false;
+    } else if (bus_lamp_count() >= MAX_LAMPS) {
+      return false;
+    }
+    lamps_.push_back(LampRecord{kid, gid, type, std::string(), false, 0, 0, 0, local});
+    return true;
+  }
+
   std::vector<LampRecord> lamps_;
 };
 

@@ -8,7 +8,8 @@
 // answer a beacon.
 //
 // This guard follows that model:
-//   * a follower never transmits at all;
+//   * a follower never sends a beacon, a request or a group write; it only replies to requests
+//     addressed to it, none of which this guard sees as ownership;
 //   * a leader announces itself at the beacon interval while it is claiming or controlling;
 //   * it starts writing only after it has announced itself for claim_confirm and no foreign group
 //     write or controller request has been heard for foreign_holdoff;

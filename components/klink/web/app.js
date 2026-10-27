@@ -48,7 +48,7 @@ function toast(msg,kind,actionLabel,actionFn){
   setTimeout(function(){if(t.parentNode)t.parentNode.removeChild(t);},(kind==='err'||actionLabel)?6000:3500);
 }
 function setText(el,text){if(el.textContent!==text)el.textContent=text;}
-// A follower never transmits: scanning, flashing lamps, moving lamps and Send to lights belong to the leader.
+// A follower never starts a frame: scanning, flashing lamps, moving lamps and Send to lights belong to the leader.
 function isFollower(){return !!(state&&state.bus&&state.bus.role==='follower');}
 function leaderOnly(key){return /^(find-|id-|assign-|scan$|writes$|retry$)/.test(key);}
 function updateBusy(){

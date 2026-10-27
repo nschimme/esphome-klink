@@ -1,8 +1,10 @@
-# A listen-only esphome-klink device on the same K-Link chain as a leader.
+# An esphome-klink follower on the same K-Link chain as a leader.
 #
 # common/follower-base.yaml sets `role: follower` on the hub (use it instead of common/base.yaml). A
-# follower never transmits: no controller beacon, no group writes, no scan, no assignment. It listens to the
-# leader's group writes and follows them.
+# follower never starts a frame: no controller beacon, no group writes, no scan, no assignment. It
+# listens to the leader's group writes and follows them. Every `klink: followers:` entry is a lamp by
+# default, so the leader's scan also finds it, lists it, assigns it a GID and identifies it; add
+# `lamp: false` to an entry to make it a plain follower that never answers the scan.
 #
 # Two follower outputs are shown:
 #   * a K-Link group light below is read-only and shows a group's state (here GID 2, Tuna Sun);
@@ -32,6 +34,9 @@ klink:
       gid: 2
       model: tuna_sun
       lights: [board_led]
+      # A lamp by default: the leader scans, lists, assigns and identifies the board LED.
+      # `lamp: false` follows GID 2 without answering a scan; `lamp: {kid: 18000021}` pins the KID
+      # instead of deriving it from the chip MAC and entry id.
 
 light:
   # A read-only view of the leader's Tuna Sun group. No slots or point entities are needed on a

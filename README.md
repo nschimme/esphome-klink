@@ -50,9 +50,10 @@ Try the web page without hardware: [live demo](https://nschimme.github.io/esphom
 - 💡 **Any lamp setup.** Several groups on one board, a mode per group (Program, Manual, Off), and the same programs on
   ordinary dimmable, tunable-white, RGB and RGBW ESPHome lights, so a night light can follow the moon or a refugium
   strip can run a reverse photoperiod. See [DIY lights](docs/diy-lights.md).
-- 🔗 **One leader, many silent followers.** Put a second esphome-klink board on the same chain as a `follower`; it never
-  transmits, follows the leader's group writes, and can drive its own native ESPHome lights with the class they
-  actually support. See [leader and follower](docs/leader-follower.md).
+- 🔗 **One leader, many followers.** Put a second esphome-klink board on the same chain as a `follower`; it follows
+  the leader's group writes and answers the leader's scan for its own lamps (every `followers:` entry is a lamp by
+  default, and `lamp: false` opts out). It never starts a frame, and it can drive its own native ESPHome lights with
+  the class they actually support. See [leader and follower](docs/leader-follower.md).
 - 🤝 **AP9X handover.** An AP9X can control its own K-Link chain. This controller announces itself with the same
   presence beacon Kessil's controllers use; an AP9X acting as the chain controller hands the chain over, and this
   controller then runs the program.
@@ -114,7 +115,8 @@ is a big help.
   set one to 50 % at a time and note the color; then turn the **color** number from 0 to 240 and note where blue,
   violet, magenta and red appear.
 - **ESP32-S3, -C3 and -S2 owners:** tell us whether the board finds your lamps and holds a program.
-- **Two-board chains:** report whether the follower tracks the leader and whether the claim sequence behaves.
+- **Two-board chains:** report whether the follower tracks the leader and whether the claim sequence behaves, and
+  whether the leader's scan finds the follower's lamps and identify dips them.
 
 </details>
 

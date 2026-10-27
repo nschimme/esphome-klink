@@ -229,7 +229,8 @@ entities, automations, your home location and the weather.
 each other. This controller pauses when it hears one write, and claims again after the other is quiet.
 
 **Can I put more than one esphome-klink board on the chain?** Yes: one `role: leader` and any number of
-`role: follower` boards (`common/follower-base.yaml`). A follower never transmits; it follows the leader and can drive its own native ESPHome lights.
+`role: follower` boards (`common/follower-base.yaml`). A follower follows the leader and can drive its own native ESPHome
+lights; every `followers:` entry is a lamp by default, so it also answers the leader's scan unless it says `lamp: false`.
 See [leader and follower](leader-follower.md).
 
 **What if Wi-Fi drops?** A running board keeps its clock and keeps running the program. After a restart it needs the

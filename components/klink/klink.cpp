@@ -47,6 +47,33 @@ namespace kk = kessil::klink;
 static const uint32_t DEFAULT_MIN_KID = 18000000;
 static const uint32_t DEFAULT_MAX_KID = 36000000;  // inclusive
 static const uint32_t COMMISSIONING_TIMEOUT_MS = 5 * 60 * 1000;
+// Numeric timeout ids for lamp mode replies, above the KID range used by identify().
+static const uint32_t LAMP_REPLY_TIMEOUT_ID = 0x80000000u;
+
+// The project version from the config's `esphome: project: version` (ESPHOME_PROJECT_VERSION).
+// The `08` reply carries major, minor and patch; a non-numeric suffix is ignored and a config
+// without a version reports 0.0.0.
+static void parse_project_version(uint8_t &major, uint8_t &minor, uint8_t &patch) {
+  major = 0;
+  minor = 0;
+  patch = 0;
+#ifdef ESPHOME_PROJECT_VERSION
+  const char *s = ESPHOME_PROJECT_VERSION;
+  uint8_t *fields[3] = {&major, &minor, &patch};
+  for (int i = 0; i < 3 && *s != '\0'; i++) {
+    int value = 0;
+    while (*s >= '0' && *s <= '9') {
+      value = value * 10 + (*s - '0');
+      s++;
+    }
+    *fields[i] = static_cast<uint8_t>(std::min(value, 255));
+    if (*s != '.')
+      return;
+    s++;
+  }
+#endif
+}
+
 // ---- UartIo ---------------------------------------------------------------------------------
 
 uint32_t UartIo::now_ms() { return millis(); }
@@ -70,6 +97,8 @@ void KLinkHub::setup() {
                kk::describe_frame(frame).c_str());
     }
     const uint32_t now = millis();
+    if (this->is_follower() && !this->lamps_.empty())
+      this->handle_lamp_request_(frame, now);
     if (kk::looks_like_controller_frame(frame)) {
       // Command 34 is an announcement/handover request, not proof that another controller is
       // driving. An AP9X may keep announcing while it yields, so it never starts a conflict here.
@@ -120,6 +149,91 @@ void KLinkHub::setup() {
     if (!this->group_names_.deserialize(blob))
       ESP_LOGW(TAG, "Stored group names are invalid or from another version; starting empty");
   }
+  // After the stored inventory is read, so every boot re-adds the leader's own lamps to it and
+  // builds the follower's responders.
+  this->setup_lamps_();
+}
+
+// Every `followers:` entry that is a lamp. A leader adds its own lamps to the inventory and never
+// puts them on the bus; a follower answers the leader's scan for them.
+void KLinkHub::setup_lamps_() {
+  if (this->own_lamps_.empty())
+    return;
+  // An explicit KID is used as is, unless it names a stored bus lamp: never turn a bus record into a
+  // local one. A 0 derives a stable KID per entry from the chip MAC and the entry id; it is very
+  // unlikely to collide with another device's lamp. A collision with a lamp here or, on a leader,
+  // with a stored bus lamp is stepped past; `kid:` pins one if a scan ever reports a collision.
+  for (size_t i = 0; i < this->own_lamps_.size();) {
+    HubLamp &lamp = this->own_lamps_[i];
+    if (lamp.kid != 0) {
+      const kk::LampRecord *stored = this->inventory_.find(lamp.kid);
+      if (stored != nullptr && !stored->local) {
+        ESP_LOGE(TAG, "Lamp \"%s\": KID %u is already a bus lamp; not adding it", lamp.key.c_str(),
+                 static_cast<unsigned>(lamp.kid));
+        this->own_lamps_.erase(this->own_lamps_.begin() + i);
+        continue;
+      }
+    }
+    i++;
+  }
+  std::vector<size_t> derived;
+  for (size_t i = 0; i < this->own_lamps_.size(); i++)
+    if (this->own_lamps_[i].kid == 0)
+      derived.push_back(i);
+  // By key, so the collision steps do not depend on the order of the entries.
+  std::sort(derived.begin(), derived.end(),
+            [this](size_t a, size_t b) { return this->own_lamps_[a].key < this->own_lamps_[b].key; });
+  for (size_t i : derived) {
+    uint32_t kid = this->lamp_kid_(this->own_lamps_[i].key);
+    while (this->lamp_kid_taken_(kid))
+      kid = kid == DEFAULT_MAX_KID ? DEFAULT_MIN_KID : kid + 1;
+    this->own_lamps_[i].kid = kid;
+  }
+  uint8_t version_major, version_minor, version_patch;
+  parse_project_version(version_major, version_minor, version_patch);
+  // A follower reports the project version from every lamp; the set owns it once.
+  this->lamps_.set_version(version_major, version_minor, version_patch);
+  for (size_t i = 0; i < this->own_lamps_.size();) {
+    HubLamp &lamp = this->own_lamps_[i];
+    // A GID a leader assigned survives a reboot; the configured one is the initial value. A stored
+    // GID that no longer fits this lamp (for example after a model change) is not applied.
+    lamp.pref = global_preferences->make_preference<uint8_t>(fnv1_hash("klink_lamp_gid_" + lamp.key));
+    uint8_t stored_gid = 0;
+    if (lamp.pref.load(&stored_gid)) {
+      if (kk::gid_allowed_for_type(lamp.type, stored_gid)) {
+        lamp.gid = stored_gid;
+      } else {
+        ESP_LOGW(TAG, "Lamp \"%s\": stored GID %u is not valid for type %u; keeping GID %u", lamp.key.c_str(),
+                 stored_gid, lamp.type, lamp.gid);
+      }
+    }
+    if (lamp.light != nullptr)
+      lamp.light->set_gid(lamp.gid);
+    if (this->is_follower()) {
+      kk::LampResponder responder;
+      responder.set_kid(lamp.kid);
+      responder.set_gid(lamp.gid);
+      responder.set_type(lamp.type);
+      responder.set_model(lamp.model);
+      this->lamps_.add(responder);
+      ESP_LOGI(TAG, "Lamp \"%s\": KID %u, GID %u, type %u, model \"%s\"", lamp.key.c_str(),
+               static_cast<unsigned>(lamp.kid), lamp.gid, lamp.type, lamp.model.c_str());
+      i++;
+      continue;
+    }
+    // A leader owns these lamps: no responder, just a record in its inventory.
+    if (!this->inventory_.upsert_local(lamp.kid, lamp.gid, lamp.type)) {
+      // The table is full of bus lamps: better no local lamp than evicting one of them.
+      ESP_LOGE(TAG, "Local lamp \"%s\" KID %u: no room in the inventory; ignored", lamp.key.c_str(),
+               static_cast<unsigned>(lamp.kid));
+      this->own_lamps_.erase(this->own_lamps_.begin() + i);
+      continue;
+    }
+    this->inventory_.set_info(lamp.kid, lamp.model, true, version_major, version_minor, version_patch);
+    ESP_LOGI(TAG, "Local lamp \"%s\": KID %u, GID %u, type %u", lamp.key.c_str(), static_cast<unsigned>(lamp.kid),
+             lamp.gid, lamp.type);
+    i++;
+  }
 }
 
 void KLinkHub::loop() {
@@ -159,7 +273,7 @@ void KLinkHub::loop() {
   // No stored lamps: scan once by itself as soon as the hub controls the bus, so a fresh device
   // finds its lamps without any button press. A manual scan can always be run later. A follower never
   // scans: that needs the bus for unmute and range queries.
-  if (this->writes_enabled_ && !this->scanning_ && this->inventory_.lamps().empty() && !this->auto_scanned_) {
+  if (this->writes_enabled_ && !this->scanning_ && this->inventory_.bus_lamp_count() == 0 && !this->auto_scanned_) {
     this->auto_scanned_ = true;
     this->start_scan();
   }
@@ -171,7 +285,14 @@ void KLinkHub::loop() {
 
 void KLinkHub::dump_config() {
   ESP_LOGCONFIG(TAG, "K-Link:");
-  ESP_LOGCONFIG(TAG, "  Role: %s", this->is_follower() ? "follower (listen only)" : "leader");
+  const char *role = this->is_follower() ? (this->own_lamps_.empty() ? "follower (listen only)" : "follower")
+                                         : "leader";
+  ESP_LOGCONFIG(TAG, "  Role: %s", role);
+  for (const auto &lamp : this->own_lamps_)
+    ESP_LOGCONFIG(TAG, "  Lamp \"%s\": KID %u, GID %u, type %u", lamp.key.c_str(), static_cast<unsigned>(lamp.kid),
+                  lamp.gid, lamp.type);
+  if (this->is_follower() && !this->lamps_.empty())
+    ESP_LOGCONFIG(TAG, "  Lamp reply delay: %u ms", static_cast<unsigned>(this->lamp_reply_delay_ms_));
   ESP_LOGCONFIG(TAG, "  Writes enabled: %s", YESNO(this->writes_enabled_));
   ESP_LOGCONFIG(TAG, "  Bus monitor: %s", YESNO(this->monitor_));
   ESP_LOGCONFIG(TAG, "  Auto writes: %s", YESNO(this->auto_writes_));
@@ -185,7 +306,10 @@ void KLinkHub::dump_config() {
 
 bool KLinkHub::set_writes_enabled(bool enabled) {
   if (this->is_follower()) {
-    ESP_LOGW(TAG, "This device is a follower: it never writes to the chain");
+    if (!this->lamps_.empty())
+      ESP_LOGW(TAG, "This device is a follower with lamps: it only replies to requests addressed to it");
+    else
+      ESP_LOGW(TAG, "This device is a follower: it never writes to the chain");
     return false;
   }
   if (!enabled) {
@@ -244,8 +368,11 @@ void KLinkHub::set_commissioning(bool enabled) {
 void KLinkHub::tx_frame(const std::vector<uint8_t> &frame) {
   // Only a leader that is claiming or controlling may transmit. The controller beacon is the one
   // frame allowed before control is established: it is what makes an AP9X hand the chain over.
+  // Lamp mode may only send replies, never a request or a write.
   const bool beacon = frame.size() == 7 && frame[4] == kk::CMD_CONTROLLER_PROBE;
-  if (!this->guard_.controlling() && !(beacon && this->guard_.beaconing())) {
+  const bool lamp_reply =
+      this->is_follower() && !this->lamps_.empty() && !kk::looks_like_controller_frame(frame);
+  if (!this->guard_.controlling() && !(beacon && this->guard_.beaconing()) && !lamp_reply) {
     if (this->is_follower())
       ESP_LOGD(TAG, "follower, not sent: %s", format_hex_pretty(frame.data(), frame.size()).c_str());
     else
@@ -386,15 +513,20 @@ void KLinkHub::read_next_identity_() {
   this->bus_.enqueue(kk::identity(kid), kk::CMD_GET_GID_TYPE, kk::REPLY_TIMEOUT_MS, [this, kid](bool ok, const std::vector<uint8_t> &reply) {
     kk::Identity id = {0, 0};
     const bool parsed = ok && kk::parse_identity(reply, id);
-    const bool known = parsed && this->inventory_.upsert(kid, id.gid, id.type);
+    // A bus lamp must never flip the leader's own record, even if it reports the same KID.
+    const kk::LampRecord *existing = this->inventory_.find(kid);
+    const bool local = existing != nullptr && existing->local;
+    const bool known = parsed && !local && this->inventory_.upsert(kid, id.gid, id.type);
     if (known) {
       this->scan_found_++;
       ESP_LOGI(TAG, "Lamp KID %u: GID %u, type %u", kid, id.gid, id.type);
       this->lamp_found_cb_.call(kid, id.gid, id.type);
-    } else if (parsed) {
+    } else if (parsed && !local) {
       // A type this controller has no model for: it is not added, but what it reports is logged so it can be
       // reported (the read-only model and firmware queries below run for it too).
       ESP_LOGW(TAG, "Lamp KID %u reports GID %u, type %u: not a lamp type this controller drives", kid, id.gid, id.type);
+    } else if (local) {
+      ESP_LOGW(TAG, "Lamp KID %u is this hub's own lamp: ignoring it on the bus", kid);
     } else {
       ESP_LOGW(TAG, "Lamp KID %u did not return a valid identity", kid);
     }
@@ -439,8 +571,19 @@ void KLinkHub::identify(uint32_t kid) {
     return;
   }
   ESP_LOGI(TAG, "Identify KID %u", kid);
-  if (const kk::LampRecord *lamp = this->inventory_.find(kid))
+  if (const kk::LampRecord *lamp = this->inventory_.find(kid)) {
+    if (lamp->local) {
+      // Nothing goes on the bus: flash the leader's own light instead. The hold is longer than the
+      // dip so the leader's own once-a-second refresh cannot cover it.
+      this->hold_group(lamp->gid, kk::FIND_DIP_MS + 1500);
+      HubLamp *local = this->find_lamp_(kid);
+      if (local != nullptr && local->light != nullptr)
+        local->light->flash_();
+      ESP_LOGI(TAG, "KID %u is the local lamp: flashing the light", static_cast<unsigned>(kid));
+      return;
+    }
     this->hold_group(lamp->gid, 2000);
+  }
   this->bus_.enqueue(kk::build(kk::CMD_CONTROLLER_PROBE, {}), 0, 0, nullptr);
   this->set_timeout(kid, 300, [this, kid]() { this->bus_.enqueue(kk::find(kid), 0, 0, nullptr); });
 }
@@ -604,6 +747,26 @@ void KLinkHub::confirm_assignment() {
   uint32_t kid = this->staged_kid_;
   uint8_t gid = this->staged_gid_;
   this->staged_ = false;
+  const kk::LampRecord *lamp = this->inventory_.find(kid);
+  if (lamp != nullptr && lamp->local) {
+    // A local lamp is not on the bus, so nothing is sent: apply the move in software only.
+    HubLamp *local = this->find_lamp_(kid);
+    if (local == nullptr) {
+      ESP_LOGE(TAG, "Local lamp KID %u: no local lamp owns it", static_cast<unsigned>(kid));
+      return;
+    }
+    const uint8_t type = lamp->type;
+    local->gid = gid;
+    if (!this->inventory_.upsert_local(kid, gid, type)) {
+      ESP_LOGE(TAG, "Local lamp KID %u: the inventory refused GID %u", static_cast<unsigned>(kid), gid);
+      return;
+    }
+    if (local->light != nullptr)
+      local->light->set_gid(gid);
+    local->pref.save(&gid);
+    ESP_LOGI(TAG, "KID %u is now in GID %u (local)", static_cast<unsigned>(kid), gid);
+    return;
+  }
   this->bus_.enqueue(kk::unmute(kid), 0, 0, nullptr);
   this->bus_.enqueue(kk::set_gid(kid, gid), 0, 0, nullptr);
   kk::read_identity_async(this->bus_, kid, [this, kid, gid](bool ok, kk::Identity id) {
@@ -694,6 +857,94 @@ void KLinkHub::observe_(const std::vector<uint8_t> &frame) {
     }
     return;
   }
+}
+
+// A follower with lamps: hand every request to the set. It only returns a reply to a request
+// addressed to it (or a mute/unmute that matched), which is sent like any bus frame after the
+// configured delay. The find command flashes that lamp's light instead of sending anything.
+void KLinkHub::handle_lamp_request_(const std::vector<uint8_t> &frame, uint32_t now) {
+  kk::LampResult result = this->lamps_.handle(frame, now);
+  if (result.gid_changed >= 0 && static_cast<size_t>(result.gid_changed) < this->own_lamps_.size()) {
+    HubLamp &lamp = this->own_lamps_[result.gid_changed];
+    const uint8_t gid = this->lamps_.lamps()[result.gid_changed].gid();
+    lamp.gid = gid;
+    lamp.pref.save(&gid);
+    if (lamp.light != nullptr)
+      lamp.light->set_gid(gid);
+    ESP_LOGI(TAG, "Lamp KID %u assigned GID %u", static_cast<unsigned>(lamp.kid), gid);
+  }
+  if (result.find >= 0 && static_cast<size_t>(result.find) < this->own_lamps_.size()) {
+    HubLamp &lamp = this->own_lamps_[result.find];
+    ESP_LOGI(TAG, "Lamp KID %u: identify", static_cast<unsigned>(lamp.kid));
+    if (lamp.light != nullptr)
+      lamp.light->flash_();
+  }
+  if (result.reply.empty())
+    return;
+  ESP_LOGD(TAG, "lamps answer %s: %s", kk::describe_frame(frame).c_str(),
+           format_hex_pretty(result.reply.data(), result.reply.size()).c_str());
+  // Write directly rather than through the request queue: the queue's min gap between frames is
+  // meant for a leader's requests and would stretch a 5 ms reply delay. A follower has nothing else
+  // queued, and tx_frame() is the same bus writer (direct drive included). Numeric timeout ids avoid
+  // allocating a name per reply; the base keeps them clear of the KIDs identify() uses as ids.
+  const std::vector<uint8_t> reply = result.reply;
+  this->set_timeout(LAMP_REPLY_TIMEOUT_ID + this->lamp_reply_seq_++, this->lamp_reply_delay_ms_,
+                    [this, reply]() { this->tx_frame(reply); });
+}
+
+void KLinkHub::add_lamp(KLinkLightFollower *light, uint32_t kid, uint8_t gid, uint8_t type, const std::string &model,
+                        const std::string &key) {
+  this->own_lamps_.push_back(HubLamp{kid, gid, type, model, light, key, ESPPreferenceObject()});
+}
+
+KLinkHub::HubLamp *KLinkHub::find_lamp_(uint32_t kid) {
+  for (size_t i = 0; i < this->own_lamps_.size(); i++)
+    if (this->own_lamps_[i].kid == kid)
+      return &this->own_lamps_[i];
+  return nullptr;
+}
+
+// The MAC's hex digits folded into one number; false when the MAC has fewer than eight.
+bool KLinkHub::mac_tail_(uint32_t &tail) const {
+  const std::string mac = get_mac_address();
+  tail = 0;
+  size_t digits = 0;
+  for (char c : mac) {
+    int value = -1;
+    if (c >= '0' && c <= '9')
+      value = c - '0';
+    else if (c >= 'a' && c <= 'f')
+      value = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'F')
+      value = c - 'A' + 10;
+    if (value < 0)
+      continue;
+    tail = (tail << 4) | static_cast<uint32_t>(value);
+    digits++;
+  }
+  return digits >= 8;
+}
+
+// A lamp's own KID: the MAC tail XOR the entry id, so it is stable per device and per entry and does
+// not change when the entries are reordered. Both roles use the same derivation. It comes from the
+// chip MAC and the entry id, so a collision with another device is very unlikely but not impossible;
+// `kid:` pins one if a scan ever reports a collision ("unresolvable collision on a single KID").
+uint32_t KLinkHub::lamp_kid_(const std::string &key) const {
+  uint32_t tail;
+  if (!this->mac_tail_(tail)) {
+    ESP_LOGW(TAG, "No usable MAC address (%s): deriving the lamp KID from the entry id alone",
+             get_mac_address().c_str());
+    tail = 0;
+  }
+  return DEFAULT_MIN_KID + (tail ^ fnv1_hash(key)) % (DEFAULT_MAX_KID - DEFAULT_MIN_KID + 1);
+}
+
+// True when `kid` is already claimed by one of the lamps here, or, on a leader, by a stored bus lamp.
+bool KLinkHub::lamp_kid_taken_(uint32_t kid) const {
+  for (const auto &lamp : this->own_lamps_)
+    if (lamp.kid == kid)
+      return true;
+  return !this->is_follower() && this->inventory_.find(kid) != nullptr;
 }
 
 void KLinkHub::save_inventory_() {
@@ -2054,7 +2305,71 @@ void KLinkLightFollower::dump_config() {
   }
 }
 
+// A real lamp dips for about half a second when the leader identifies it. Do the same on the local
+// light and put back what it showed before; no color mapping is involved. A group write during the
+// dip wins over the restore.
+void KLinkLightFollower::flash_() {
+  if (this->flash_pending_)
+    return;  // a dip is already running; do not save the dipped values as the ones to restore
+  this->flash_pending_ = true;
+  this->have_latest_ = false;
+  this->saved_.clear();
+  for (light::LightState *light : this->lights_) {
+    if (light == nullptr) {
+      this->saved_.push_back(light::LightColorValues());
+      continue;
+    }
+    this->saved_.push_back(light->current_values);
+    if (light->get_current_effect_index() != 0)
+      continue;  // a local effect wins over the bus, including the dip
+    auto call = light->make_call();
+    call.set_state(true);
+    call.set_brightness(0.0f);
+    call.set_transition_length(0);
+    call.set_save(false);
+    call.perform();
+  }
+  this->set_timeout("klink_lamp_find", kk::FIND_DIP_MS, [this]() {
+    this->flash_pending_ = false;
+    if (this->have_latest_) {
+      // The leader wrote the group again while the light was dipped: show that, not the snapshot.
+      this->have_latest_ = false;
+      this->apply_(this->latest_);
+      return;
+    }
+    for (size_t i = 0; i < this->lights_.size() && i < this->saved_.size(); i++) {
+      light::LightState *light = this->lights_[i];
+      if (light == nullptr || light->get_current_effect_index() != 0)
+        continue;
+      const light::LightColorValues &value = this->saved_[i];
+      auto call = light->make_call();
+      // Brightness and color are kept even when the saved state was off (LightCall writes them into
+      // remote_values regardless of the state); setting the state last leaves such a light off.
+      call.set_brightness(value.get_brightness());
+      const uint8_t caps = this->caps_[i];
+      if (this->output_model_ == kk::LightModel::CT && (caps & kk::CAP_CT) != 0)
+        call.set_color_temperature(value.get_color_temperature());
+      if ((this->output_model_ == kk::LightModel::RGB || this->output_model_ == kk::LightModel::RGBW) &&
+          (caps & kk::CAP_RGB) != 0)
+        call.set_rgb(value.get_red(), value.get_green(), value.get_blue());
+      if (this->output_model_ == kk::LightModel::RGBW && (caps & kk::CAP_WHITE) != 0)
+        call.set_white(value.get_white());
+      call.set_state(value.is_on());
+      call.set_transition_length(0);
+      call.set_save(false);
+      call.perform();
+    }
+  });
+}
+
 void KLinkLightFollower::apply_(const uint8_t channels[5]) {
+  if (this->flash_pending_) {
+    // Keep only the newest write; the dip's end shows it instead of the pre-dip snapshot.
+    for (size_t i = 0; i < 5; i++)
+      this->latest_[i] = channels[i];
+    this->have_latest_ = true;
+    return;
+  }
   const kk::ColorSpec *spec = group_color_spec(this->model_);
   if (spec == nullptr)
     return;

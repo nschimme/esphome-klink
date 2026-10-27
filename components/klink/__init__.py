@@ -38,6 +38,8 @@ CONF_BEACON_INTERVAL = "beacon_interval"
 CONF_CLAIM_CONFIRM = "claim_confirm"
 CONF_CONFLICT_RELEASE = "conflict_release"
 CONF_FOLLOWERS = "followers"
+CONF_LAMP = "lamp"
+CONF_LAMP_REPLY_DELAY = "lamp_reply_delay"
 CONF_KLINK_WEB_ID = "klink_web_id"
 CONF_WRITES_ENABLED = "writes_enabled"
 CONF_MONITOR = "monitor"
@@ -73,6 +75,37 @@ GROUP_MODELS = {
     "tuna_blue": GroupModel.TUNA_BLUE,  # UI1 intensity, UI2 blue to white, UI3 violet, UI4 red, UI5 green; the AP9X uses this
     "refugium": GroupModel.REFUGIUM,    # UI1 intensity, UI2 blue to red, UI4 white, UI5 green
 }
+
+# The lamp type a group model reports (klink_inventory.h: 1 Tuna Blue, 2 Tuna Sun, 3 Refugium) and
+# the model string it answers the `20` query with. All three models have a type; keep the check in
+# _validate_role() so a future model without one is rejected instead of guessed.
+MODEL_LAMP_TYPES = {
+    "tuna_blue": 1,
+    "tuna_sun": 2,
+    "refugium": 3,
+}
+# The group rules for a lamp, mirroring gid_allowed_for_type() in klink_inventory.h: a default gid
+# only for the model whose default it is, any other gid in the custom range 3-25.
+LAMP_DEFAULT_GIDS = {1: "tuna_blue", 2: "tuna_sun", 26: "refugium"}
+MODEL_LAMP_DEFAULT_GIDS = {model: gid for gid, model in LAMP_DEFAULT_GIDS.items()}
+LAMP_CUSTOM_GID_MIN = 3
+LAMP_CUSTOM_GID_MAX = 25
+
+
+def _gid_allowed_for_lamp(gid, model):
+    if gid in LAMP_DEFAULT_GIDS:
+        return LAMP_DEFAULT_GIDS[gid] == model
+    return LAMP_CUSTOM_GID_MIN <= gid <= LAMP_CUSTOM_GID_MAX
+MODEL_LAMP_STRINGS = {
+    "tuna_blue": "A360X Tuna Blue",
+    "tuna_sun": "A360X Tuna Sun",
+    "refugium": "A360X Refugium",
+}
+# The KID range a leader scans (klink.cpp: DEFAULT_MIN_KID/DEFAULT_MAX_KID). It is fixed, so a
+# lamp outside it would never be found. 0 derives a stable KID from the chip MAC and the entry id,
+# very unlikely to collide with another device; set `kid:` if a scan ever reports a collision.
+LAMP_KID_MIN = 18000000
+LAMP_KID_MAX = 36000000
 
 # The interface every program host implements (KLinkGroup on the bus, KLinkLightProgram on ordinary
 # lights). Declared here so both light.py and the hub schema can name it without a circular import.
@@ -112,19 +145,65 @@ PROGRAM_SCHEMA = (
     .extend(cv.COMPONENT_SCHEMA)
 )
 
-# A follower binds a K-Link group to ordinary ESPHome lights. It never writes to the bus; it shows
-# the leader's group writes with the class the lights actually support. The source group's model
-# says what UI2-UI5 mean.
+def _validate_reply_delay(value):
+    # TimePeriodMilliseconds; a real lamp's reply delay is unmeasured, so the default is short.
+    if value.total_milliseconds < 0 or value.total_milliseconds > 30:
+        raise cv.Invalid("lamp_reply_delay must be between 0 and 30 ms")
+    return value
+
+
+def _validate_lamp_kid(value):
+    # The leader's scan range is fixed in klink.cpp, so a KID outside it would never be found.
+    if value != 0 and not LAMP_KID_MIN <= value <= LAMP_KID_MAX:
+        raise cv.Invalid(
+            "kid must be 0 (derive it from the chip MAC) or between %d and %d"
+            % (LAMP_KID_MIN, LAMP_KID_MAX)
+        )
+    return value
+
+
+# Every followers entry is a Kessil lamp unless it says `lamp: false`. On a follower the lamps
+# answer the leader's discovery and query frames, so the leader scans, lists, assigns and identifies
+# them. On a leader the same entries are lamps in the leader's own inventory with no bus traffic.
+# Either way the entry's lights follow the lamp's current GID, which a leader can change.
+LAMP_SCHEMA = cv.Schema(
+    {
+        cv.Optional(CONF_KID, default=0): cv.All(cv.uint32_t, _validate_lamp_kid),
+    }
+)
+
+
+def _validate_lamp(value):
+    # `false` opts the entry out. A bare `lamp:` is YAML null and `true` is the empty block, so all
+    # defaults apply.
+    if value is False:
+        return False
+    return LAMP_SCHEMA({} if value is None or value is True else value)
+
+
+def _is_lamp(follower):
+    # Absent is a lamp (the default); only an explicit `lamp: false` opts out.
+    return follower.get(CONF_LAMP) is not False
+
+
+# A followers entry binds a K-Link group to ordinary ESPHome lights. A follower never writes to the
+# bus; it shows the leader's group writes with the class the lights actually support, and (unless the
+# entry says `lamp: false`) answers the leader's scan for that lamp. The source group's model says
+# what UI2-UI5 mean.
 FOLLOWER_SCHEMA = (
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(KLinkLightFollower),
+            # The initial GID. A GID the leader assigns to a lamp is stored in preferences
+            # and wins after a reboot.
             cv.Required(CONF_GID): cv.int_range(1, 40),
             cv.Required(CONF_MODEL): cv.one_of(*GROUP_MODELS, lower=True),
             cv.Required(CONF_LIGHTS): cv.All(
                 cv.ensure_list(cv.use_id(light.LightState)), cv.Length(min=1)
             ),
             cv.Optional(CONF_TRANSITION, default="0s"): cv.positive_time_period_milliseconds,
+            # The optional lamp block; its model and lights are this entry's.
+            cv.Optional(CONF_LAMP): _validate_lamp,
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -160,6 +239,40 @@ def _validate_role(config):
             raise cv.Invalid("role: follower cannot use auto_writes; a follower never transmits")
         if config[CONF_WRITES_ENABLED]:
             raise cv.Invalid("role: follower cannot start with writes_enabled; a follower never transmits")
+    if config[CONF_ROLE] != "follower" and CONF_LAMP_REPLY_DELAY in config:
+        raise cv.Invalid("klink: lamp_reply_delay only applies to role: follower")
+    # Every entry is a lamp unless it says `lamp: false`, on either role. A model without a lamp
+    # type cannot be one, and two entries may not pin the same KID.
+    kids = set()
+    for follower in config.get(CONF_FOLLOWERS, []):
+        if not _is_lamp(follower):
+            continue
+        if follower[CONF_MODEL] not in MODEL_LAMP_TYPES:
+            raise cv.Invalid(
+                "klink: followers model '%s' has no K-Link lamp type"
+                % follower[CONF_MODEL]
+            )
+        gid = follower[CONF_GID]
+        if not _gid_allowed_for_lamp(gid, follower[CONF_MODEL]):
+            raise cv.Invalid(
+                "klink: followers gid %d is not valid for model %s; use a custom GID %d-%d "
+                "or the model's default %d, or set lamp: false if this entry is not a lamp"
+                % (
+                    gid,
+                    follower[CONF_MODEL],
+                    LAMP_CUSTOM_GID_MIN,
+                    LAMP_CUSTOM_GID_MAX,
+                    MODEL_LAMP_DEFAULT_GIDS[follower[CONF_MODEL]],
+                )
+            )
+        lamp = follower.get(CONF_LAMP)
+        kid = 0 if lamp is None else lamp[CONF_KID]
+        if kid != 0:
+            if kid in kids:
+                raise cv.Invalid(
+                    "klink: two followers entries use the same kid %d" % kid
+                )
+            kids.add(kid)
     return config
 
 
@@ -203,7 +316,8 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_ON_SCAN_DONE): automation.validate_automation(
                 {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(ScanDoneTrigger)}
             ),
-            # Leader or follower. A follower never transmits; it listens to group writes and follows.
+            # Leader or follower. A follower never sends a beacon or a group write; it listens to
+            # group writes and follows them, and answers requests addressed to its lamps.
             cv.Optional(CONF_ROLE, default="leader"): cv.one_of("leader", "follower", lower=True),
             # How often this leader announces itself with the K-Link presence beacon.
             cv.Optional(CONF_BEACON_INTERVAL, default="1s"): cv.positive_time_period_milliseconds,
@@ -221,6 +335,11 @@ CONFIG_SCHEMA = cv.All(
             ),
             # Native ESPHome lights that follow one K-Link group (usually on a follower).
             cv.Optional(CONF_FOLLOWERS): cv.All(cv.ensure_list(FOLLOWER_SCHEMA), cv.Length(max=16)),
+            # How long a follower waits before answering a lamp request. No default: absent means
+            # 5 ms, and a leader rejects it because it only changes what a follower sends.
+            cv.Optional(CONF_LAMP_REPLY_DELAY): cv.All(
+                cv.positive_time_period_milliseconds, _validate_reply_delay
+            ),
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
@@ -231,7 +350,7 @@ CONFIG_SCHEMA = cv.All(
 
 
 def _final_validate(config):
-    # RX is required. TX is optional: a receive-only monitor never transmits.
+    # RX is required. TX is optional for a listen-only config; a leader or a follower lamp needs one.
     return uart.final_validate_device_schema(
         "klink", baud_rate=None, require_rx=True, require_tx=False
     )(config)
@@ -289,6 +408,8 @@ async def to_code(config):
     cg.add(var.set_claim_confirm_ms(config[CONF_CLAIM_CONFIRM]))
     cg.add(var.set_conflict_release_ms(config[CONF_CONFLICT_RELEASE]))
     cg.add(var.set_guard_quiet_ms(config[CONF_GUARD_QUIET_TIME]))
+    if CONF_LAMP_REPLY_DELAY in config:
+        cg.add(var.set_lamp_reply_delay(config[CONF_LAMP_REPLY_DELAY].total_milliseconds))
     if CONF_DIRECT_DRIVE in config:
         dd = config[CONF_DIRECT_DRIVE]
         cg.add(var.set_direct_drive(dd[CONF_POSITIVE_PIN], dd[CONF_NEGATIVE_PIN]))
@@ -327,6 +448,20 @@ async def to_code(config):
         cg.add(fvar.set_transition_ms(follower[CONF_TRANSITION]))
         for light_id in follower[CONF_LIGHTS]:
             cg.add(fvar.add_light(await cg.get_variable(light_id)))
+        if _is_lamp(follower):
+            # Both roles register the entry as a lamp; `lamp: false` leaves a plain follower. The
+            # entry's lights follow the lamp's current GID, which a leader can change.
+            lamp = follower.get(CONF_LAMP)
+            cg.add(
+                var.add_lamp(
+                    fvar,
+                    0 if lamp is None else lamp[CONF_KID],
+                    follower[CONF_GID],
+                    MODEL_LAMP_TYPES[follower[CONF_MODEL]],
+                    MODEL_LAMP_STRINGS[follower[CONF_MODEL]],
+                    str(follower[CONF_ID]),
+                )
+            )
 
     # The color tables of the Tuna lights and the Refugium: Home Assistant's RGB colors are snapped to the nearest
     # color a lamp can make (in every build, with or without the web page). klink.h declares

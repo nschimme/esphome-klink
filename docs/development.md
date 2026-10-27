@@ -19,7 +19,7 @@ the **ESPHome glue** that wires it to the bus, the lights and the entities.
   `klink_schedule.h` (points and interpolation), `klink_mode.h`, `klink_output.h` (fades), `klink_colors.h`,
   `klink_light_map.h`, `klink_effects.h`, `klink_astro.h` (sun and moon positions), `klink_dynamic.h` (sun and moon
   days as points), `klink_sky.h`, `klink_weather.h`, `klink_acclimation.h`, `klink_inventory.h`, `klink_names.h`,
-  `klink_http.h`.
+  `klink_lamp_responder.h` (a follower's lamp replies, shared by every lamp behind one UART), `klink_http.h`.
 - Glue: `klink.h` / `klink.cpp` (the hub, the bus group, the native-light follower and the entities),
   `klink_program_base.h` / `.cpp` (everything a program does: points, mode, preview, sources, acclimation, status),
   `klink_light_program.h` / `.cpp`, `klink_web.cpp` (the page and the JSON API).
