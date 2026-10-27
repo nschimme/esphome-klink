@@ -1,204 +1,110 @@
 # esphome-klink
 
-An [ESPHome](https://esphome.io) custom component that connects **Kessil X-Series aquarium lights** to
-**Home Assistant**, using a cheap USB-C ESP32 board and a USB-C cable. It controls the lamps' intensity,
-color, and extra channels, and runs an editable 8-point daily program, all from Home Assistant.
+Local control of **Kessil X-Series aquarium lights** (A360X and A360XE Tuna Sun and Tuna Blue) from Home Assistant, or
+from a web page the controller serves itself, using a cheap USB-C ESP32 board running ESPHome plugged into the lamp's
+K-Link port. No cloud, no app. You get a daily light program you can edit on a
+visual day curve, a sun that rises and sets at your location, a moon for the night, gentle ramps, an acclimation mode
+for new tanks, and the lamps' storm, cloud and aurora effects. The same programs can also run on ordinary ESPHome
+lights.
 
 > ## Disclaimer
 >
-> This is an independent, unofficial, community project. It is **not affiliated with, endorsed by, or
-> supported by Kessil**. "Kessil", "Tuna Sun", "Tuna Blue" and related names are trademarks of their
-> respective owners and are used here only to say which products this software is meant to work with.
+> This is an independent, unofficial, community project. It is **not affiliated with, endorsed by, or supported by
+> Kessil**. "Kessil", "Tuna Sun", "Tuna Blue" and related names are trademarks of their respective owners and are used
+> here only to say which products this software is meant to work with.
 >
-> **Use at your own risk.** This software talks to your lights over their control port in a way Kessil
-> does not document or support. It could malfunction, behave unexpectedly, or void your warranty. Plugging a
-> microcontroller board into a lamp's port can damage the board, the lamp, or both. Never leave lights
-> running unattended on a schedule you have not verified, and keep your livestock's needs in mind: a
-> wrong schedule can harm fish, corals and plants. You are responsible for anything you connect and run.
-> The software is provided "as is", without warranty of any kind (see [LICENSE](LICENSE)).
+> **Use at your own risk.** This software talks to your lights over their control port in a way Kessil does not
+> document or support. It could malfunction, behave unexpectedly, or void your warranty. Plugging a microcontroller
+> board into a lamp's port can damage the board, the lamp, or both. Never leave lights running unattended on a
+> schedule you have not verified, and keep your livestock's needs in mind: a wrong schedule can harm fish, corals and
+> plants. You are responsible for anything you connect and run. The software is provided "as is", without warranty of
+> any kind (see [LICENSE](LICENSE)).
 
-## What works, and what has been tested
+## What it does
+
+- **Daily program.** Up to 16 points of time, intensity, color and the extra LEDs (red and amber on a Tuna Sun,
+  violet, red and green on a Tuna Blue), with the lamps moving in straight lines between them. Edit it by dragging
+  points on a curve and see the change on the lamps as you go. The shipped programs are a 12-hour day with a
+  two-hour plateau and a dark night.
+- **Sun and moon.** Switch a program to **Sun** and it follows the real sunrise and sunset at your location, with a
+  warm glow at the edges and a ramp that is gentler than the real sun's (or a fixed day length you choose). Switch it
+  to **Moon** on a blue or RGB light and it lights the dark hours, brighter near a full moon. Preview any day of the
+  year before it happens.
+- **Weather.** Optionally let clouds dim the sun, and a thunderstorm start the Storm effect.
+- **New tank?** **Acclimation** raises the whole program from a low share to full over days you choose.
+- **Smooth.** Transitions ease in and out, and **soft start** fades the lamps in whenever the controller starts.
+- **Effects.** Storm, Cloud, Aurora and, on a Tuna Blue, Rainbow and the moon colors, as temporary overlays on the
+  program, plus the standard ESPHome effects.
+- **Any lamp setup.** Several groups on one board, a mode per group (Program, Manual, Off), and the same programs on
+  ordinary dimmable, tunable-white, RGB and RGBW ESPHome lights, so a night light can follow the moon.
+
+## What is tested
 
 | Item | Status |
 |---|---|
-| **Kessil A360X Tuna Sun** | **Tested.** Two fixtures in one group, controlled from an ESP32-C6: intensity, color, red, amber, finding lamps, the daily program. |
-| Program point editor, effects (Pulse, Color sweep, Sunrise, Sunset) | Built and flashed; **not yet verified end to end** against a lamp. |
-| **Kessil A360X Tuna Blue** | **Untested.** Included with a violet / red / green channel layout that has not been confirmed on a lamp. |
-| ESP32-C6 (USB-C) | **Tested.** |
-| ESP32-S3, ESP32-C3, ESP32-S2 (USB-C) | **Compile only.** The configs build, but nobody has run them on a lamp. Reports welcome. |
+| **Kessil A360X Tuna Sun**, two lamps in one group, from an ESP32-C6 | **Tested:** intensity, color, red, amber, finding lamps, the daily program, effects and transitions. |
+| Sun, moon, weather, acclimation, soft start | Computed days are checked against an independent astronomy library (sun within about a minute, moon within about 15 minutes) and run on the device; soft start and a full acclimation run have not been observed on lamps. |
+| Light programs on ordinary lights | **Tested** on the board's own RGB LED; other light types compile but are untested. |
+| **Kessil A360XE Tuna Blue** | **Untested.** The channels follow Kessil's controller screen (violet, red, green), but the mapping to the lamp has not been confirmed. |
+| ESP32-C6 | **Tested.** ESP32-S3, -C3 and -S2 build but have not been run on a lamp. |
 
-### Not supported yet
+Not supported:
+- **The AP9X, the AP700 and older lights.** This project talks directly to X-Series fixtures through their K-Link
+  port. Lights with no K-Link port (older non-X models) cannot be controlled, and the AP9X and AP700 are different
+  products that it does not work through.
+- The Kessil Refugium and other X-Series models (`model: generic` exposes the raw channels, untested).
+- Kessil's Wi-Fi dongle or Controller X on the same bus at the same time: two controllers fight each other, so
+  unplug them.
 
-- **Kessil Refugium** and any other X-Series model not listed above. You can try `model: generic`, which
-  exposes the five channels as raw values, but it is untested and the channel meanings are unknown.
-- **Other Kessil lights and controllers**, for example the AP9X, the AP700 and the Controller X. This
-  project talks to X-Series fixtures directly; it does not work through those products.
-- **Kessil's WiFi dongle running at the same time.** Two controllers on one bus fight each other. The
-  component listens first and never transmits while it hears another controller, but you should unplug
-  the dongle for normal use.
-- **Lights with no K-Link port** (for example older non-X models).
-- Other boards: anything without a native USB-C connection to the USB data pads, or an ESP32 variant not
-  listed in the table below (ESP32-H2 and ESP32-P4, for example).
+## Is this for you?
 
-## Hardware
-
-You need an ESP32 board with a **native USB-C port**, and a plain USB-C-to-USB-C cable. The board plugs
-into a spare K-Link port on a lamp (the lamps have two). There is no transceiver and no breakout: the
-chip's own USB data pads (D+ and D-) carry the bus.
-
-| Board family | Config | D- (UART TX) | D+ (UART RX) | Tested |
-|---|---|---|---|---|
-| ESP32-C6 | `esp32-c6` | GPIO12 | GPIO13 | yes |
-| ESP32-S3 | `esp32-s3` | GPIO19 | GPIO20 | no |
-| ESP32-C3 | `esp32-c3` | GPIO18 | GPIO19 | no |
-| ESP32-S2 | `esp32-s2` | GPIO19 | GPIO20 | no |
-
-An ESP32-C6 "mini" or SuperMini style board is a good choice.
-
-**Risk, accepted knowingly.** If the lamps terminate the pair, the pads are asked for more current than a
-normal GPIO is rated for, and the board can be damaged. Before the first connection, measure the
-resistance across D+ and D- with the lamp unpowered. Above about 10 kOhm the load is light. The lamps
-themselves are not expected to be at risk, but nothing here guarantees that.
+- You have an X-Series **Tuna Sun** (tested) or **Tuna Blue** (untested), on a freshwater planted or a reef tank.
+  The AP9X, the AP700 and older lights without a K-Link port are not supported.
+- You can flash an ESP32 with ESPHome, or are happy to follow a short guide to do it.
+- **Home Assistant is optional.** The web page on the board works on its own. Home Assistant adds entities and
+  automations, your home location for the sun and moon, and the weather; without it the sun and moon use your time
+  zone's city as an approximate location, and there is no weather.
+- You accept the hardware risk of plugging a bare board into a lamp's port (see Getting started).
+- You will not run Kessil's Wi-Fi dongle or Controller X on the same lamps at the same time: two controllers on one
+  bus fight each other, and this one stops when it hears the other.
 
 ## Quick start
 
-All three ways use the same files. Pick the file for your board:
-`kessil-tuna-sun-esp32-c6.yaml`, `kessil-tuna-sun-esp32-s3.yaml`, `kessil-tuna-sun-esp32-c3.yaml`,
-`kessil-tuna-sun-esp32-s2.yaml`, and the matching `kessil-tuna-blue-*.yaml`.
+1. Get an ESP32-C6 board with a USB-C port and a USB-C cable. It plugs into a spare K-Link port on a lamp.
+2. In the ESPHome dashboard, import
+   `github://nschimme/esphome-klink/kessil-tuna-sun-esp32-c6.yaml@main` (use `kessil-tuna-blue-...` for a Tuna Blue).
+3. Power it from the lamp, turn on **Send to lights**, and open `http://<device>/klink`.
 
-### 1. Adopt it from the ESPHome dashboard (easiest)
+The full walk-through, including wiring risks, is in [Getting started](docs/getting-started.md). **Read the first-run
+section before connecting the board to a lamp.**
 
-Each file contains a `dashboard_import:` block, so the dashboard can adopt it directly.
+## Help wanted
 
-1. Flash the board once over USB with any ESPHome firmware (for example the ESPHome web installer at
-   <https://web.esphome.io>, "Prepare for first use"), while it is connected **only to your computer**.
-2. In the ESPHome dashboard, adopt the discovered device, or choose **New device -> import from URL** and
-   paste:
+The Tuna Blue and the other boards are untested because the author has none of them. If you do:
 
-   ```
-   github://nschimme/esphome-klink/kessil-tuna-sun-esp32-c6.yaml@main
-   ```
+- **Tuna Blue owners:** in Home Assistant, enable the manual **violet**, **red** and **green** numbers for the group.
+  Put the group in Manual, set one number to 50 % at a time, and note which color the lamp shows. Then open an issue
+  with what you saw. That confirms (or corrects) the channel mapping the Tuna Blue support rests on.
+- **ESP32-S3, -C3 and -S2 owners:** tell us whether the board finds your lamps and holds a program.
 
-3. Finish the adoption and install. The dashboard creates a small config that pulls in this repo and adds
-   your WiFi, API key and OTA password.
+## Documentation
 
-### 2. Use it as a remote package in your own config
+Set up and use:
 
-```yaml
-substitutions:
-  name: kessil-tuna-sun
-  timezone: America/Chicago        # the program runs on local time: set yours
+| Page | What is in it |
+|---|---|
+| [Getting started](docs/getting-started.md) | Hardware, install, first run, network and security, troubleshooting, FAQ |
+| [Daily programs](docs/daily-programs.md) | Points, shipped programs, starting points for planted and reef tanks, sun and moon, location, weather, acclimation |
+| [Home Assistant](docs/home-assistant.md) | Every entity, modes, effects, transitions, soft start |
 
-packages:
-  remote_package:
-    url: https://github.com/nschimme/esphome-klink
-    ref: main                      # pin a tag or commit once you have one that works
-    files: [kessil-tuna-sun-esp32-c6.yaml]
-    refresh: 1d
+Customize and integrate:
 
-wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
-
-api:
-  encryption:
-    key: !secret api_encryption_key
-
-ota:
-  - platform: esphome
-    password: !secret ota_password
-```
-
-You can also assemble the pieces yourself instead of using a top-level file. This is useful to control
-two groups (see [examples/two-groups.yaml](examples/two-groups.yaml)) from one board, or to change a group ID:
-
-```yaml
-substitutions:
-  name: kessil-tank
-  tuna_sun_gid: "2"
-
-esphome:
-  name: ${name}
-
-packages:
-  remote_package:
-    url: https://github.com/nschimme/esphome-klink
-    ref: main
-    files:
-      - boards/esp32-c6.yaml
-      - common/base.yaml
-      - common/tuna-sun.yaml
-```
-
-### 3. Clone the repo
-
-```sh
-git clone https://github.com/nschimme/esphome-klink
-cd esphome-klink
-# create secrets.yaml with wifi_ssid, wifi_password, api_encryption_key, ota_password
-esphome run kessil-tuna-sun-esp32-c6.yaml
-```
-
-The top-level files fetch the component from this repo's `main` branch. To use the local copy of the
-component while developing, add this to your own config:
-
-```yaml
-external_components:
-  - source:
-      type: local
-      path: components
-```
-
-## First run: be careful
-
-1. **Flash while connected only to your computer.** Once the firmware runs, the board's USB pads carry the
-   lamp bus, so the USB console is gone. Later updates go over WiFi (or hold the BOOT button while
-   plugging in to flash by cable).
-2. Unplug it from the computer and power it from the lamp.
-3. **"Bus writes" is OFF by default.** In that state the component logs the frames it would send and
-   transmits nothing. Check the logs, then turn the switch on.
-4. If Kessil's WiFi dongle is on the chain, unplug it before enabling writes. With
-   `auto_writes: "true"` the component listens for 15 seconds and only takes over by itself after the bus has
-   been quiet; if another controller appears later, it stops and reports a conflict in **Bus state**.
-5. Press **Find lamps** (with **Commissioning mode** on) to list the lamps and their groups. Set `tuna_sun_gid` or
-   `tuna_blue_gid` to the group your lamps are in.
-
-## What you get in Home Assistant
-
-For each lamp group:
-
-- a **light** (brightness is intensity; on the Tuna Sun, color temperature is the color control) with
-  the effects Pulse, Color sweep, Sunrise and Sunset;
-- **red** and **amber** (Tuna Sun) or **violet / red / green** (Tuna Blue) manual controls;
-- a **program editor**: choose a point 1 to 8, then edit its time and its INT, CLR, R and AM values, like
-  the controller's own Quick Set screen. Editing a point turns it on and applies at once; changes are saved
-  to flash a couple of seconds later;
-- raw **point text entities** (`08:00 int=40 clr=20 r=10`) for copy and paste;
-- **schedule**, **pause** and **resume schedule** controls to switch between the program and manual
-  control;
-- **Bus state**, **Known lamps** and **Bus timeouts** diagnostics.
-
-Values are raw: INT and CLR run 0 to 255, red, amber, violet and green 0 to 100.
-
-## Configuration
-
-Substitutions you can set in your own config:
-
-| Substitution | Default | Meaning |
-|---|---|---|
-| `name`, `friendly_name` | per file | device name |
-| `timezone` | `Etc/UTC` | the program runs on local time, so set yours |
-| `tuna_sun_gid` | `"2"` | the K-Link group the Tuna Sun package controls |
-| `tuna_blue_gid` | `"1"` | the K-Link group the Tuna Blue package controls |
-| `auto_writes` | `"false"` | `"true"` = listen first and take over the bus when quiet |
-
-## Development
-
-Host tests for the protocol code need only a C++ compiler:
-
-```sh
-for t in tests/test_klink_*.cpp; do g++ -std=c++11 -Wall -Wextra -I components/klink "$t" -o /tmp/t && /tmp/t; done
-```
+| Page | What is in it |
+|---|---|
+| [Web pages and JSON API](docs/web-pages.md) | The `/klink` page and the API behind it |
+| [Light programs](docs/light-programs.md) | The daily program on any ESPHome light |
+| [Configuration](docs/configuration.md) | Substitutions, options, several groups, templates |
+| [Development](docs/development.md) | Layout, tests, the mock device, CI |
 
 ## License
 

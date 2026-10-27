@@ -1,6 +1,11 @@
 # One ESP32-C6 controlling two lamp groups: a Tuna Sun group and a Tuna Blue group.
 # The Tuna Sun package controls group 2 and the Tuna Blue package group 1 by default; change them with
 # tuna_sun_gid and tuna_blue_gid to match your own groups.
+#
+# This file replaces the default network package (common/network-wifi.yaml) with its own wifi/api/ota,
+# because it pulls the shared files in itself rather than using a top-level kessil-*.yaml file.
+# The remote_package below downloads the files from GitHub's `main` branch, not from your checkout; to
+# work on a local copy, see docs/getting-started.md (option 3).
 substitutions:
   name: kessil-tank
   timezone: America/Chicago

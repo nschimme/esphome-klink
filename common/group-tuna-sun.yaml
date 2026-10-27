@@ -1,0 +1,118 @@
+# One Tuna Sun K-Link group: a manual light, a 16-point daily program editable from Home
+# Assistant, and a point editor. This is the reusable template behind common/tuna-sun.yaml;
+# include it once per group instead of copying the package.
+#
+# Include it with package vars:
+#   id     the yaml/C++ id of the light, used for the light and as every `group:` reference
+#   name   the display name prefix of every entity, e.g. "Tuna Sun"
+#   gid    the K-Link group id (a number)
+#
+# Example (a second Tuna Sun group, "Reef 5", in K-Link group 5):
+#   packages:
+#     reef_5: !include
+#       file: common/group-tuna-sun.yaml
+#       vars: {id: reef_5, name: Reef 5, gid: "5"}
+#
+# Entity names and ids are built from `name` and `id`: renaming a group changes stored values
+# and Home Assistant entity ids, so keep them stable for an existing group.
+#
+# A group cannot mix lamp types, and custom groups use K-Link group ids 3-25 (1 and 2 are the
+# defaults of the Tuna Blue and Tuna Sun packages).
+
+light:
+  # Manual override for the whole group. Brightness drives intensity (INT). Touching the light switches
+  # the group to Manual; set Mode to Program to hand control back to the daily program.
+  - platform: klink
+    output_id: ${id}
+    klink_id: kl
+    name: "${name}"
+    gid: ${gid}
+    time_id: local_time
+    model: tuna_sun
+    slots: 16
+    web_server: { sorting_group_id: controls }
+    # Kessil's A360X specification: 6,000 K to 9,000 K plus red and yellow (amber). Color value 0 is the
+    # warm end (6,000 K). The spacing between the ends is assumed linear in mireds, not measured.
+    cold_white_color_temperature: 9000 K
+    warm_white_color_temperature: 6000 K
+    invert_color: true
+    effects:
+      # The built-in effects that make sense on a Tuna Sun: Storm, Cloud and Aurora use only UI1 and
+      # UI2. Rainbow and the Moon effects drive UI3-UI5 (UI3 is unused on a Tuna Sun), so they would do
+      # nothing visible here; they are left off this list.
+      - klink_storm:
+      - klink_cloud:
+      - klink_aurora:
+      # Standard ESPHome effects work too: while one runs, the lamps show its values (at most ten frames a
+      # second) and the group returns to its schedule when it ends. A sunrise is just
+      # `light.turn_on` with a long `transition_length`.
+      - pulse:
+          name: "Pulse"
+          transition_length: 2s
+          update_interval: 2s
+      - flicker:
+
+# The daily program: "HH:MM int=0-255 clr=0-255 ..." per point (any subset of channels, the rest 0), or
+# "off". The light moves linearly between points. These are starting values; edits made in Home
+# Assistant are kept in flash and take precedence.
+text:
+  - { platform: klink, group: "${id}", slot: 1, name: "${name} point 1", initial_value: "08:00 int=2 clr=0", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 2, name: "${name} point 2", initial_value: "09:00 int=51 clr=12 r=10 am=30", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 3, name: "${name} point 3", initial_value: "11:00 int=102 clr=51 r=5 am=10", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 4, name: "${name} point 4", initial_value: "13:00 int=153 clr=89 r=8 am=15", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 5, name: "${name} point 5", initial_value: "15:00 int=153 clr=89 r=8 am=15", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 6, name: "${name} point 6", initial_value: "17:00 int=102 clr=63 r=5 am=10", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 7, name: "${name} point 7", initial_value: "19:00 int=51 clr=25 r=10 am=30", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 8, name: "${name} point 8", initial_value: "20:00 int=0 clr=0", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 9, name: "${name} point 9", initial_value: "off", disabled_by_default: true, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 10, name: "${name} point 10", initial_value: "off", disabled_by_default: true, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 11, name: "${name} point 11", initial_value: "off", disabled_by_default: true, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 12, name: "${name} point 12", initial_value: "off", disabled_by_default: true, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 13, name: "${name} point 13", initial_value: "off", disabled_by_default: true, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 14, name: "${name} point 14", initial_value: "off", disabled_by_default: true, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 15, name: "${name} point 15", initial_value: "off", disabled_by_default: true, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", slot: 16, name: "${name} point 16", initial_value: "off", disabled_by_default: true, web_server: { sorting_group_id: program } }
+
+# Program editor: pick a point, then edit its time and values, like the controller's Quick Set screen.
+# Edits apply to the running program at once and are saved to flash a couple of seconds after the last
+# change. Editing a point turns it on; use the switch to turn a point off.
+select:
+  - { platform: klink, group: "${id}", type: mode, name: "${name} mode", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", type: effect_speed, name: "${name} effect speed", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", type: brightness_curve, name: "${name} brightness curve", disabled_by_default: true, web_server: { sorting_group_id: behavior } }
+  - { platform: klink, group: "${id}", type: source, name: "${name} program source", web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", name: "${name} program point", web_server: { sorting_group_id: program } }
+
+text_sensor:
+  - { platform: klink, group: "${id}", type: status, name: "${name} status", web_server: { sorting_group_id: controls } }
+
+datetime:
+  - { platform: klink, group: "${id}", type: time, name: "${name} point time", entity_category: config, web_server: { sorting_group_id: program } }
+
+number:
+  # Effects are a temporary overlay on the program; these are their runtime settings.
+  - { platform: klink, group: "${id}", type: effect_duration, name: "${name} effect duration", mode: box, web_server: { sorting_group_id: controls } }
+  # Output options: how Home Assistant's brightness maps to the lamp, and how jumps are faded.
+  - { platform: klink, group: "${id}", type: fade_time, name: "${name} transition time (0 = instant)", mode: box, web_server: { sorting_group_id: behavior } }
+  - { platform: klink, group: "${id}", type: acclimation_start, name: "${name} acclimation start", unit_of_measurement: "%", mode: box, web_server: { sorting_group_id: behavior } }
+  - { platform: klink, group: "${id}", type: acclimation_days, name: "${name} acclimation days", unit_of_measurement: "d", mode: box, web_server: { sorting_group_id: behavior } }
+  - { platform: klink, group: "${id}", type: soft_start, name: "${name} soft start", unit_of_measurement: "s", mode: box, web_server: { sorting_group_id: behavior } }
+  # Manual red and amber, outside the program. Setting one takes manual control of the group.
+  - { platform: klink, group: "${id}", channel: 4, name: "${name} red", disabled_by_default: true, web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", channel: 5, name: "${name} amber", disabled_by_default: true, web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: "${id}", point_channel: 1, name: "${name} point INT (0-255)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", point_channel: 2, name: "${name} point CLR (0-255)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", point_channel: 4, name: "${name} point R (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+  - { platform: klink, group: "${id}", point_channel: 5, name: "${name} point AM (0-100)", entity_category: config, web_server: { sorting_group_id: program } }
+
+switch:
+  - platform: klink            # the selected point on or off
+    type: point_enabled
+    group: "${id}"
+    name: "${name} point enabled"
+    web_server: { sorting_group_id: program }
+  - platform: klink
+    type: acclimation
+    group: "${id}"
+    name: "${name} acclimation"
+    web_server: { sorting_group_id: behavior }

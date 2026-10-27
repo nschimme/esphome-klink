@@ -3,7 +3,7 @@ import esphome.config_validation as cv
 from esphome.components import datetime
 
 from . import klink_ns
-from .light import KLinkGroup
+from .light import ProgramHost
 
 DEPENDENCIES = ["klink"]
 
@@ -14,7 +14,7 @@ KLinkPointTime = klink_ns.class_("KLinkPointTime", datetime.TimeEntity, cg.Compo
 # The time of day of the program point chosen with the group's point select.
 CONFIG_SCHEMA = (
     datetime.time_schema(KLinkPointTime)
-    .extend({cv.Required(CONF_GROUP): cv.use_id(KLinkGroup)})
+    .extend({cv.Required(CONF_GROUP): cv.use_id(ProgramHost)})
     .extend(cv.COMPONENT_SCHEMA)
 )
 

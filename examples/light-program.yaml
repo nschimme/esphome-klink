@@ -1,0 +1,32 @@
+# A klink program that drives the ESP32-C6's own RGB LED with no K-Link bus at all.
+#
+# A program groups one or more ordinary ESPHome lights and applies the same daily schedule to all of
+# them. It exposes the same entities as a bus group (slot texts, point editor, mode select, status
+# sensor), so everything below works exactly like a lamp group. Because it never touches the bus it
+# also controls the LED while "Send to lights" is off (dry run).
+#
+# This example uses local includes so it can be validated from a checkout (tools/ci_prepare.py
+# rewrites only the remote_package examples). Flash it, or copy the `led_program` package below into
+# your own config: common/program-light-rgb.yaml is the whole program, entities included.
+substitutions:
+  name: klink-light-program
+  friendly_name: Board
+  timezone: Etc/UTC
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+packages:
+  board: !include ../boards/esp32-c6.yaml
+  network: !include ../common/network-wifi.yaml
+  base: !include ../common/base.yaml
+  # The on-board WS2812, defined with `id: board_led` so this program can reference it. It stays a
+  # normal, user-visible light.
+  rgb: !include ../common/rgb-led.yaml
+  # One program on that LED: `id` names it (and is used as every `group:` reference), `name` is the
+  # prefix of every entity, `lights` is the list of ESPHome lights it drives. The template also
+  # writes the `klink: programs:` entry: model rgb, time_id local_time, 5s update interval.
+  led_program: !include
+    file: ../common/program-light-rgb.yaml
+    vars: {id: led_program, name: "Board LED", lights: [board_led]}

@@ -4,17 +4,34 @@
 # Substitutions you can override (defaults below):
 #   timezone     the schedule runs on local time, so set your own, e.g. Europe/Berlin
 #   auto_writes  "true" = listen first and take over the bus by itself once it has been quiet;
-#                "false" = never transmit until you turn the "Bus writes" switch on
+#                "false" = never transmit until you turn the "Send to lights" switch on
+#   klink_ref    the git branch, tag or commit of this repository to take the component from
+#                (default main); set it to test a branch, e.g. klink_ref: ux-redesign
 substitutions:
   timezone: Etc/UTC
   auto_writes: "false"
+  klink_ref: main
 
 external_components:
   - source:
       type: git
       url: https://github.com/nschimme/esphome-klink
-      ref: main
+      ref: ${klink_ref}
     components: [klink]
+
+# ESPHome's own device page (Home Assistant-style, version 3) for every entity. The esphome-klink page at /klink
+# is the program editor; this one is the plain list of controls. `local: true` serves the page from the
+# device, so it works on the setup access point without internet. To protect both pages, add
+# `auth: { username: ..., password: ... }` in your own config.
+web_server:
+  version: 3
+  local: true
+  sorting_groups:
+    - { id: controls, name: "Controls", sorting_weight: 10 }
+    - { id: program, name: "Program", sorting_weight: 20 }
+    - { id: behavior, name: "Light behavior", sorting_weight: 25 }
+    - { id: sky, name: "Sun and moon", sorting_weight: 27 }
+    - { id: bus, name: "Bus and setup", sorting_weight: 30 }
 
 logger:
   baud_rate: 0     # the USB pads are used for the bus, so there is no serial console
@@ -37,6 +54,7 @@ uart:
 klink:
   id: kl
   uart_id: klink_uart
+  timezone: ${timezone}
   auto_writes: ${auto_writes}
   direct_drive:
     positive_pin: ${dp_pin}
@@ -46,23 +64,67 @@ klink:
         format: "Found lamp KID %u in GID %u (type %u)"
         args: ["kid", "gid", "type"]
 
+number:
+  - { platform: klink, type: latitude, name: "Latitude", web_server: { sorting_group_id: sky } }
+  - { platform: klink, type: longitude, name: "Longitude", web_server: { sorting_group_id: sky } }
+
 switch:
   - platform: klink            # OFF = dry run (frames are logged, nothing is sent)
     type: writes
-    name: "Bus writes"
+    name: "Send to lights"
+    entity_category: diagnostic
     restore_mode: RESTORE_DEFAULT_OFF
-  - platform: klink            # gates "Find lamps"; switches itself off after 5 minutes
-    type: commissioning
-    name: "Commissioning mode"
-    restore_mode: ALWAYS_OFF
+    web_server: { sorting_group_id: bus }
 
 button:
-  - { platform: klink, type: scan, name: "Find lamps" }
-  - { platform: klink, type: identify_next, name: "Identify next lamp" }
+  - { platform: klink, type: retry, name: "Retry", entity_category: diagnostic, web_server: { sorting_group_id: bus } }
 
 text_sensor:
-  - { platform: klink, name: "Bus state" }
+  - { platform: klink, name: "Bus state", entity_category: diagnostic, web_server: { sorting_group_id: bus } }
+  # Where to find the esphome-klink page: shown in Home Assistant (device page, diagnostics) and on the
+  # ESPHome page. The device also advertises it over mDNS as an _http service with path /klink.
+  - platform: template
+    name: "Open esphome-klink"
+    icon: mdi:calendar-edit
+    entity_category: diagnostic
+    update_interval: 60s
+    web_server: { sorting_group_id: bus }
+    lambda: |-
+      char buf[network::IP_ADDRESS_BUFFER_SIZE];
+      for (auto &address : network::get_ip_addresses()) {
+        if (address.is_set())
+          return std::string("http://") + address.str_to(buf) + "/klink";
+      }
+      return std::string();
+
+# Advertise the programming page to network browsers (Bonjour / mDNS service discovery).
+mdns:
+  services:
+    - service: _http
+      protocol: _tcp
+      port: 80
+      txt:
+        path: /klink
+        project: esphome-klink
 
 sensor:
-  - { platform: klink, type: lamps, name: "Known lamps" }
-  - { platform: klink, type: bus_timeouts, name: "Bus timeouts" }
+  # The home location from Home Assistant (zone.home), for the sun and moon programs. Entities entered
+  # below (latitude, longitude) override it; the YAML latitude/longitude of the klink: block is the fallback.
+  - platform: homeassistant
+    id: ha_home_latitude
+    entity_id: zone.home
+    attribute: latitude
+    internal: true
+    on_value:
+      then:
+        - lambda: 'id(kl)->set_ha_coordinate(0, x);'
+  - platform: homeassistant
+    id: ha_home_longitude
+    entity_id: zone.home
+    attribute: longitude
+    internal: true
+    on_value:
+      then:
+        - lambda: 'id(kl)->set_ha_coordinate(1, x);'
+  - { platform: klink, type: lamps, name: "Known lamps", web_server: { sorting_group_id: bus } }
+  - { platform: klink, type: bus_timeouts, name: "Bus timeouts", web_server: { sorting_group_id: bus } }

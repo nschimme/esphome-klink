@@ -1,0 +1,36 @@
+# Weather from Home Assistant for the sun program: clouds dim the sun, and a thunderstorm can start the
+# Storm effect. Optional; include it next to your device package and name your weather entity:
+#
+#   packages:
+#     weather: !include
+#       file: common/weather.yaml
+#       vars: {weather_entity: weather.home}
+#
+# `weather_entity` has no default because the entity id depends on your Home Assistant. Only the weather
+# CONDITION is used (sunny, partlycloudy, cloudy, rainy, pouring, fog, lightning ...), which every weather
+# entity provides. A condition that is unknown or unavailable counts as clear.
+#
+# Entities (all off or modest until you change them):
+#   Follow weather        clouds take a share off the Sun program's intensity, easing in over minutes
+#   Max cloud dimming     the share taken at full overcast, 0 to 90 % (default 50)
+#   Storms from weather   when a thunderstorm begins, start the Storm effect (at most every 30 minutes, and only
+#                         for groups in Program mode); off by default
+#
+# To start Storm from your own automation instead, call `light.turn_on` with `effect: Storm` on the light.
+# This file needs the `klink:` hub (id kl) from common/base.yaml, which already reads your home location.
+
+text_sensor:
+  - platform: homeassistant
+    id: ha_weather_condition
+    entity_id: ${weather_entity}
+    internal: true
+    on_value:
+      then:
+        - lambda: 'id(kl)->set_weather_condition(x);'
+
+switch:
+  - { platform: klink, type: follow_weather, name: "Follow weather", restore_mode: RESTORE_DEFAULT_OFF, web_server: { sorting_group_id: sky } }
+  - { platform: klink, type: storms_from_weather, name: "Storms from weather", restore_mode: RESTORE_DEFAULT_OFF, web_server: { sorting_group_id: sky } }
+
+number:
+  - { platform: klink, type: cloud_dimming, name: "Max cloud dimming", web_server: { sorting_group_id: sky } }
