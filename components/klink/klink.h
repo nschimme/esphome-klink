@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -69,26 +70,40 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
   // Dry run: when writes are disabled every frame is logged and nothing is transmitted.
   // Monitor: listen for frames from other bus users and log them.
   void set_monitor(bool monitor) { monitor_ = monitor; }
-  // Returns false when the bus guard refuses (another controller heard, or still listening). A
-  // refused enable request stays pending and is retried from loop() until the bus has been quiet.
+  // Returns true once this leader controls the chain. Enabling starts a claim at once; it returns
+  // false while that claim is still announcing or waiting for another controller's writes to stop,
+  // and the request stays pending in loop(). A follower always returns false.
   bool set_writes_enabled(bool enabled);
   bool writes_enabled() const { return writes_enabled_; }
-  // For the web page: same as the Send to lights switch, and keeps the switch entity in step. Returns
-  // false when enabling is still waiting for a quiet bus (the request stays pending).
+  // The operator's intent (Send to lights), which stays true while a claim is pending or paused.
+  bool want_writes() const { return want_writes_; }
+  // For the web page: same as the Send to lights switch, and keeps the switch entity in step.
+  // Returns false while the claim is pending (the request stays pending).
   bool set_writes_from_ui(bool enabled) {
     bool ok = this->set_writes_enabled(enabled);
     this->writes_cb_.call(this->writes_enabled_);
     return ok;
   }
-  // Auto mode: ask for writes at boot and let the bus guard decide. While another controller (for
-  // example one of Kessil's own controllers) is heard the hub only shadows it; once the bus has been quiet it takes over by itself,
-  // and a controller that shows up later stops it. Turning the Send to lights switch off ends auto
-  // mode until the switch is turned on again or the device restarts.
+  // Auto mode: ask for writes at boot and let the chain guard decide. A leader announces itself
+  // and takes over when no other controller is writing; a controller that shows up later stops it.
+  // Turning the Send to lights switch off ends auto mode until the switch is turned on again or the
+  // device restarts.
   void set_auto_writes(bool on) { auto_writes_ = on; }
   bool auto_writes() const { return auto_writes_; }
   // One line for the dashboard: what the hub is doing with the bus right now.
   std::string state_text() const;
-  void set_guard_quiet_ms(uint32_t ms) { guard_.set_quiet_ms(ms); }
+  // Leader or follower. A follower never transmits; it only listens to group writes and follows them.
+  void set_role(kessil::klink::ChainRole role) { guard_.set_role(role); }
+  kessil::klink::ChainRole role() const { return guard_.role(); }
+  bool is_follower() const { return guard_.is_follower(); }
+  bool controlling() const { return guard_.controlling(); }
+  void set_beacon_interval_ms(uint32_t ms) { guard_.set_beacon_ms(ms); }
+  void set_claim_confirm_ms(uint32_t ms) { guard_.set_claim_confirm_ms(ms); }
+  void set_conflict_release_ms(uint32_t ms) { guard_.set_conflict_release_ms(ms); }
+  void set_guard_quiet_ms(uint32_t ms) { guard_.set_foreign_holdoff_ms(ms); }
+  // Spread the claim across equal devices; zero in tests.
+  void set_claim_jitter_ms(uint32_t ms) { guard_.set_jitter_ms(ms); }
+  kessil::klink::ChainState chain_state() const { return guard_.state(); }
   // Direct drive: no RS-485 transceiver. The C6's own D+/D- pads carry the differential pair: the
   // UART's TX signal goes to D+ and, inverted, to D-. Both pads are high-impedance except while a
   // frame is sent. The UART's tx_pin must be the D- pin (that is where the TX signal is read from).
@@ -96,14 +111,25 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
     dp_pin_ = dp_pin;
     dm_pin_ = dm_pin;
   }
-  uint32_t foreign_frames() const { return guard_.foreign_frames(); }
-  bool other_controller_recent() const { return guard_.other_controller_recent(millis()); }
-  bool conflict_latched() const { return guard_.conflict_latched(); }
+  uint32_t foreign_frames() const { return guard_.foreign_writes(); }
+  bool other_controller_recent() const { return guard_.foreign_recent(millis(), guard_.foreign_holdoff_ms()); }
+  bool conflict_latched() const { return guard_.conflict(); }
+  uint32_t beacons_heard() const { return guard_.beacons_heard(); }
+  uint32_t beacons_sent() const { return guard_.beacons_sent(); }
+  uint32_t conflicts() const { return guard_.conflicts(); }
   // Commissioning gates assignment and switches itself off after a timeout.
   void set_commissioning(bool enabled);
   bool commissioning() const { return commissioning_; }
 
   void register_group(KLinkGroup *group) { groups_.push_back(group); }
+  // Followers (a follower's K-Link light, or a native ESPHome light bound to a bus group) are told
+  // about every group write this hub sends or hears. `channels` points at five bytes and is only
+  // valid for the callback.
+  void add_on_group_frame_callback(std::function<void(uint8_t, const uint8_t *)> &&cb) {
+    group_frame_cbs_.push_back(std::move(cb));
+  }
+  // The last five-channel value seen for `gid`, and how old it is. False when nothing was seen.
+  bool group_frame(uint8_t gid, uint8_t out[5], uint32_t &age_ms) const;
   void register_program(ProgramHost *program) {
     programs_.push_back(program);
     program->set_location_provider(this);
@@ -214,6 +240,7 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
   void direct_setup_();
   void direct_drive_(bool on);
   void observe_(const std::vector<uint8_t> &frame);
+  void note_group_frame_(uint8_t gid, const uint8_t channels[5]);
   void save_inventory_();
   void save_names_();
   void save_group_names_();
@@ -256,7 +283,15 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
   bool want_writes_{false};
   bool auto_writes_{false};
   uint32_t last_guard_log_ms_{0};
-  kessil::klink::BusGuard guard_;
+  kessil::klink::ChainGuard guard_;
+  struct CachedGroup {
+    bool valid{false};
+    uint8_t channels[5]{0, 0, 0, 0, 0};
+    uint32_t seen_ms{0};
+  };
+  static const uint8_t GROUP_CACHE_SIZE = kessil::klink::MAX_GID + 1;
+  CachedGroup group_cache_[GROUP_CACHE_SIZE];
+  std::vector<std::function<void(uint8_t, const uint8_t *)>> group_frame_cbs_;
   bool commissioning_{false};
   uint32_t commissioning_deadline_{0};
 
@@ -289,9 +324,12 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
 // published channel layouts and are untested.
 enum class GroupModel : uint8_t {
   TUNA_SUN,   // UI1 intensity, UI2 color temperature, UI4 red, UI5 amber (UI3 unused)
-  TUNA_BLUE,  // UI1 intensity, UI2 blue to white, UI3 violet, UI4 red, UI5 green
+  TUNA_BLUE,  // UI1 intensity, UI2 blue to white, UI3 violet, UI4 red, UI5 green; the AP9X is a Tuna Blue
   REFUGIUM,   // UI1 intensity, UI2 blue to red (0-240), UI4 white, UI5 green (UI3 unused)
 };
+
+// The color model behind a K-Link group's CLR/overlay channels.
+const kessil::klink::ColorSpec *group_color_spec(GroupModel model);
 
 // The color models of the Tuna lights (tables generated at compile time from klink_colors.py).
 extern const kessil::klink::ColorSpec COLOR_SUN;
@@ -362,7 +400,8 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
     }
     return "Group " + std::to_string(this->gid_);
   }
-  // Web API: the model key used in YAML ("tuna_sun", "tuna_blue", "refugium").
+  // Web API: the model key used in YAML ("tuna_sun", "tuna_blue", "refugium"). An AP9X uses the
+  // Tuna Blue model and reports "tuna_blue".
   std::string model_name() const override {
     switch (this->model_) {
       case GroupModel::TUNA_SUN:
@@ -472,6 +511,9 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   // effects in Home Assistant). On the Tuna lights an RGB color from Home Assistant is snapped to the
   // nearest color the lamp can make (klink_colors.h) and the snapped color is shown here.
   void publish_to_light_(const uint8_t channels[5]);
+  // A group write heard on the bus. A follower follows it; a leader that is not controlling (for
+  // example while yielding to another controller) shows it too.
+  void on_bus_frame_(const uint8_t channels[5]);
   void show_on_light_(bool on, float brightness, light::ColorMode mode, float mireds, const float rgb[3]);
   bool shown_matches_(const LightShown &shown, const light::LightColorValues &values) const;
   const kessil::klink::ColorSpec *color_spec_() const;
@@ -886,6 +928,35 @@ template<typename... Ts> class ConfirmAssignmentAction : public Action<Ts...>, p
  public:
   using Parented<KLinkHub>::Parented;
   void play(const Ts &...x) override { this->parent_->confirm_assignment(); }
+};
+
+// A follower binds a K-Link group to one or more ordinary ESPHome lights. It never writes to the
+// bus: it listens for the group's command-1F frames (from the leader, or from another controller
+// while a leader is yielding) and shows them with the class the lights actually support. This is
+// how a follower exposes a native light as RGB, color temperature or brightness-only without the
+// user having to pick a model by hand.
+class KLinkLightFollower : public Component {
+ public:
+  void set_hub(KLinkHub *hub) { hub_ = hub; }
+  void set_gid(uint8_t gid) { gid_ = gid; }
+  void set_model(GroupModel model) { model_ = model; }
+  void add_light(light::LightState *light) { lights_.push_back(light); }
+  void set_transition_ms(uint32_t ms) { transition_ms_ = ms; }
+
+  void setup() override;
+  void dump_config() override;
+  float get_setup_priority() const override { return setup_priority::DATA; }
+
+ protected:
+  void apply_(const uint8_t channels[5]);
+  KLinkHub *hub_{nullptr};
+  uint8_t gid_{0};
+  GroupModel model_{GroupModel::TUNA_SUN};
+  std::vector<light::LightState *> lights_;
+  std::vector<uint8_t> caps_;
+  std::vector<kessil::klink::CtRange> ranges_;
+  kessil::klink::LightModel output_model_{kessil::klink::LightModel::BRIGHTNESS};
+  uint32_t transition_ms_{0};
 };
 
 }  // namespace klink

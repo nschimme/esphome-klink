@@ -15,8 +15,8 @@ A point is `HH:MM` plus values, written as `key=value` pairs. Anything you leave
 | Tuna Blue | `int` `clr` `vio` `r` `grn` | int and clr 0-255; violet, red and green 0-100 |
 | Refugium | `int` `clr` `w` `grn` | int 0-255; clr 0-240 (blue to red); white and green 0-100 |
 
-Examples: `09:00 int=51 clr=12 r=10 am=30` (Tuna Sun), `13:00 int=153 clr=178 vio=60 r=5 grn=5` (Tuna Blue),
-`09:00 int=102 clr=150 w=10` (Refugium). The plain five-number form `HH:MM 51 12 0 10 30` also works. `off` (or an
+Examples: `09:00 int=51 clr=12 r=10 am=30` (Tuna Sun), `13:00 int=153 clr=178 vio=60 r=5 grn=5` (Tuna Blue or
+AP9X), `09:00 int=102 clr=150 w=10` (Refugium). The plain five-number form `HH:MM 51 12 0 10 30` also works. `off` (or an
 empty text) leaves a slot unused. Values out of range are rejected, not clamped. With one point enabled the lamp
 holds it all day; with none the group has nothing to run.
 

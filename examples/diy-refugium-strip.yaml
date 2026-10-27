@@ -1,0 +1,35 @@
+# A DIY refugium strip that follows a lamp-free K-Link group on the chain leader.
+# The leader includes common/refugium-channel.yaml (GID 3, reverse photoperiod); this board is a
+# follower and never transmits. See docs/diy-lights.md.
+substitutions:
+  name: diy-refugium-strip
+  friendly_name: Refugium strip
+  timezone: Etc/UTC
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+packages:
+  board: !include ../boards/esp32-c6.yaml
+  network: !include ../common/network-wifi.yaml
+  base: !include ../common/follower-base.yaml
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: refugium_strip
+    name: "Refugium strip"
+    pin: GPIO4
+    num_leds: 60
+    chipset: WS2812
+    rgb_order: GRB
+    restore_mode: ALWAYS_OFF
+    default_transition_length: 1s
+
+klink:
+  followers:
+    - id: refugium_follow
+      gid: 3              # common/refugium-channel.yaml on the leader
+      model: tuna_sun     # warm white plus red/amber for macroalgae
+      lights: [refugium_strip]
+      transition: 1s

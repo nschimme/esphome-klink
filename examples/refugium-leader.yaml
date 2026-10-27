@@ -1,0 +1,18 @@
+# A chain leader with a Tuna Sun display group (GID 2) and a lamp-free refugium channel (GID 3).
+# The refugium channel runs a reverse photoperiod; a follower strip such as
+# examples/diy-refugium-strip.yaml follows GID 3. See docs/diy-lights.md.
+substitutions:
+  name: refugium-leader
+  friendly_name: Refugium leader
+  timezone: Etc/UTC
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+packages:
+  board: !include ../boards/esp32-c6.yaml
+  network: !include ../common/network-wifi.yaml
+  base: !include ../common/base.yaml
+  display: !include ../common/tuna-sun.yaml
+  refugium: !include ../common/refugium-channel.yaml

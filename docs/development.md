@@ -14,14 +14,15 @@
 The component is split into **pure logic** with no ESPHome dependency, which the host tests compile directly, and
 the **ESPHome glue** that wires it to the bus, the lights and the entities.
 
-- Pure logic: `klink_frame.h`, `klink_bus.h`, `klink_guard.h` (the K-Link protocol and the bus guard),
+- Pure logic: `klink_frame.h`, `klink_bus.h`, `klink_guard.h` (the K-Link protocol and the chain-ownership
+  state machine),
   `klink_schedule.h` (points and interpolation), `klink_mode.h`, `klink_output.h` (fades), `klink_colors.h`,
   `klink_light_map.h`, `klink_effects.h`, `klink_astro.h` (sun and moon positions), `klink_dynamic.h` (sun and moon
   days as points), `klink_sky.h`, `klink_weather.h`, `klink_acclimation.h`, `klink_inventory.h`, `klink_names.h`,
   `klink_http.h`.
-- Glue: `klink.h` / `klink.cpp` (the hub, the bus group and the entities), `klink_program_base.h` / `.cpp`
-  (everything a program does: points, mode, preview, sources, acclimation, status), `klink_light_program.h` / `.cpp`,
-  `klink_web.cpp` (the page and the JSON API).
+- Glue: `klink.h` / `klink.cpp` (the hub, the bus group, the native-light follower and the entities),
+  `klink_program_base.h` / `.cpp` (everything a program does: points, mode, preview, sources, acclimation, status),
+  `klink_light_program.h` / `.cpp`, `klink_web.cpp` (the page and the JSON API).
 
 Rules that keep the device stable:
 
@@ -29,7 +30,8 @@ Rules that keep the device stable:
   main loop. Heavy work (a generated day for the date preview) also runs on the main loop, and the page asks again
   until the answer is ready.
 - Do not change the protocol layer (`klink_frame.h`, `klink_bus.h`, `klink_guard.h`) without checking against a real
-  lamp.
+  lamp. `test_klink_guard.cpp` covers the ownership state machine; `test_klink_light_map.cpp` covers the
+  channel-to-appearance mapping used by followers.
 - Nothing generated is committed: the page is assembled and gzipped during `esphome compile`, and the color tables
   and golden vectors are generated from `klink_colors.py` at test time.
 
@@ -80,6 +82,19 @@ python3 tools/mock_server.py --no-location   # no location: the Sun and Moon "Se
 ```
 
 The mock's generated sun and moon days are illustrative shapes, not real astronomy.
+
+### Hosted demo
+
+`tools/build_demo.py` turns the same mock into a static page for GitHub Pages: it runs
+`tools/mock_server.py` in the browser through Pyodide, so the page's own code is unchanged. The demo's banner says
+that nothing is connected, and the sun and moon days are illustrative. Try it locally with:
+
+```sh
+python3 tools/build_demo.py _site && python3 -m http.server -d _site
+```
+
+`.github/workflows/pages.yml` publishes `_site/` on every push to `main` and on manual dispatch. Nothing generated is
+committed.
 
 ## CI
 

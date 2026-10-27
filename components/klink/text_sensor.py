@@ -13,8 +13,8 @@ CONF_GROUP = "group"
 KLinkStateSensor = klink_ns.class_("KLinkStateSensor", text_sensor.TextSensor, cg.PollingComponent)
 KLinkGroupStatus = klink_ns.class_("KLinkGroupStatus", text_sensor.TextSensor, cg.PollingComponent)
 
-# One line describing what the hub is doing with the bus: controlling, shadowing another controller,
-# waiting for a quiet bus, writes off, or a latched conflict.
+# One line describing what the hub is doing with the chain: controlling, claiming, paused by a
+# foreign write, writes off, or following as a follower.
 HUB_SCHEMA = (
     text_sensor.text_sensor_schema(KLinkStateSensor)
     .extend({cv.GenerateID(CONF_KLINK_ID): cv.use_id(KLinkHub)})

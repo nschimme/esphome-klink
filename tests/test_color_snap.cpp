@@ -119,7 +119,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < 17; i++) {
       uint8_t target[3] = {specs[m]->stops[i][0], specs[m]->stops[i][1], specs[m]->stops[i][2]};
       SnapResult got = nearest_i(*specs[m], target);
-      if (got.dist > (m == 2 ? 2u : 0u)) {  // the Refugium's stops sit between whole CLR steps
+      if (got.dist > (specs[m] == &COLOR_REFUGIUM ? 2u : 0u)) {  // the Refugium's stops sit between whole CLR steps
         std::printf("FAIL gradient stop %d of model %d not exact (%u)\n", i, m, got.dist);
         failures++;
       }

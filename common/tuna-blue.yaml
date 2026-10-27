@@ -4,7 +4,9 @@
 #
 # This is a thin wrapper around the reusable template common/group-tuna-blue.yaml. To add another
 # Tuna Blue group, include the template directly with its vars (see the template header and
-# docs/configuration.md); this file keeps the default group.
+# docs/configuration.md); this file keeps the default group. An AP9X is the same type 1 and uses
+# the same five channels, so use this package for an AP9X too. A leader board announces itself on
+# K-Link, so an AP9X that is acting as the chain controller hands control over.
 #
 # Substitutions you can override:
 #   tuna_blue_gid   the K-Link group this controls (default 1). Changing it moves the group; the

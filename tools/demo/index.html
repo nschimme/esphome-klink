@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K-Link page demo</title>
+<style>
+:root {
+  --bg: #f6f7f8;
+  --fg: #1c1f23;
+  --muted: #5a6169;
+  --panel: #ffffff;
+  --border: #d8dde3;
+  --link: #0b62c4;
+  --error: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181c;
+    --fg: #e7e9ec;
+    --muted: #a3aab3;
+    --panel: #1e2126;
+    --border: #33383f;
+    --link: #7cb3ff;
+    --error: #ff8a80;
+  }
+}
+html, body { height: 100%; }
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--fg);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.banner {
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+.banner a { color: var(--link); }
+#status {
+  margin: auto;
+  padding: 24px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+#status.error { color: var(--error); }
+#page {
+  display: none;
+  flex: 1 1 auto;
+  width: 100%;
+  border: 0;
+  background: var(--bg);
+}
+</style>
+</head>
+<body>
+<div class="banner">
+  Demo: simulated lights, nothing is connected. Changes reset when you reload. The sun and moon
+  days are illustrative, not real astronomy.
+  <a href="https://github.com/nschimme/esphome-klink">Source on GitHub</a>
+</div>
+<p id="status">Loading the demo (about 10 MB the first time)...</p>
+<iframe id="page" title="K-Link page demo"></iframe>
+<script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
+<script>
+(function () {
+  "use strict";
+  var statusEl = document.getElementById("status");
+  var frame = document.getElementById("page");
+
+  function fail(message) {
+    statusEl.className = "error";
+    statusEl.textContent = "The demo did not load: " + message;
+  }
+
+  // The demo is served from a subpath (https://nschimme.github.io/esphome-klink/), while the mock
+  // answers repository paths like /klink/state. Drop origin and base path, keep the query.
+  function mockTarget(url) {
+    var parsed = new URL(String(url), window.location.href);
+    var base = window.location.pathname.replace(/[^/]*$/, "");
+    var path = parsed.pathname;
+    if (base !== "/" && path.indexOf(base) === 0) path = "/" + path.slice(base.length);
+    return path + parsed.search;
+  }
+
+  function writeBundle(FS, files) {
+    Object.keys(files).forEach(function (name) {
+      var path = "/app/" + name;
+      FS.mkdirTree(path.slice(0, path.lastIndexOf("/")));
+      FS.writeFile(path, files[name], { encoding: "utf8" });
+    });
+  }
+
+  // Python returns JSON so the shell gets plain values, not proxies.
+  var DISPATCH_PY = [
+    "import json",
+    "import sys",
+    "",
+    'sys.path.insert(0, "/app/tools")',
+    "import mock_server",
+    "",
+    "def _dispatch_json(method, target, body):",
+    "    status, content_type, text = mock_server.dispatch(method, target, body)",
+    "    return json.dumps([status, content_type, text])",
+  ].join("\n");
+
+  async function start() {
+    if (typeof loadPyodide !== "function") {
+      throw new Error("Pyodide could not be loaded (offline, or the CDN is blocked).");
+    }
+    var pyodide = await loadPyodide();
+    var response = await fetch("bundle.json");
+    if (!response.ok) throw new Error("bundle.json: HTTP " + response.status);
+    writeBundle(pyodide.FS, await response.json());
+    pyodide.runPython(DISPATCH_PY);
+    var dispatchJson = pyodide.globals.get("_dispatch_json");
+
+    // Replaces window.fetch inside the iframe. Cache options are ignored: every request goes to
+    // the in-memory mock.
+    window.__klinkFetch = function (url, opts) {
+      opts = opts || {};
+      var method = String(opts.method || "GET").toUpperCase();
+      var body = opts.body == null ? null : String(opts.body);
+      var result = JSON.parse(dispatchJson(method, mockTarget(url), body));
+      // fetch() returns a promise; the page chains .then() on it.
+      return Promise.resolve(new Response(result[2], {
+        status: result[0],
+        headers: { "Content-Type": result[1] },
+      }));
+    };
+
+    var page = JSON.parse(dispatchJson("GET", "/klink", null))[2];
+    var shim = '<script>window.fetch=function(u,o){return window.parent.__klinkFetch(String(u),o||{});};<\/script>';
+    frame.srcdoc = page.replace(/<head[^>]*>/i, function (tag) { return tag + shim; });
+    frame.onload = function () {
+      statusEl.hidden = true;
+      frame.style.display = "block";
+    };
+  }
+
+  start().catch(function (err) {
+    fail((err && err.message) || String(err));
+  });
+})();
+</script>
+</body>
+</html>

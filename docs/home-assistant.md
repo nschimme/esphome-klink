@@ -10,10 +10,11 @@ section with the entities below, prefixed with the group's name (for example "Tu
 - **Tuna Sun:** color temperature is the color control (6,000 K to 9,000 K, assumed linear in mireds, not
   measured). The light also accepts an **RGB color**: it is snapped to the nearest color the lamp can make, using
   color temperature plus red and amber, and the snapped color is shown on the light.
-- **Tuna Blue:** an RGB light whose color is snapped to the nearest color the lamp can make.
+- **Tuna Blue:** an RGB light whose color is snapped to the nearest color the lamp can make. The AP9X uses this
+  model and channel layout.
 - **Refugium:** an RGB light whose color is snapped to the nearest color the lamp can make.
-- **Effects.** Storm, Cloud and Aurora on every model, plus Rainbow, Moon Red and Moon Blue only on the Tuna Blue (they
-  drive UI3-UI5, which a Tuna Sun does not have). The standard ESPHome effects `pulse` and `flicker` are included
+- **Effects.** Storm, Cloud and Aurora on every model, plus Rainbow, Moon Red and Moon Blue on the Tuna Blue model,
+  which drives UI3-UI5; a Tuna Sun does not have those channels. The standard ESPHome effects `pulse` and `flicker` are included
   too. A sunrise is a `light.turn_on` with a long `transition_length`.
 
 An effect is a **temporary overlay** on the program. Starting one does not change the group's mode. While it runs,
@@ -41,22 +42,22 @@ effects reach the lamps at no more than 25 frames a second, and the built-in eff
 ## Program
 
 - **Program source** chooses where the schedule comes from: **My points**, **Sun** or **Moon**. A Tuna Sun and
-  lights that cannot make blue offer only My points and Sun. See [daily programs](daily-programs.md).
+  lights that cannot make blue offer only My points and Sun; a Tuna Blue also offers Moon. See
+  [daily programs](daily-programs.md).
 - **Point 1 to 16** are text entities, one per program point, in the form `HH:MM int=51 clr=12 r=10 am=30`, or
   `off`. Points 9 to 16 are *off by default*. Edits made in Home Assistant are saved to flash and take precedence
   over the shipped values.
 - **Program point**, **point time**, **point enabled** and the **point INT / CLR / R / AM** numbers (on the Tuna
-  Blue: INT, CLR, violet, red, green) are the point editor: choose a point, then edit its time, whether it is on,
+  Blue model: INT, CLR, violet, red, green) are the point editor: choose a point, then edit its time, whether it is on,
   and its channel values. Editing a point shows it on the lamps at once (live preview); after about a minute
   without edits the group returns to its previous mode. Changes are saved a couple of seconds later.
 
 ## Manual channels (*off by default*)
 
-**Red** and **amber** on the Tuna Sun; **color (raw 0-255)**, **violet**, **red** and **green** on the Tuna Blue;
-**color (raw 0-240)**, **white** and **green** on the Refugium.
+**Red** and **amber** on the Tuna Sun; **color (raw 0-255)**, **violet**, **red** and **green** on the Tuna Blue; **color (raw 0-240)**, **white** and **green** on the Refugium.
 Setting one switches the group to Manual. Values are raw: INT and CLR run 0 to 255; red, amber, violet and green run
-0 to 100. On the Tuna Blue the channel order follows Kessil's controller screen (violet, red, green); how those
-channels map to the lamp is untested.
+0 to 100. On the Tuna Blue the channel order follows Kessil's controller screen (violet, red, green); how
+those channels map to the lamp is untested.
 
 ## Light behavior
 
@@ -80,12 +81,16 @@ Programs on ordinary lights have the acclimation entities too. See [daily progra
 
 | Entity | Meaning |
 |---|---|
-| **Send to lights** | Off is a dry run that only logs frames. On, the controller writes to the bus. It is a diagnostic entity: the setting is remembered, and after a restart the controller turns it back on by itself once the bus has been quiet for 15 seconds. It stays off only if you turned it off, another controller is heard, or it has never been turned on. |
-| **Retry** | Clears a bus conflict after the other controller is gone. |
-| **Bus state** | What the bus guard is doing: waiting for a quiet bus, controlling, or a conflict. A diagnostic entity. |
+| **Send to lights** | Off is a dry run that only logs frames. On, a leader announces itself and claims the chain. It is a diagnostic entity: the setting is remembered, and after a restart an auto-writes leader claims by itself. A follower built from `common/follower-base.yaml` has no such switch, only **Bus state**. |
+| **Retry** | Claims the chain again now after a conflict, without waiting for the release timer. Leaders only. |
+| **Bus state** | What the chain guard is doing: `Leader: controlling`, `Leader: claiming…`, a conflict with a retry countdown, or `Follower: following the chain`. A diagnostic entity. |
 | **Known lamps**, **Bus timeouts** | Diagnostics. |
 | **Open esphome-klink** | A link to the device's [web page](web-pages.md). |
 | **Latitude**, **Longitude** | Your location for the Sun and Moon programs. Empty until you enter a value; they override Home Assistant's home location. |
+
+On a **follower**, a K-Link group light is read-only and shows the leader's value. Native ESPHome lights
+bound with `klink: followers:` behave like ordinary lights, but their state is driven by the group
+they follow. See [leader and follower](leader-follower.md).
 
 With [`common/weather.yaml`](daily-programs.md#weather) included: **Follow weather**, **Max cloud dimming** and
 **Storms from weather**.

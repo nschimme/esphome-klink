@@ -101,6 +101,9 @@ jobs:
       - name: Page assembler tests
         run: python3 tests/test_web_build.py
 
+      - name: Mock dispatcher tests
+        run: python3 tests/test_mock_dispatch.py
+
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
@@ -139,6 +142,10 @@ jobs:
           - examples/two-groups.yaml
           - examples/three-groups.yaml
           - examples/light-program.yaml
+          - examples/follower.yaml
+          - examples/diy-planted-strip.yaml
+          - examples/diy-refugium-strip.yaml
+          - examples/refugium-leader.yaml
     steps:
       - uses: actions/checkout@v4
 

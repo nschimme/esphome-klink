@@ -33,6 +33,11 @@ def AUTO_LOAD(config):
 
 
 CONF_KLINK_ID = "klink_id"
+CONF_ROLE = "role"
+CONF_BEACON_INTERVAL = "beacon_interval"
+CONF_CLAIM_CONFIRM = "claim_confirm"
+CONF_CONFLICT_RELEASE = "conflict_release"
+CONF_FOLLOWERS = "followers"
 CONF_KLINK_WEB_ID = "klink_web_id"
 CONF_WRITES_ENABLED = "writes_enabled"
 CONF_MONITOR = "monitor"
@@ -58,6 +63,16 @@ CONF_TRANSITION = "transition"
 klink_ns = cg.esphome_ns.namespace("klink")
 KLinkHub = klink_ns.class_("KLinkHub", cg.Component, uart.UARTDevice)
 KLinkWeb = klink_ns.class_("KLinkWeb", cg.Component)
+KLinkLightFollower = klink_ns.class_("KLinkLightFollower", cg.Component)
+
+# ChainRole lives in the host-testable kessil::klink namespace.
+ChainRole = cg.global_ns.namespace("kessil").namespace("klink").enum("ChainRole", is_class=True)
+GroupModel = klink_ns.enum("GroupModel", is_class=True)
+GROUP_MODELS = {
+    "tuna_sun": GroupModel.TUNA_SUN,   # UI1 intensity, UI2 color temperature, UI4 red, UI5 amber
+    "tuna_blue": GroupModel.TUNA_BLUE,  # UI1 intensity, UI2 blue to white, UI3 violet, UI4 red, UI5 green; the AP9X uses this
+    "refugium": GroupModel.REFUGIUM,    # UI1 intensity, UI2 blue to red, UI4 white, UI5 green
+}
 
 # The interface every program host implements (KLinkGroup on the bus, KLinkLightProgram on ordinary
 # lights). Declared here so both light.py and the hub schema can name it without a circular import.
@@ -97,6 +112,24 @@ PROGRAM_SCHEMA = (
     .extend(cv.COMPONENT_SCHEMA)
 )
 
+# A follower binds a K-Link group to ordinary ESPHome lights. It never writes to the bus; it shows
+# the leader's group writes with the class the lights actually support. The source group's model
+# says what UI2-UI5 mean.
+FOLLOWER_SCHEMA = (
+    cv.Schema(
+        {
+            cv.GenerateID(): cv.declare_id(KLinkLightFollower),
+            cv.Required(CONF_GID): cv.int_range(1, 40),
+            cv.Required(CONF_MODEL): cv.one_of(*GROUP_MODELS, lower=True),
+            cv.Required(CONF_LIGHTS): cv.All(
+                cv.ensure_list(cv.use_id(light.LightState)), cv.Length(min=1)
+            ),
+            cv.Optional(CONF_TRANSITION, default="0s"): cv.positive_time_period_milliseconds,
+        }
+    )
+    .extend(cv.COMPONENT_SCHEMA)
+)
+
 LampFoundTrigger = klink_ns.class_(
     "LampFoundTrigger", automation.Trigger.template(cg.uint32, cg.uint8, cg.uint8)
 )
@@ -121,6 +154,15 @@ def _add_web_objects(config):
     return config
 
 
+def _validate_role(config):
+    if config[CONF_ROLE] == "follower":
+        if config[CONF_AUTO_WRITES]:
+            raise cv.Invalid("role: follower cannot use auto_writes; a follower never transmits")
+        if config[CONF_WRITES_ENABLED]:
+            raise cv.Invalid("role: follower cannot start with writes_enabled; a follower never transmits")
+    return config
+
+
 CONFIG_SCHEMA = cv.All(
     cv.Schema(
         {
@@ -131,13 +173,13 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_WRITES_ENABLED, default=False): cv.boolean,
             # Listen for and log every frame on the bus (other controllers' traffic, lamp replies).
             cv.Optional(CONF_MONITOR, default=False): cv.boolean,
-            # Take over the bus by itself once it has been quiet (no switch to flip). While another
-            # controller is heard, only shadow it. Overrides writes_enabled.
+            # Announce and claim the chain by itself at boot (no switch to flip). While another
+            # controller is writing, wait; if one appears later, pause and retry.
             cv.Optional(CONF_AUTO_WRITES, default=False): cv.boolean,
-            # Writes wait until the bus has been free of other controllers this long, and stop at
-            # once if another controller is heard.
+            # A foreign group write (not a presence beacon) this recent keeps a leader from
+            # claiming. Three seconds is three missed writes at the usual cadence.
             cv.Optional(
-                CONF_GUARD_QUIET_TIME, default="15s"
+                CONF_GUARD_QUIET_TIME, default="3s"
             ): cv.positive_time_period_milliseconds,
             # No transceiver: drive the bus straight from two ESP32 pads (D+ and D-, complementary).
             # Plain pin numbers: the uart already owns these pads. The pads can be asked for more current than a GPIO allows if the lamps terminate the
@@ -161,16 +203,29 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_ON_SCAN_DONE): automation.validate_automation(
                 {cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(ScanDoneTrigger)}
             ),
+            # Leader or follower. A follower never transmits; it listens to group writes and follows.
+            cv.Optional(CONF_ROLE, default="leader"): cv.one_of("leader", "follower", lower=True),
+            # How often this leader announces itself with the K-Link presence beacon.
+            cv.Optional(CONF_BEACON_INTERVAL, default="1s"): cv.positive_time_period_milliseconds,
+            # How long to announce before the first group write, and how long to wait after a
+            # foreign controller has written before taking the chain.
+            cv.Optional(CONF_CLAIM_CONFIRM, default="2s"): cv.positive_time_period_milliseconds,
+            # A write by another controller while this one is controlling pauses writes; try again
+            # after this long without another foreign write.
+            cv.Optional(CONF_CONFLICT_RELEASE, default="10s"): cv.positive_time_period_milliseconds,
             # Programs that drive ordinary ESPHome lights directly (no K-Link bus). Entities attach
             # with `group: <program id>`, just like a bus group.
             # No default: a hub without programs keeps an unchanged config dump.
             cv.Optional(CONF_PROGRAMS): cv.All(
                 cv.ensure_list(PROGRAM_SCHEMA), cv.Length(max=MAX_PROGRAMS)
             ),
+            # Native ESPHome lights that follow one K-Link group (usually on a follower).
+            cv.Optional(CONF_FOLLOWERS): cv.All(cv.ensure_list(FOLLOWER_SCHEMA), cv.Length(max=16)),
         }
     )
     .extend(cv.COMPONENT_SCHEMA)
     .extend(uart.UART_DEVICE_SCHEMA),
+    _validate_role,
     _add_web_objects,
 )
 
@@ -229,6 +284,10 @@ async def to_code(config):
     if CONF_LATITUDE in config and CONF_LONGITUDE in config:
         cg.add(var.set_yaml_location(config[CONF_LATITUDE], config[CONF_LONGITUDE]))
     cg.add(var.set_auto_writes(config[CONF_AUTO_WRITES]))
+    cg.add(var.set_role(ChainRole.FOLLOWER if config[CONF_ROLE] == "follower" else ChainRole.LEADER))
+    cg.add(var.set_beacon_interval_ms(config[CONF_BEACON_INTERVAL]))
+    cg.add(var.set_claim_confirm_ms(config[CONF_CLAIM_CONFIRM]))
+    cg.add(var.set_conflict_release_ms(config[CONF_CONFLICT_RELEASE]))
     cg.add(var.set_guard_quiet_ms(config[CONF_GUARD_QUIET_TIME]))
     if CONF_DIRECT_DRIVE in config:
         dd = config[CONF_DIRECT_DRIVE]
@@ -258,6 +317,16 @@ async def to_code(config):
         component_conf = dict(prog)
         component_conf.pop(CONF_UPDATE_INTERVAL, None)
         await cg.register_component(pvar, component_conf)
+
+    for follower in config.get(CONF_FOLLOWERS, []):
+        fvar = cg.new_Pvariable(follower[CONF_ID])
+        await cg.register_component(fvar, follower)
+        cg.add(fvar.set_hub(var))
+        cg.add(fvar.set_gid(follower[CONF_GID]))
+        cg.add(fvar.set_model(GROUP_MODELS[follower[CONF_MODEL]]))
+        cg.add(fvar.set_transition_ms(follower[CONF_TRANSITION]))
+        for light_id in follower[CONF_LIGHTS]:
+            cg.add(fvar.add_light(await cg.get_variable(light_id)))
 
     # The color tables of the Tuna lights and the Refugium: Home Assistant's RGB colors are snapped to the nearest
     # color a lamp can make (in every build, with or without the web page). klink.h declares

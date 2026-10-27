@@ -47,7 +47,6 @@ namespace kk = kessil::klink;
 static const uint32_t DEFAULT_MIN_KID = 18000000;
 static const uint32_t DEFAULT_MAX_KID = 36000000;  // inclusive
 static const uint32_t COMMISSIONING_TIMEOUT_MS = 5 * 60 * 1000;
-
 // ---- UartIo ---------------------------------------------------------------------------------
 
 uint32_t UartIo::now_ms() { return millis(); }
@@ -58,24 +57,40 @@ void UartIo::write(const std::vector<uint8_t> &frame) { this->hub_->tx_frame(fra
 
 void KLinkHub::setup() {
   this->guard_.start(millis());
-  this->want_writes_ = this->auto_writes_;  // the loop below enables writes once the bus is quiet
+  // Spread equal devices so two leaders that boot together do not keep claiming in lockstep.
+  this->guard_.set_jitter_ms(random_uint32() % 700u);
+  this->want_writes_ = (this->auto_writes_ || this->writes_enabled_) && !this->is_follower();
+  this->guard_.set_want_writes(this->want_writes_);
   if (this->dp_pin_ >= 0)
     this->direct_setup_();
-  // Always listen: frames from other controllers feed the bus guard, and the monitor logs them.
+  // Always listen: frames from other controllers feed the chain guard, and the monitor logs them.
   this->bus_.set_frame_callback([this](const std::vector<uint8_t> &frame) {
     if (this->monitor_) {
       ESP_LOGI(TAG, "bus @%u: %s  [%s]", static_cast<unsigned>(millis()), format_hex_pretty(frame.data(), frame.size()).c_str(),
                kk::describe_frame(frame).c_str());
     }
-    this->observe_(frame);
-    if (kk::looks_like_controller_frame(frame) && this->guard_.on_foreign_frame(millis())) {
-      // Another controller started talking while we were writing: stop at once and latch.
-      this->writes_enabled_ = false;
-      this->want_writes_ = false;
-      ESP_LOGE(TAG, "BUS CONFLICT: another controller was heard while writing (%s). Send to lights is OFF.",
-               kk::describe_frame(frame).c_str());
-      this->writes_cb_.call(false);
+    const uint32_t now = millis();
+    if (kk::looks_like_controller_frame(frame)) {
+      // Command 34 is an announcement/handover request, not proof that another controller is
+      // driving. An AP9X may keep announcing while it yields, so it never starts a conflict here.
+      if (frame.size() == 7 && frame[4] == kk::CMD_CONTROLLER_PROBE) {
+        this->guard_.on_beacon(now);
+      } else {
+        const kk::ChainState before = this->guard_.state();
+        this->guard_.on_foreign_write(now);
+        if (this->guard_.state() == kk::ChainState::CONFLICT && before != kk::ChainState::CONFLICT) {
+          // Another controller wrote while this one was controlling. Stop immediately, but keep
+          // the operator's write intent: the guard claims again once the other is quiet.
+          this->writes_enabled_ = false;
+          ESP_LOGE(TAG, "BUS CONFLICT: another controller wrote while this one was controlling (%s). Writes paused.",
+                   kk::describe_frame(frame).c_str());
+          this->writes_cb_.call(false);
+        }
+      }
     }
+    // Update the group cache after the guard, so a follower shows an observed write even on the
+    // frame that just took control away from this leader.
+    this->observe_(frame);
   });
   this->location_pref_ = global_preferences->make_preference<float[2]>(fnv1_hash("klink_location"));
   float last[2] = {NAN, NAN};
@@ -109,8 +124,28 @@ void KLinkHub::setup() {
 
 void KLinkHub::loop() {
   this->bus_.loop();
-  if (this->direct_ok_ && millis() - this->last_byte_log_ms_ >= 5000) {
-    this->last_byte_log_ms_ = millis();
+  const uint32_t now = millis();
+  kk::ChainGuard::Update update = this->guard_.update(now);
+  if (update.send_beacon)
+    this->bus_.enqueue(kk::controller_probe(), 0, 0, nullptr);
+  if (update.controlling != this->writes_enabled_) {
+    this->writes_enabled_ = update.controlling;
+    if (update.controlling)
+      ESP_LOGW(TAG, "Leader controlling the chain: frames are now transmitted");
+    this->writes_cb_.call(update.controlling);
+  }
+  if (update.state_changed) {
+    if (this->guard_.state() == kk::ChainState::CONTROLLING)
+      ESP_LOGI(TAG, "Chain claimed");
+    else if (this->guard_.state() == kk::ChainState::CLAIMING)
+      ESP_LOGI(TAG, "Claiming the chain");
+  }
+  if (this->want_writes_ && !this->writes_enabled_ && now - this->last_guard_log_ms_ > 5000) {
+    this->last_guard_log_ms_ = now;
+    ESP_LOGW(TAG, "Bus state: %s", this->guard_.reason(now).c_str());
+  }
+  if (this->direct_ok_ && now - this->last_byte_log_ms_ >= 5000) {
+    this->last_byte_log_ms_ = now;
     if (this->rx_bytes_ != this->last_byte_log_rx_) {
       this->last_byte_log_rx_ = this->rx_bytes_;
       // Our own transmissions read back on D+, so a healthy bus shows rx close to tx; extra bytes
@@ -119,21 +154,11 @@ void KLinkHub::loop() {
                static_cast<unsigned>(this->rx_bytes_));
     }
   }
-  if (this->want_writes_ && !this->writes_enabled_ && !this->guard_.conflict_latched()) {
-    std::string why;
-    if (this->guard_.request_transmit(millis(), why)) {
-      this->writes_enabled_ = true;
-      ESP_LOGW(TAG, "Send to lights ENABLED: the bus is quiet, frames are now transmitted");
-      this->writes_cb_.call(true);
-    } else if (millis() - this->last_guard_log_ms_ > 10000) {
-      this->last_guard_log_ms_ = millis();
-      ESP_LOGW(TAG, "Send to lights pending: %s", why.c_str());
-    }
-  }
   if (this->writes_enabled_)
     this->scan_note_.clear();  // the refusal it describes no longer applies
   // No stored lamps: scan once by itself as soon as the hub controls the bus, so a fresh device
-  // finds its lamps without any button press. A manual scan can always be run later.
+  // finds its lamps without any button press. A manual scan can always be run later. A follower never
+  // scans: that needs the bus for unmute and range queries.
   if (this->writes_enabled_ && !this->scanning_ && this->inventory_.lamps().empty() && !this->auto_scanned_) {
     this->auto_scanned_ = true;
     this->start_scan();
@@ -146,49 +171,56 @@ void KLinkHub::loop() {
 
 void KLinkHub::dump_config() {
   ESP_LOGCONFIG(TAG, "K-Link:");
+  ESP_LOGCONFIG(TAG, "  Role: %s", this->is_follower() ? "follower (listen only)" : "leader");
   ESP_LOGCONFIG(TAG, "  Writes enabled: %s", YESNO(this->writes_enabled_));
   ESP_LOGCONFIG(TAG, "  Bus monitor: %s", YESNO(this->monitor_));
   ESP_LOGCONFIG(TAG, "  Auto writes: %s", YESNO(this->auto_writes_));
   if (this->dp_pin_ >= 0)
     ESP_LOGCONFIG(TAG, "  Direct drive: D+ GPIO%d, D- GPIO%d (active: %s)", this->dp_pin_, this->dm_pin_,
                   YESNO(this->direct_ok_));
-  ESP_LOGCONFIG(TAG, "  Bus guard: writes wait for a quiet bus and stop if another controller is heard");
+  ESP_LOGCONFIG(TAG, "  Chain guard: beacon/claim, foreign writes pause ownership, no permanent conflict latch");
   ESP_LOGCONFIG(TAG, "  Known lamps: %u", static_cast<unsigned>(this->inventory_.lamps().size()));
   this->check_uart_settings(115200);
 }
 
 bool KLinkHub::set_writes_enabled(bool enabled) {
+  if (this->is_follower()) {
+    ESP_LOGW(TAG, "This device is a follower: it never writes to the chain");
+    return false;
+  }
   if (!enabled) {
     if (this->writes_enabled_)
       ESP_LOGW(TAG, "Send to lights disabled: dry run, frames are only logged");
     this->want_writes_ = false;
     this->writes_enabled_ = false;
-    this->guard_.stop_transmit();
+    this->guard_.set_want_writes(false);
     return true;
   }
   if (this->writes_enabled_)
     return true;
-  this->want_writes_ = true;  // keep trying from loop() until the bus has been quiet long enough
-  std::string why;
-  if (!this->guard_.request_transmit(millis(), why)) {
-    ESP_LOGE(TAG, "Refusing to enable bus writes yet: %s", why.c_str());
-    return false;
-  }
-  this->writes_enabled_ = true;
-  ESP_LOGW(TAG, "Send to lights ENABLED: frames are now transmitted");
-  return true;
+  // Start announcing at once. The beacon is what makes an AP9X yield; group writes wait for the
+  // claim confirmation and the foreign-write holdoff in the loop.
+  this->want_writes_ = true;
+  this->guard_.set_want_writes(true);
+  if (this->guard_.conflict())
+    this->guard_.retry(millis());
+  if (!this->guard_.controlling())
+    ESP_LOGI(TAG, "Claiming the chain: announcing with the controller beacon");
+  return this->guard_.controlling();
 }
 
 std::string KLinkHub::state_text() const {
   std::string text;
-  if (this->guard_.conflict_latched())
-    text = "Conflict: another controller wrote while this one was controlling. Press Retry to try again";
+  if (this->is_follower())
+    text = "Follower: following the chain";
+  else if (this->guard_.conflict())
+    text = this->guard_.reason(millis());
   else if (this->scanning_)
     text = "Scanning for lamps";
   else if (this->writes_enabled_)
-    text = "Controlling";
+    text = "Leader: controlling";
   else if (this->want_writes_)
-    text = this->other_controller_recent() ? "Shadowing another controller" : "Waiting for a quiet bus";
+    text = "Leader: " + this->guard_.reason(millis());
   else
     text = "Writes off (dry run)";
   if (!this->scan_note_.empty())
@@ -197,6 +229,10 @@ std::string KLinkHub::state_text() const {
 }
 
 void KLinkHub::set_commissioning(bool enabled) {
+  if (enabled && this->is_follower()) {
+    ESP_LOGW(TAG, "Commissioning is a leader operation; this device is a follower");
+    return;
+  }
   this->commissioning_ = enabled;
   if (enabled)
     this->commissioning_deadline_ = millis() + COMMISSIONING_TIMEOUT_MS;
@@ -206,8 +242,14 @@ void KLinkHub::set_commissioning(bool enabled) {
 }
 
 void KLinkHub::tx_frame(const std::vector<uint8_t> &frame) {
-  if (!this->writes_enabled_) {
-    ESP_LOGI(TAG, "dry run, not sent: %s", format_hex_pretty(frame.data(), frame.size()).c_str());
+  // Only a leader that is claiming or controlling may transmit. The controller beacon is the one
+  // frame allowed before control is established: it is what makes an AP9X hand the chain over.
+  const bool beacon = frame.size() == 7 && frame[4] == kk::CMD_CONTROLLER_PROBE;
+  if (!this->guard_.controlling() && !(beacon && this->guard_.beaconing())) {
+    if (this->is_follower())
+      ESP_LOGD(TAG, "follower, not sent: %s", format_hex_pretty(frame.data(), frame.size()).c_str());
+    else
+      ESP_LOGI(TAG, "not controlling, not sent: %s", format_hex_pretty(frame.data(), frame.size()).c_str());
     return;
   }
   ESP_LOGD(TAG, "tx: %s", format_hex_pretty(frame.data(), frame.size()).c_str());
@@ -296,12 +338,17 @@ void KLinkHub::write_group(uint8_t gid, const uint8_t channels[5]) {
     ESP_LOGE(TAG, "Refusing group write to GID %u", gid);
     return;
   }
+  // A follower, a leader that has not claimed the chain, and a leader in a conflict all keep their
+  // schedules but do not put them on the bus.
+  if (!this->guard_.controlling())
+    return;
+  this->note_group_frame_(gid, channels);
   this->bus_.enqueue(kk::group_channels(gid, channels), 0, 0, nullptr);
 }
 
 void KLinkHub::start_scan() {
-  if (!this->writes_enabled_) {
-    this->scan_note_ = "Scan needs Send to lights on";
+  if (!this->guard_.controlling()) {
+    this->scan_note_ = this->is_follower() ? "This device is a follower" : "Scan needs the chain leader";
     ESP_LOGW(TAG, "Scan refused: the hub is not controlling the bus (%s)", this->state_text().c_str());
     return;
   }
@@ -387,6 +434,10 @@ void KLinkHub::read_next_identity_() {
 // later by the find makes that one lamp flicker (a short dip). The group's own writes pause meanwhile so
 // its once-a-second refresh does not cover the flicker.
 void KLinkHub::identify(uint32_t kid) {
+  if (!this->guard_.controlling()) {
+    ESP_LOGW(TAG, "Identify refused: the hub is not controlling the chain (%s)", this->state_text().c_str());
+    return;
+  }
   ESP_LOGI(TAG, "Identify KID %u", kid);
   if (const kk::LampRecord *lamp = this->inventory_.find(kid))
     this->hold_group(lamp->gid, 2000);
@@ -510,16 +561,21 @@ void KLinkHub::identify_next() {
 
 void KLinkHub::retry() {
   // Never turns sending on by itself: only a conflict or a pending request is retried.
-  if (!this->guard_.conflict_latched() && !this->want_writes_ && !this->writes_enabled_)
+  if (this->is_follower())
     return;
-  // Exactly what turning Send to lights off and on again did before: drop write control and ask
-  // for it again through the same path. request_transmit() lifts the conflict latch once the bus
-  // has been quiet long enough; until then the request stays pending in loop().
-  this->set_writes_enabled(false);
-  this->set_writes_enabled(true);
+  if (!this->guard_.conflict() && !this->want_writes_ && !this->writes_enabled_)
+    return;
+  this->want_writes_ = true;
+  this->guard_.set_want_writes(true);
+  this->guard_.retry(millis());
+  ESP_LOGI(TAG, "Retry: claiming the chain again");
 }
 
 bool KLinkHub::stage_assignment(uint32_t kid, uint8_t gid) {
+  if (!this->guard_.controlling()) {
+    ESP_LOGW(TAG, "Assignment refused: the hub is not controlling the chain (%s)", this->state_text().c_str());
+    return false;
+  }
   if (!this->commissioning_) {
     ESP_LOGW(TAG, "Assignment refused: turn on commissioning mode first");
     return false;
@@ -537,6 +593,10 @@ bool KLinkHub::stage_assignment(uint32_t kid, uint8_t gid) {
 }
 
 void KLinkHub::confirm_assignment() {
+  if (!this->guard_.controlling()) {
+    ESP_LOGW(TAG, "Assignment refused: the hub is not controlling the chain");
+    return;
+  }
   if (!this->commissioning_ || !this->staged_) {
     ESP_LOGW(TAG, "Nothing staged, or commissioning mode is off");
     return;
@@ -558,8 +618,8 @@ void KLinkHub::confirm_assignment() {
 
 bool KLinkHub::check_assign(uint32_t kid, uint8_t gid, std::string &error) const {
   error.clear();
-  if (!this->writes_enabled_) {
-    error = "Send to lights is off";
+  if (!this->guard_.controlling()) {
+    error = this->is_follower() ? "this device is a follower" : "the chain leader is not controlling the bus";
     return false;
   }
   kk::AssignmentError why = this->inventory_.check_assignment_error(kid, gid);
@@ -572,8 +632,8 @@ bool KLinkHub::check_assign(uint32_t kid, uint8_t gid, std::string &error) const
 
 bool KLinkHub::assign(uint32_t kid, uint8_t gid, std::string &error) {
   error.clear();
-  if (!this->writes_enabled_) {
-    error = "Send to lights is off";
+  if (!this->guard_.controlling()) {
+    error = this->is_follower() ? "this device is a follower" : "the chain leader is not controlling the bus";
     return false;
   }
   this->set_commissioning(true);
@@ -586,18 +646,44 @@ bool KLinkHub::assign(uint32_t kid, uint8_t gid, std::string &error) {
   return true;
 }
 
+void KLinkHub::note_group_frame_(uint8_t gid, const uint8_t channels[5]) {
+  if (gid > kk::MAX_GID)
+    return;
+  CachedGroup &entry = this->group_cache_[gid];
+  entry.valid = true;
+  entry.seen_ms = millis();
+  for (size_t i = 0; i < kk::NUM_CHANNELS; i++)
+    entry.channels[i] = channels[i];
+  for (auto &cb : this->group_frame_cbs_)
+    cb(gid, channels);
+}
+
+bool KLinkHub::group_frame(uint8_t gid, uint8_t out[5], uint32_t &age_ms) const {
+  if (gid > kk::MAX_GID || !this->group_cache_[gid].valid)
+    return false;
+  const CachedGroup &entry = this->group_cache_[gid];
+  for (size_t i = 0; i < kk::NUM_CHANNELS; i++)
+    out[i] = entry.channels[i];
+  age_ms = millis() - entry.seen_ms;
+  return true;
+}
+
 // Shadow mode: when another controller writes a group we also schedule, compare its value with ours.
 void KLinkHub::observe_(const std::vector<uint8_t> &frame) {
   if (frame.size() != 14 || frame[4] != kk::CMD_SET_GROUP_CHANNELS)
     return;
   uint8_t gid = frame[10];
+  uint8_t theirs[5] = {frame[5], frame[6], frame[7], frame[8], frame[9]};
+  // Keep the value for follower lights even when this device has no group with that GID.
+  this->note_group_frame_(gid, theirs);
+  if (this->is_follower())
+    return;  // a follower has no schedule of its own to shadow; its groups follow instead
   for (size_t i = 0; i < this->groups_.size(); i++) {
     if (this->groups_[i]->gid() != gid)
       continue;
     uint8_t ours[5];
     if (!this->groups_[i]->compute_now(ours))
       return;  // no clock yet, or no enabled slot: nothing to compare against
-    uint8_t theirs[5] = {frame[5], frame[6], frame[7], frame[8], frame[9]};
     if (kk::channels_close(ours, theirs, 1)) {
       this->shadow_matches_++;
       ESP_LOGD(TAG, "shadow GID %u: matches (ours %u %u, theirs %u %u)", gid, ours[0], ours[1], theirs[0], theirs[1]);
@@ -696,6 +782,10 @@ bool KLinkHub::set_name(uint32_t kid, const std::string &name, std::string &erro
 
 // Every lamp of the group flickers together, as for a single lamp.
 bool KLinkHub::identify_gid(uint8_t gid) {
+  if (!this->guard_.controlling()) {
+    this->scan_note_ = this->is_follower() ? "This device is a follower" : "Identify needs the chain leader";
+    return false;
+  }
   bool any = false;
   for (const auto &lamp : this->inventory_.lamps()) {
     if (lamp.gid == gid) {
@@ -725,6 +815,10 @@ KLinkGroup::KLinkGroup() { all_groups().push_back(this); }
 void KLinkGroup::setup() {
   this->hub_->register_group(this);
   this->hub_->register_program(this);
+  this->hub_->add_on_group_frame_callback([this](uint8_t gid, const uint8_t *channels) {
+    if (gid == this->gid_)
+      this->on_bus_frame_(channels);
+  });
   this->setup_program_();
   this->setup_source_();
   // Every start fades the lamps in from dark (power loss, restart or update alike).
@@ -789,7 +883,10 @@ float KLinkGroup::light_brightness_(light::LightState *state) const {
 }
 
 void KLinkGroup::dump_config() {
-  ESP_LOGCONFIG(TAG, "  Model: %s", this->model_ == GroupModel::TUNA_SUN ? "Tuna Sun" : (this->model_ == GroupModel::TUNA_BLUE ? "Tuna Blue" : "Refugium"));
+  const char *model = this->model_ == GroupModel::TUNA_SUN   ? "Tuna Sun"
+                      : this->model_ == GroupModel::TUNA_BLUE ? "Tuna Blue (incl. AP9X)"
+                                                               : "Refugium";
+  ESP_LOGCONFIG(TAG, "  Model: %s", model);
   ESP_LOGCONFIG(TAG, "K-Link group:");
   ESP_LOGCONFIG(TAG, "  GID: %u", this->gid_);
   ESP_LOGCONFIG(TAG, "  Slots: %u", static_cast<unsigned>(this->slots_.size()));
@@ -812,8 +909,8 @@ light::LightTraits KLinkGroup::get_traits() {
   return traits;
 }
 
-const kk::ColorSpec *KLinkGroup::color_spec_() const {
-  switch (this->model_) {
+const kk::ColorSpec *group_color_spec(GroupModel model) {
+  switch (model) {
     case GroupModel::TUNA_SUN:
       return &COLOR_SUN;
     case GroupModel::TUNA_BLUE:
@@ -824,7 +921,14 @@ const kk::ColorSpec *KLinkGroup::color_spec_() const {
   return nullptr;
 }
 
+const kk::ColorSpec *KLinkGroup::color_spec_() const { return group_color_spec(this->model_); }
+
 void KLinkGroup::set_extra(uint8_t channel, uint8_t value) {
+  // A follower is read-only, and so is a leader while it is claiming or paused. A leader in dry run
+  // (writes off) still edits its own schedule locally; nothing goes to the bus either way.
+  if (this->hub_ != nullptr &&
+      (this->hub_->is_follower() || (this->hub_->want_writes() && !this->hub_->controlling())))
+    return;
   if (channel == 2) {
     if (this->has_color_temperature())
       return;  // UI2 is the light's color temperature on this model
@@ -958,6 +1062,8 @@ void KLinkGroup::effect_ended_() {
 }
 
 void KLinkGroup::write_bus_(const uint8_t channels[5]) {
+  if (this->hub_ == nullptr || !this->hub_->controlling())
+    return;
   if (this->hub_->group_held(this->gid_))
     return;  // a lamp of this group is flashing to identify itself
   // A Refugium takes a CLR of at most 240, so no source (effects included) may send more. Only UI2
@@ -971,6 +1077,11 @@ void KLinkGroup::write_bus_(const uint8_t channels[5]) {
 // Frames of effects go straight to the bus; the stage follows them so a later fade starts where the lamp is.
 // Everything else goes through the stage, which with the default options writes the target unchanged.
 void KLinkGroup::output_(const uint8_t channels[5]) {
+  // A follower follows the bus. A leader that is claiming or paused also follows it; a leader in dry
+  // run (writes off) still previews its own schedule on the light, but write_bus_ sends nothing.
+  if (this->hub_ != nullptr &&
+      (this->hub_->is_follower() || (this->hub_->want_writes() && !this->hub_->controlling())))
+    return;
   float target[5];
   for (int c = 0; c < 5; c++)
     target[c] = static_cast<float>(channels[c]);
@@ -1108,6 +1219,18 @@ void KLinkGroup::publish_to_light_(const uint8_t channels[5]) {
   }
 }
 
+void KLinkGroup::on_bus_frame_(const uint8_t channels[5]) {
+  if (this->hub_ == nullptr)
+    return;
+  // Follow while this is a follower, or while a leader is claiming or paused. A controlling leader
+  // shows its own values, and a dry-run leader keeps its local preview.
+  if (!this->hub_->is_follower() && !(this->hub_->want_writes() && !this->hub_->controlling()))
+    return;
+  // Only the light follows. The channel numbers stay where the local user left them; writing them
+  // on every bus frame would save preferences at the schedule's refresh rate.
+  this->publish_to_light_(channels);
+}
+
 // True when the light's values are the ones show_on_light_() just set, within rounding.
 bool KLinkGroup::shown_matches_(const LightShown &shown, const light::LightColorValues &values) const {
   if (!shown.have || values.is_on() != shown.on)
@@ -1235,6 +1358,19 @@ void KLinkGroup::write_state(light::LightState *state) {
   // schedule or push a level to the lamps.
   if (!this->ignored_initial_) {
     this->ignored_initial_ = true;
+    return;
+  }
+  // A follower's light is read-only, and so is a leader's while it is claiming or paused. A user
+  // command is answered with the last value heard on the bus. In dry run the leader still accepts
+  // local edits and previews them; nothing is sent.
+  if (this->hub_ != nullptr &&
+      (this->hub_->is_follower() || (this->hub_->want_writes() && !this->hub_->controlling()))) {
+    if (!this->shown_matches_(this->shown_, state->remote_values)) {
+      uint8_t channels[5];
+      uint32_t age = 0;
+      if (this->hub_->group_frame(this->gid_, channels, age))
+        this->publish_to_light_(channels);
+    }
     return;
   }
   // While an effect runs it owns the output: the light's own brightness/color writes (which fire as
@@ -1507,14 +1643,14 @@ void KLinkSwitch::setup() {
   bool state = false;
   if (this->kind_ == SwitchKind::WRITES && this->hub_->auto_writes()) {
     // Auto mode requests writes itself; a restored OFF must not cancel that.
-    this->hub_->add_on_writes_callback([this](bool on) { this->publish_state(on); });
-    this->publish_state(this->hub_->writes_enabled());
+    this->hub_->add_on_writes_callback([this](bool) { this->publish_state(this->hub_->want_writes()); });
+    this->publish_state(this->hub_->want_writes());
     return;
   }
   switch (this->kind_) {
     case SwitchKind::WRITES:
       state = restored.value_or(this->hub_->writes_enabled());
-      this->hub_->add_on_writes_callback([this](bool on) { this->publish_state(on); });
+      this->hub_->add_on_writes_callback([this](bool) { this->publish_state(this->hub_->want_writes()); });
       break;
     case SwitchKind::COMMISSIONING:
       state = false;  // never restored: it must be switched on deliberately
@@ -1537,15 +1673,15 @@ void KLinkSwitch::setup() {
       return;
   }
   this->apply_(state);
-  // The bus guard may refuse a request to turn writes on; show the real state.
-  this->publish_state(this->kind_ == SwitchKind::WRITES ? this->hub_->writes_enabled() : state);
+  // Show the operator's intent: it stays on while the claim is pending or paused (Bus state says which).
+  this->publish_state(this->kind_ == SwitchKind::WRITES ? this->hub_->want_writes() : state);
 }
 
 void KLinkSwitch::dump_config() { LOG_SWITCH("", "K-Link switch", this); }
 
 void KLinkSwitch::write_state(bool state) {
   this->apply_(state);
-  this->publish_state(this->kind_ == SwitchKind::WRITES ? this->hub_->writes_enabled() : state);
+  this->publish_state(this->kind_ == SwitchKind::WRITES ? this->hub_->want_writes() : state);
 }
 
 void KLinkSwitch::apply_(bool state) {
@@ -1868,6 +2004,81 @@ void KLinkSensor::update() {
       break;
   }
   this->publish_state(value);
+}
+
+// ---- Native light follower ------------------------------------------------------------------
+
+void KLinkLightFollower::setup() {
+  if (this->hub_ != nullptr) {
+    this->hub_->add_on_group_frame_callback([this](uint8_t gid, const uint8_t *channels) {
+      if (gid == this->gid_)
+        this->apply_(channels);
+    });
+  }
+  uint8_t common = kk::LIGHT_CAPS_ALL;
+  bool any = false;
+  this->caps_.reserve(this->lights_.size());
+  this->ranges_.reserve(this->lights_.size());
+  for (light::LightState *light : this->lights_) {
+    if (light == nullptr) {
+      this->caps_.push_back(kk::CAP_BRIGHTNESS);
+      this->ranges_.push_back(kk::CtRange{kk::DEFAULT_MIN_MIREDS, kk::DEFAULT_MAX_MIREDS});
+      continue;
+    }
+    const light::LightTraits traits = light->get_traits();
+    const uint8_t caps = light_caps_of(traits);
+    this->caps_.push_back(caps);
+    this->ranges_.push_back(kk::CtRange{traits.get_min_mireds(), traits.get_max_mireds()});
+    common = static_cast<uint8_t>(common & caps);
+    any = true;
+  }
+  if (!any)
+    common = kk::CAP_BRIGHTNESS;
+  this->output_model_ = kk::model_for_caps(common);
+}
+
+void KLinkLightFollower::dump_config() {
+  ESP_LOGCONFIG(TAG, "K-Link light follower (GID %u):", this->gid_);
+  ESP_LOGCONFIG(TAG, "  Source model: %s", this->model_ == GroupModel::TUNA_SUN   ? "Tuna Sun"
+                                             : this->model_ == GroupModel::TUNA_BLUE ? "Tuna Blue (incl. AP9X)"
+                                                                                      : "Refugium");
+  ESP_LOGCONFIG(TAG, "  Output class: %s", kk::light_model_name(this->output_model_));
+  for (size_t i = 0; i < this->lights_.size(); i++) {
+    if (this->lights_[i] == nullptr) {
+      ESP_LOGCONFIG(TAG, "  Light %u: (missing)", static_cast<unsigned>(i + 1));
+      continue;
+    }
+    ESP_LOGCONFIG(TAG, "  Light %u: '%s' caps=0x%02x mireds=%.0f-%.0f", static_cast<unsigned>(i + 1),
+                  this->lights_[i]->get_name().str().c_str(), static_cast<unsigned>(this->caps_[i]),
+                  this->ranges_[i].min_mireds, this->ranges_[i].max_mireds);
+  }
+}
+
+void KLinkLightFollower::apply_(const uint8_t channels[5]) {
+  const kk::ColorSpec *spec = group_color_spec(this->model_);
+  if (spec == nullptr)
+    return;
+  for (size_t i = 0; i < this->lights_.size(); i++) {
+    light::LightState *light = this->lights_[i];
+    if (light == nullptr || light->get_current_effect_index() != 0)
+      continue;  // a local effect on the follower light wins over the bus
+    const kk::AppearanceValues value =
+        kk::appearance_from_channels(*spec, channels, this->output_model_, this->ranges_[i]);
+    auto call = light->make_call();
+    call.set_state(value.on);
+    if (value.on) {
+      call.set_brightness(value.brightness);
+      const uint8_t caps = this->caps_[i];
+      if (this->output_model_ == kk::LightModel::CT && (caps & kk::CAP_CT) != 0)
+        call.set_color_temperature(value.mireds);
+      if ((this->output_model_ == kk::LightModel::RGB || this->output_model_ == kk::LightModel::RGBW) &&
+          (caps & kk::CAP_RGB) != 0)
+        call.set_rgb(value.r, value.g, value.b);
+    }
+    call.set_transition_length(this->transition_ms_);
+    call.set_save(false);
+    call.perform();
+  }
 }
 
 }  // namespace klink

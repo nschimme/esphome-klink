@@ -4,9 +4,11 @@
 // channel -> light values conversion and the echo/refresh rules that keep the
 // program from fighting a user who changes the light by hand. Pure logic, no
 // ESPHome dependencies (host tested).
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include "klink_colors.h"
 #include "klink_schedule.h"
 
 namespace kessil {
@@ -155,6 +157,62 @@ inline LightValues to_light_values(LightModel model, const uint8_t ch[NUM_CHANNE
       v.g = clamp01(ch[3] / 100.0f);
       v.b = clamp01(ch[4] / 100.0f);
       break;
+  }
+  return v;
+}
+
+// The appearance a bus group asks for, independent of the target light's class. A follower uses
+// the source group's own color model (CLR plus its overlay channels), so a Tuna Blue group
+// (including an AP9X) is not mistaken for a plain RGB light whose UI3-UI5 are red, green and blue.
+struct AppearanceValues {
+  bool on;
+  float brightness;
+  float mireds;
+  float r;
+  float g;
+  float b;
+  float w;
+};
+
+inline void color_direction_(const uint8_t rgb[3], float out[3]) {
+  uint8_t peak = std::max(rgb[0], std::max(rgb[1], rgb[2]));
+  for (int c = 0; c < 3; c++)
+    out[c] = peak == 0 ? 1.0f : rgb[c] / static_cast<float>(peak);
+}
+
+// Channels -> what a follower light should show. `target` is the class the target light supports
+// (the intersection of its capabilities); `range` is that light's own color-temperature range.
+// For RGB/RGBW targets the color comes from the source model's swatch (UI2 plus its overlays).
+inline AppearanceValues appearance_from_channels(const ColorSpec &spec, const uint8_t ch[NUM_CHANNELS],
+                                                 LightModel target, CtRange range) {
+  AppearanceValues v = AppearanceValues{};
+  v.on = ch[0] > 0;
+  v.brightness = ch[0] / 255.0f;
+  CtRange r = resolve_ct_range(range);
+  switch (target) {
+    case LightModel::BRIGHTNESS:
+      break;
+    case LightModel::CT:
+      v.mireds = r.max_mireds - (ch[1] / 255.0f) * (r.max_mireds - r.min_mireds);
+      break;
+    case LightModel::RGB:
+    case LightModel::RGBW: {
+      uint8_t overlays[3] = {0, 0, 0};
+      for (uint8_t i = 0; i < spec.n_overlays && i < 3; i++) {
+        uint8_t channel = spec.overlay_channel[i];
+        if (channel < NUM_CHANNELS)
+          overlays[i] = ch[channel];
+      }
+      uint8_t rgb[3];
+      swatch_i(spec, ch[1], overlays, rgb);
+      float direction[3];
+      color_direction_(rgb, direction);
+      v.r = direction[0];
+      v.g = direction[1];
+      v.b = direction[2];
+      v.w = 0.0f;  // a K-Link group has no separate white channel
+      break;
+    }
   }
   return v;
 }

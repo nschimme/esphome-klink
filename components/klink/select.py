@@ -91,7 +91,7 @@ async def to_code(config):
         cg.add(var.set_group(group))
         return
     if config[CONF_TYPE] == "source":
-        # The moon needs blue: only a Tuna Blue or a light program that mixes color offers it.
+        # The moon needs blue: only a Tuna Blue (including an AP9X) or a light program that mixes color offers it.
         moon = False
         for light_conf in CORE.config.get("light", []):
             if light_conf.get("output_id") == config[CONF_GROUP]:

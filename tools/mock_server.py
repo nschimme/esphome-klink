@@ -1205,6 +1205,78 @@ ROUTES = {
 }
 
 
+# ---- Request dispatch -------------------------------------------------------------------------
+
+JSON_TYPE = "application/json"
+HTML_TYPE = "text/html; charset=utf-8"
+TEXT_TYPE = "text/plain; charset=utf-8"
+
+
+def _json_result(code, payload):
+    return code, JSON_TYPE, json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
+
+
+def _error_result(code, message):
+    return _json_result(code, {"error": message})
+
+
+def dispatch(method, target, body=None):
+    """Answer one request without a socket, so the same mock can run under Pyodide.
+
+    `target` is the path plus optional query string, exactly as it appears on the request line.
+    Returns (status, content_type, body) with `body` as text. `body` (the request body) is
+    accepted for symmetry; every route takes its parameters from the query string.
+    """
+    parsed = urllib.parse.urlsplit(target)
+    path = parsed.path
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    with LOCK:
+        try:
+            if method == "GET":
+                if path == "/klink":
+                    # Re-assemble on every request so a reload picks up edits to components/klink/web/.
+                    try:
+                        return 200, HTML_TYPE, web_build.assemble()
+                    except (OSError, ValueError) as exc:
+                        return 500, TEXT_TYPE, "web page build failed: %s" % exc
+                if path == "/klink/state":
+                    return _json_result(200, state_json())
+                if path == "/klink/snap":
+                    return _json_result(200, handle_snap(query))
+                if path == "/klink/generated":
+                    return _json_result(200, handle_generated(query))
+                if path in POST_ROUTES:
+                    return _error_result(405, "method not allowed")
+                if path == "/":
+                    return (
+                        200,
+                        HTML_TYPE,
+                        "<!doctype html><meta charset=\"utf-8\"><title>K-Link mock</title>"
+                        "<h1>K-Link device page (mock)</h1><p><a href=\"/klink\">Open the K-Link page</a></p>",
+                    )
+                return _error_result(404, "not found")
+            if method == "POST":
+                if path in ("/switch/send_to_lights/turn_on", "/switch/send_to_lights/turn_off"):
+                    BUS["writes"] = path.endswith("turn_on")
+                    BUS["scan_note"] = ""
+                    return 200, TEXT_TYPE, ""
+                if path == "/klink/_mock/writes":
+                    handle_mock_writes(query)
+                    return _json_result(200, {"ok": True})
+                handler = ROUTES.get(path)
+                if handler is None:
+                    if path in GET_ROUTES:
+                        return _error_result(405, "method not allowed")
+                    return _error_result(404, "not found")
+                handler(query)
+                return _json_result(200, {"ok": True})
+            return _error_result(405, "method not allowed")
+        except HttpError as err:
+            return _error_result(err.code, err.message)
+        except Exception as exc:  # keep the mock responsive while developing
+            return _error_result(500, "mock error: %s" % exc)
+
+
 # ---- HTTP plumbing ----------------------------------------------------------------------------
 
 
@@ -1215,20 +1287,9 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write("[mock] %s\n" % (fmt % args))
 
-    def send_json(self, code, payload):
-        body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def send_error_json(self, code, message):
-        self.send_json(code, {"error": message})
-
-    def send_text(self, code, body, content_type="text/html; charset=utf-8"):
-        data = body.encode("utf-8") if isinstance(body, str) else body
+    def send_result(self, result):
+        code, content_type, body = result
+        data = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", content_type)
         self.send_header("Cache-Control", "no-store")
@@ -1236,87 +1297,20 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def split_path(self):
-        parsed = urllib.parse.urlsplit(self.path)
-        query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-        return parsed.path, query
-
     def throttle(self):
         if SLOW_SECONDS:
             time.sleep(SLOW_SECONDS)
 
     def do_GET(self):
         self.throttle()
-        path, query = self.split_path()
-        with LOCK:
-            try:
-                if path == "/klink":
-                    self.serve_index()
-                    return
-                if path == "/klink/state":
-                    self.send_json(200, state_json())
-                    return
-                if path == "/klink/snap":
-                    self.send_json(200, handle_snap(query))
-                    return
-                if path == "/klink/generated":
-                    self.send_json(200, handle_generated(query))
-                    return
-                if path in POST_ROUTES:
-                    self.send_error_json(405, "method not allowed")
-                    return
-                if path == "/":
-                    self.send_text(
-                        200,
-                        "<!doctype html><meta charset=\"utf-8\"><title>K-Link mock</title>"
-                        "<h1>K-Link device page (mock)</h1><p><a href=\"/klink\">Open the K-Link page</a></p>",
-                    )
-                    return
-                self.send_error_json(404, "not found")
-            except HttpError as err:
-                self.send_error_json(err.code, err.message)
-            except Exception as exc:  # keep the mock responsive while developing
-                self.send_error_json(500, "mock error: %s" % exc)
-
-    def serve_index(self):
-        # Re-assemble on every request so a reload picks up edits to components/klink/web/.
-        try:
-            body = web_build.assemble().encode("utf-8")
-        except (OSError, ValueError) as exc:
-            self.send_text(500, "web page build failed: %s" % exc, "text/plain; charset=utf-8")
-            return
-        self.send_text(200, body)
+        self.send_result(dispatch("GET", self.path))
 
     def do_POST(self):
         self.throttle()
-        path, query = self.split_path()
         length = int(self.headers.get("Content-Length") or 0)
         if length > 0:
-            self.rfile.read(length)
-        with LOCK:
-            try:
-                if path in ("/switch/send_to_lights/turn_on", "/switch/send_to_lights/turn_off"):
-                    BUS["writes"] = path.endswith("turn_on")
-                    BUS["scan_note"] = ""
-                    self.send_text(200, "", "text/plain; charset=utf-8")
-                    return
-                if path == "/klink/_mock/writes":
-                    handle_mock_writes(query)
-                    self.send_json(200, {"ok": True})
-                    return
-                handler = ROUTES.get(path)
-                if handler is None:
-                    if path in GET_ROUTES:
-                        self.send_error_json(405, "method not allowed")
-                    else:
-                        self.send_error_json(404, "not found")
-                    return
-                handler(query)
-                self.send_json(200, {"ok": True})
-            except HttpError as err:
-                self.send_error_json(err.code, err.message)
-            except Exception as exc:  # keep the mock responsive while developing
-                self.send_error_json(500, "mock error: %s" % exc)
+            self.rfile.read(length)  # drain the body; the routes read the query string
+        self.send_result(dispatch("POST", self.path))
 
 
 class Server(ThreadingHTTPServer):
