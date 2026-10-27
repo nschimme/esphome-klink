@@ -1,8 +1,15 @@
 # Home Assistant entities
 
-Every lamp group (one per Tuna Sun, Tuna Blue or Refugium template you include) shows up in Home Assistant as a device
-section with the entities below, prefixed with the group's name (for example "Tuna Sun"). Entities marked
-*off by default* exist but are disabled in Home Assistant until you enable them.
+The default leader includes three slim model groups (Tuna Blue, Tuna Sun, Refugium). Each exposes only a
+**light**, a **mode** select and a **status** sensor. Schedules, Sky, acclimation, light behavior and the point
+editor are on the board's `/klink` page; the same model programs are created automatically for any other GID,
+web-only.
+
+The per-point, channel, acclimation, effect-setting and light-behavior entities described below come from the
+full group template (`common/group-*.yaml`). Include it for a custom group, or replace the matching entry in
+`common/leader-groups.yaml`, when you want to edit those from Home Assistant. A YAML group always wins over the
+automatic program for its GID. Entities marked *off by default* exist but are disabled in Home Assistant until
+you enable them.
 
 ## The light
 
@@ -28,6 +35,8 @@ effects reach the lamps at no more than 25 frames a second, and the built-in eff
 | **effect speed** | Fast, Moderate or Slow, for the Storm, Cloud, Aurora, Rainbow and Moon effects. Remembered across restarts. |
 | **effect duration** | 0 to 5 minutes in half-minute steps; `0` runs until stopped. Default 2 minutes. Remembered across restarts. |
 
+The speed and duration entities are full-template only; on a slim group set them in the effect panel on `/klink`.
+
 ## Mode and status
 
 - **Mode** selects what the group does: **Program** runs the daily program, **Manual** holds what you set, **Off**
@@ -39,7 +48,7 @@ effects reach the lamps at no more than 25 frames a second, and the built-in eff
   `Editing point 3 (previewing)`, `Effect: Pulse` or `Effect: Storm · 1:42 left`. When Sun or Moon cannot run it
   says why, for example `Program · Set a location` or `Program · waiting for clock`.
 
-## Program
+## Program (full group template)
 
 - **Program source** chooses **My points** or **Sky**. The Sun and Moon layers are set on the device page, where Sky
   has a toggle for each; a lamp that cannot make blue only has the Sun layer. See
@@ -52,14 +61,14 @@ effects reach the lamps at no more than 25 frames a second, and the built-in eff
   and its channel values. Editing a point shows it on the lamps at once (live preview); after about a minute
   without edits the group returns to its previous mode. Changes are saved a couple of seconds later.
 
-## Manual channels (*off by default*)
+## Manual channels (full group template, *off by default*)
 
 **Red** and **amber** on the Tuna Sun; **color (raw 0-255)**, **violet**, **red** and **green** on the Tuna Blue; **color (raw 0-240)**, **white** and **green** on the Refugium.
 Setting one switches the group to Manual. Values are raw: INT and CLR run 0 to 255; red, amber, violet and green run
 0 to 100. On the Tuna Blue the channel order follows Kessil's controller screen (violet, red, green); how
 those channels map to the lamp is untested.
 
-## Light behavior
+## Light behavior (full group template)
 
 | Entity | Meaning |
 |---|---|
@@ -67,7 +76,7 @@ those channels map to the lamp is untested.
 | **brightness curve** (*off by default*) | **Linear** moves the lamp in equal steps, so Home Assistant's % equals the program's INT / 255. **Even steps (CIE 1931)** follows how bright the light looks, which makes the dim end easier to set precisely. |
 | **soft start** | 0 to 120 seconds (default 30; 0 is off). Every time the controller starts, the lamps fade in from dark over this time instead of jumping to the current level. After a firmware update the lamps go dark for a moment and then rise. |
 
-## Acclimation
+## Acclimation (full group template)
 
 | Entity | Meaning |
 |---|---|

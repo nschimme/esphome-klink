@@ -13,8 +13,8 @@ ESPHome lights, and several boards can share one chain. See all [features](#-fea
 
 1. Get an ESP32-C6 board with a USB-C port and a USB-C cable. It plugs into a spare K-Link port on a lamp.
 2. In the ESPHome dashboard, import
-   `github://nschimme/esphome-klink/kessil-tuna-sun-esp32-c6.yaml@main` (use `kessil-tuna-blue-...` for a Tuna Blue
-   or an AP9X, or `kessil-refugium-...` for a Refugium).
+   `github://nschimme/esphome-klink/kessil-leader-esp32-c6.yaml@main`. Every leader file includes the Tuna Blue,
+   Tuna Sun and Refugium default programs, so it works with any lamp mix.
 3. Power it from the lamp, turn on **Send to lights**, and open `http://<device>/klink`.
 
 The full walk-through, including wiring risks, is in [Getting started](docs/getting-started.md). **Read its first-run
@@ -64,11 +64,11 @@ Try the web page without hardware: [live demo](https://nschimme.github.io/esphom
 
 | Light | Config | Status |
 |---|---|---|
-| A360X Tuna Sun | `kessil-tuna-sun-…` | ✅ Tested |
-| A360XE Tuna Sun | `kessil-tuna-sun-…` | ⚠️ Untested (expected to work) |
-| A360X / A360XE Tuna Blue, A500X | `kessil-tuna-blue-…` | ⚠️ Untested |
-| AP9X | `kessil-tuna-blue-…` | ⚠️ Untested |
-| Refugium | `kessil-refugium-…` | ⚠️ Untested |
+| A360X Tuna Sun | any leader config | ✅ Tested |
+| A360XE Tuna Sun | any leader config | ⚠️ Untested (expected to work) |
+| A360X / A360XE Tuna Blue, A500X | any leader config | ⚠️ Untested |
+| AP9X | any leader config | ⚠️ Untested |
+| Refugium | any leader config | ⚠️ Untested |
 | Ordinary ESPHome lights (DIY strips) | [DIY lights](docs/diy-lights.md) | ✅ Board LED tested · ⚠️ strips not run on a tank |
 | Several boards on one chain | [Leader and follower](docs/leader-follower.md) | ⚠️ Untested on hardware |
 

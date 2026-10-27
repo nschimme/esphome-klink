@@ -67,6 +67,7 @@ klink:
   id: kl
   uart_id: klink_uart
   timezone: ${timezone}
+  time_id: local_time
   auto_writes: ${auto_writes}
   role: ${role}
   beacon_interval: ${beacon_interval}

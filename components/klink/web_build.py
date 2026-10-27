@@ -24,7 +24,7 @@ except ImportError:  # running as a script, or loaded as a top-level module
 
 WEB_DIR = Path(__file__).parent / "web"
 
-MAX_GZIP_BYTES = 42000  # a budget for small chips, not a hard limit; raised for the sun and moon and local-light UI
+MAX_GZIP_BYTES = 42400  # a budget for small chips, not a hard limit; raised for the sun and moon, local-light, default-group and orphan-group UI
 
 STYLE_LINK = '<link rel="stylesheet" href="style.css">'
 SCRIPT_TAG = '<script src="app.js"></script>'

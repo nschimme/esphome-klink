@@ -1,6 +1,6 @@
-# Tuna Sun: one K-Link group with a manual light, a 16-point daily program you can edit from Home
-# Assistant, and a point editor. Include it together with a board file and common/base.yaml
-# (the top-level kessil-*.yaml files do this for you).
+# Tuna Sun: the full group, with a manual light, a 16-point daily program and a point editor in Home
+# Assistant. The default top-level kessil-*.yaml files already include a slim Tuna Sun group; use this
+# package instead when you want those extra entities, and remove the slim group for the same GID.
 #
 # This is a thin wrapper around the reusable template common/group-tuna-sun.yaml. To add another
 # Tuna Sun group, include the template directly with its vars (see the template header and

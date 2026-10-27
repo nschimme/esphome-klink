@@ -34,11 +34,12 @@ do those on the leader.
 
 Two boards on one chain: the leader drives the Kessil lamps, the follower drives a strip.
 
-1. **Leader.** Flash a normal package for your lamps (for example `common/tuna-sun.yaml` on top of
+1. **Leader.** Flash `kessil-leader-<board>.yaml` (or include `common/leader-groups.yaml` on top of
    `common/base.yaml`), turn on **Send to lights** and wait for **Bus state** to read `Leader: controlling`.
-2. **Pick the group the follower will copy.** Either a lamp group the leader already has (its GID is
-   on the leader's page), or a group with no lamps that exists only to carry a schedule:
-   include `common/refugium-channel.yaml` (GID 3).
+2. **Pick the group the follower will copy.** Any GID works. GIDs 1, 2 and 26 have the default Tuna Blue,
+   Tuna Sun and Refugium lights. Any other GID gets a web-only automatic program of the follower's model,
+   with edits kept per GID. Include a `common/group-*.yaml` template (for example GID 3) when you want the
+   full Home Assistant point editor for that group.
 3. **Follower.** Start from [`examples/follower.yaml`](../examples/follower.yaml) or
    [`examples/diy-refugium-strip.yaml`](../examples/diy-refugium-strip.yaml). It uses
    `common/follower-base.yaml` instead of `common/base.yaml`, which sets `role: follower` for you.
@@ -166,8 +167,11 @@ Hub option `lamp_reply_delay` (0-30 ms, default 5 ms) sets how long a follower w
 reply. It is rejected on a leader. A real lamp's delay is unmeasured.
 
 The `08` firmware reply reports the klink project version from the config's `esphome: project:
-version` (`0.0.0` when unset), as a 10-byte frame, not a Kessil firmware version. The `20` model reply
-is `A360X Tuna Blue`, `A360X Tuna Sun` or `A360X Refugium` (the Refugium string is a guess).
+version` (`0.0.0` when unset), as a 10-byte frame, not a Kessil firmware version. A leading `v` is
+accepted and a suffix such as `-dev` is ignored. `common/follower-base.yaml` sets the project version
+from its `klink_version` substitution (default `0.2.0`), so the leader shows the follower's klink
+version instead of `0.0.0`. The `20` model reply is `A360X Tuna Blue`, `A360X Tuna Sun` or
+`A360X Refugium` (the Refugium string is a guess).
 
 ```yaml
 packages:

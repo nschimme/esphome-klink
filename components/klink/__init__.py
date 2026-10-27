@@ -308,6 +308,10 @@ CONFIG_SCHEMA = cv.All(
             # The device's time zone (the same name as the time component). Its representative city is the last
             # resort for the location, so Sun and Moon work with no setup at all (approximate).
             cv.Optional(CONF_TIMEZONE): cv.string,
+            # Clock for programs created at runtime for a group with lamps but no YAML program. A
+            # configured group also supplies its clock, so this is only needed on a leader with no
+            # bus group of its own.
+            cv.Optional(CONF_TIME_ID): cv.use_id(time.RealTimeClock),
             cv.Optional(CONF_LATITUDE): cv.float_range(min=-90, max=90),
             cv.Optional(CONF_LONGITUDE): cv.float_range(min=-180, max=180),
             cv.Optional(CONF_ON_LAMP_FOUND): automation.validate_automation(
@@ -396,6 +400,8 @@ async def to_code(config):
     await uart.register_uart_device(var, config)
     cg.add(var.set_writes_enabled(config[CONF_WRITES_ENABLED]))
     cg.add(var.set_monitor(config[CONF_MONITOR]))
+    if CONF_TIME_ID in config:
+        cg.add(var.set_time(await cg.get_variable(config[CONF_TIME_ID])))
     if CONF_TIMEZONE in config:
         found = timezone_location(config[CONF_TIMEZONE])
         if found is not None:

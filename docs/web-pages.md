@@ -36,7 +36,9 @@ Three tabs.
   moving a lamp to another group, and **Scan for lamps**. A follower has no bus lamp list and hides this card.
 - **Group settings:** one group selector drives a **Light behavior** card and an **Acclimation** card for the chosen
   group, instead of one card per group. A follower keeps only the brightness curve; transition and soft start belong
-  to the chain leader, and its read-only bus groups do not show Acclimation.
+  to the chain leader, and its read-only bus groups do not show Acclimation. A GID with lamps but no group package
+  gets an automatic program from its lamp model, so it appears here; the hint is a fallback while that program is
+  being created.
 - **Device:** location and group names in one collapsed card, plus **Bus**: Send to lights, Retry and **Scan for lamps**.
   A follower hides the Bus card; the header pill shows its bus state and the lamp card shows the lamp count.
 

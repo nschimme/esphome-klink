@@ -71,22 +71,22 @@ chain controller.
 | A360XE Tuna Sun | 2 Tuna Sun | Expected to work as a Tuna Sun; untested. |
 | A360X/A360XE Tuna Blue | 1 Tuna Blue | The channels follow Kessil's controller screen; untested. |
 | A500X Tuna Blue (185 W) | 1 Tuna Blue | Expected to work as a Tuna Blue: it has the same two K-Link ports and the same violet, red and green channels, which a controller on the bus can reach. Untested. |
-| Refugium | 3 Refugium | Supported with `kessil-refugium-<board>.yaml`: UI2 color 0-240 (blue to red), UI4 white, UI5 green. Untested. |
-| AP9X | 1 Tuna Blue | Use `kessil-tuna-blue-<board>.yaml`: the same model, same five channels (intensity, color, violet, red, green), and it can share a Tuna Blue group. If the AP9X is acting as its own chain controller, this controller's presence beacon makes it hand over. Untested. |
+| Refugium | 3 Refugium | Any leader file; the Refugium default group is ready. UI2 color 0-240 (blue to red), UI4 white, UI5 green. Untested. |
+| AP9X | 1 Tuna Blue | Any leader file; it uses the Tuna Blue default group, with the same five channels (intensity, color, violet, red, green), and can share a Tuna Blue group. If the AP9X is acting as its own chain controller, this controller's presence beacon makes it hand over. Untested. |
 | A160WE and A80 | None (0-10 V) | Analog lights with no K-Link support known; not controllable over K-Link. A light program on a PWM-to-0-10 V converter module driven by the ESPHome board is the route (see [light programs](light-programs.md) and [DIY lights](diy-lights.md)). |
 | AP700 | None | Not supported; its control path is different. |
 
-The AP9X can also act as the K-Link controller for a chain. Use the Tuna Blue package (or assign it to an
-existing Tuna Blue group) and leave its own Wi-Fi control off. A leader board announces itself with
+The AP9X can also act as the K-Link controller for a chain. Leave its own Wi-Fi control off; the leader
+includes a Tuna Blue group and will take over the chain. A leader board announces itself with
 the same K-Link presence beacon Kessil's controllers use; an AP9X that is acting as the chain controller hands the chain over
 within a few seconds. A Spectral Controller X or Wi-Fi dongle does not hand over, so their group writes still pause
 this board. See [leader and follower](leader-follower.md) for putting a second esphome-klink board on the chain.
 
 ## Install
 
-Pick the file for your board and lamp: `kessil-tuna-sun-<board>.yaml`, `kessil-tuna-blue-<board>.yaml` (also
-for an AP9X) or `kessil-refugium-<board>.yaml` for a Refugium, where
-`<board>` is `esp32-c6`, `esp32-s3`, `esp32-c3` or `esp32-s2`. Each file includes the default network package, so
+Pick the file for your board: `kessil-leader-<board>.yaml`, where `<board>` is `esp32-c6`, `esp32-s3`,
+`esp32-c3` or `esp32-s2`. Every leader file includes the Tuna Blue, Tuna Sun and Refugium default programs, so it
+works with any lamp mix; the filename only sets the device name. Each file includes the default network package, so
 you do not add Wi-Fi, API or OTA yourself: the device opens a setup access point when it has no credentials.
 
 ### Option 1: adopt it from the ESPHome dashboard
@@ -96,7 +96,7 @@ you do not add Wi-Fi, API or OTA yourself: the device opens a setup access point
 2. In the ESPHome dashboard, adopt the discovered device, or choose **New device -> import from URL** and paste:
 
    ```
-   github://nschimme/esphome-klink/kessil-tuna-sun-esp32-c6.yaml@main
+   github://nschimme/esphome-klink/kessil-leader-esp32-c6.yaml@main
    ```
 
 3. Finish the adoption and install. If no Wi-Fi credentials are added, connect to the device's setup access point
@@ -106,14 +106,14 @@ you do not add Wi-Fi, API or OTA yourself: the device opens a setup access point
 
 ```yaml
 substitutions:
-  name: kessil-tuna-sun
+  name: kessil-leader
   timezone: America/Chicago        # the program runs on local time: set yours
 
 packages:
   remote_package:
     url: https://github.com/nschimme/esphome-klink
     ref: main                      # pin a tag or commit once you have one that works
-    files: [kessil-tuna-sun-esp32-c6.yaml]
+    files: [kessil-leader-esp32-c6.yaml]
     refresh: 1d
 ```
 
@@ -134,7 +134,7 @@ packages:
     files:
       - boards/esp32-c6.yaml
       - common/base.yaml
-      - common/tuna-sun.yaml
+      - common/leader-groups.yaml
 
 wifi:
   ssid: !secret wifi_ssid
@@ -149,19 +149,17 @@ ota:
     password: !secret ota_password
 ```
 
-For a **Tuna Blue** or an **AP9X**, use `kessil-tuna-blue-esp32-c6.yaml` (option 1 and the first block of
-option 2) or `common/tuna-blue.yaml` (the second block) in place of the Tuna Sun file. The AP9X reports type 1 and
-uses the Tuna Blue model. Each package is its own K-Link group: Tuna Blue defaults to group 1, Tuna Sun to group 2.
-Set `tuna_blue_gid` to another free type-1 group id such as 3 if you include a second one. Because the AP9X is type
-1, it can also join a Tuna Blue group directly; assign it there if you want it to follow the Tuna Blue program. For
-more groups, see [configuration](configuration.md#several-groups-on-one-board).
+The leader includes three default groups: Tuna Blue (GID 1), Tuna Sun (GID 2) and Refugium (GID 26). A lamp in any
+other GID gets an automatic program of its model, editable on `/klink`. Add a `common/group-*.yaml` template only
+when you want the full Home Assistant point editor for a custom group; see
+[configuration](configuration.md#several-groups-on-one-board).
 
 ### Option 3: clone the repo
 
 ```sh
 git clone https://github.com/nschimme/esphome-klink
 cd esphome-klink
-esphome run kessil-tuna-sun-esp32-c6.yaml
+esphome run kessil-leader-esp32-c6.yaml
 ```
 
 No secrets file is needed: connect to the "<name> Setup" access point after flashing. The top-level files fetch

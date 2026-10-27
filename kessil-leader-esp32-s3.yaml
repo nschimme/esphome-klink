@@ -1,0 +1,23 @@
+# K-Link leader on an ESP32-S3. Flash this, or adopt it from the ESPHome dashboard.
+# It includes the Tuna Blue, Tuna Sun and Refugium default programs, so any mix of lamps works.
+# See docs/getting-started.md for wiring, safety notes and the other ways to use this file.
+substitutions:
+  name: kessil-leader-s3
+  friendly_name: K-Link Leader ESP32-S3
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  project:
+    name: nschimme.esphome-klink
+    version: "0.2.0"
+
+dashboard_import:
+  package_import_url: github://nschimme/esphome-klink/kessil-leader-esp32-s3.yaml@main
+  import_full_config: false
+
+packages:
+  board: !include boards/esp32-s3.yaml
+  network: !include common/network-wifi.yaml
+  base: !include common/base.yaml
+  groups: !include common/leader-groups.yaml

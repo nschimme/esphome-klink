@@ -456,7 +456,7 @@ function makeOrphanCard(gid){
   card.appendChild(rowline);
   var chips=document.createElement('div');chips.className='chips';card.appendChild(chips);
   var hint=document.createElement('p');hint.className='hint';
-  hint.textContent='Add a group for this GID or move the lamp in Settings > Lamps';
+  hint.textContent='A program is created automatically for a known lamp model. If this stays, reload or check the lamp.';
   card.appendChild(hint);
   byId('groups').appendChild(card);
   return {el:card,name:h2,status:status,count:count,chips:chips,chipEls:{}};
@@ -690,6 +690,7 @@ function fillGroups(select,lamp,refs){
   }
   if(state&&state.lamps) for(i=0;i<state.lamps.length;i++) add(state.lamps[i].gid);
   for(i=3;i<=25;i++) add(i);
+  add(lamp.default_gid);
   add(lamp.gid);
   gids.sort(function(a,b){return a-b;});
   var sig=gids.join(',')+'#'+JSON.stringify(names);
@@ -836,9 +837,20 @@ function syncOutput(g,c){
 /* One group at a time: the same selector drives Light behavior and Acclimation, so the page never
    repeats a card for every group. */
 function renderSettingsPicker(){
-  var row=byId('group-settings-heading'),sel=byId('settings-gid');
+  var row=byId('group-settings-heading'),sel=byId('settings-gid'),hint=byId('settings-orphans');
   var gs=(state&&state.groups)||[],i,g,have=false,sig='';
   if(!row||!sel)return;
+  /* Lamps can be in a GID that the leader has no program for. Say so where the user looks for
+     the group selector, instead of only on the Dashboard and Program tabs. */
+  if(hint){
+    var known={},orphans=[],lamps=(state&&state.lamps)||[];
+    for(i=0;i<gs.length;i++)known[gs[i].gid]=true;
+    for(i=0;i<lamps.length;i++) if(!known[lamps[i].gid]&&orphans.indexOf(lamps[i].gid)<0)orphans.push(lamps[i].gid);
+    orphans.sort(function(a,b){return a-b;});
+    hint.hidden=!orphans.length;
+    setText(hint,orphans.length?(orphans.length===1?'Group '+orphans[0]:'Groups '+orphans.join(', '))+
+      (orphans.length===1?' has':' have')+' lamps but no program yet. A program is created automatically for a known lamp model.':'');
+  }
   row.hidden=!gs.length;
   if(!gs.length){SET.gid=0;return;}
   for(i=0;i<gs.length;i++) sig+=gs[i].gid+':'+(gs[i].name||'')+':'+(gs[i].kind||'')+'|';
@@ -3070,7 +3082,7 @@ function syncOrphanHint(s){
   if(!gids.length){setText(pg.orphanHint,'');return;}
   var subject=gids.length===1?'Group '+gids[0]:'Groups '+gids.join(', ');
   setText(pg.orphanHint,subject+(gids.length===1?' has':' have')+
-    ' lamps but no program. Add the GID or move them in Settings > Lamps.');
+    ' lamps but no program yet. The leader creates one for a known lamp model.');
 }
 function renderProgram(s){
   if(!s)return;

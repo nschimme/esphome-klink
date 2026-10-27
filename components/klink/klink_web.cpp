@@ -511,6 +511,8 @@ void KLinkWeb::handle_state(AsyncWebServerRequest *request) {
     out += std::to_string(lamp.type);
     out += ",\"gid\":";
     out += std::to_string(lamp.gid);
+    out += ",\"default_gid\":";
+    out += std::to_string(kk::default_gid(lamp.type));
     out += ",\"name\":";
     append_quoted(out, lamp_name(lamp.kid));
     out += ",\"model\":";

@@ -235,6 +235,7 @@ def lamp_record(lamp):
         "kid": lamp["kid"],
         "type": lamp["type"],
         "gid": lamp["gid"],
+        "default_gid": {1: 1, 2: 2, 3: 26}.get(lamp["type"], 0),
         "name": lamp["name"],
         "model": MODEL_NAMES.get(lamp["type"], ""),
         "firmware": "1.3.0",

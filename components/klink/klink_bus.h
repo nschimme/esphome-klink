@@ -49,6 +49,19 @@ class Bus {
     queue_.push_back(r);
   }
 
+  // Group writes are idempotent: only the newest value for a GID matters. Replacing a pending
+  // frame for the same GID keeps a multi-group fade from growing the queue faster than the bus
+  // can drain it. Other commands keep their FIFO order and are never replaced.
+  void enqueue_group(const std::vector<uint8_t> &frame, uint8_t gid) {
+    for (auto &r : queue_) {
+      if (r.expect_cmd == 0 && r.frame.size() == 14 && r.frame[4] == CMD_SET_GROUP_CHANNELS && r.frame[10] == gid) {
+        r.frame = frame;
+        return;
+      }
+    }
+    this->enqueue(frame, 0, 0, nullptr);
+  }
+
   size_t pending() const { return queue_.size() + (receiving_ ? 1 : 0); }
   bool busy() const { return pending() != 0; }
   uint32_t timeouts() const { return timeouts_; }

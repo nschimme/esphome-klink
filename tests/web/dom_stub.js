@@ -264,6 +264,7 @@ function bootstrap(doc) {
   var gh = add('div', 'group-settings-heading', null, panels.settings);
   var gsel = add('select', 'settings-gid', null, gh);
   gsel.type = 'select';
+  add('p', 'settings-orphans', { hidden: 'hidden' }, panels.settings);
   add('div', 'outputs', null, panels.settings);
   add('div', 'acclimations', null, panels.settings);
   add('div', 'prog-root', null, panels.program);
@@ -468,7 +469,8 @@ function makeServer(opts) {
         return item;
       }),
       lamps: lamps.map(function (l) {
-        return { kid: l.kid, type: l.type, gid: l.gid, name: l.name || '' };
+        return { kid: l.kid, type: l.type, gid: l.gid, default_gid: l.type === 1 ? 1 : l.type === 2 ? 2 : l.type === 3 ? 26 : 0,
+          name: l.name || '' };
       }),
       followers: followers.map(function (l) {
         return {
@@ -729,6 +731,16 @@ function makeServer(opts) {
       if (u.pathname === '/klink/sky') { handleSky(u.searchParams); return Promise.resolve(response(200, { ok: true })); }
       if (u.pathname === '/klink/source/copy') { handleCopy(u.searchParams); return Promise.resolve(response(200, { ok: true })); }
       if (u.pathname === '/klink/generated') return Promise.resolve(response(200, handleGenerated(u.searchParams)));
+      if (u.pathname === '/klink/assign') {
+        var assignKid = parseUint(u.searchParams.get('kid'), 0xFFFFFFFF);
+        var assignGid = parseUint(u.searchParams.get('gid'), 40);
+        if (assignKid === null) throw new HttpError(400, 'invalid parameter: kid');
+        if (!assignGid) throw new HttpError(400, 'invalid parameter: gid');
+        var assignLamp = lamps.filter(function (l) { return l.kid === assignKid; })[0];
+        if (!assignLamp) throw new HttpError(409, 'unknown KID: scan first');
+        assignLamp.gid = assignGid;
+        return Promise.resolve(response(200, { ok: true }));
+      }
       if (u.pathname === '/klink/identify') {
         var key = u.searchParams.get('follower');
         var found = followers.filter(function (l) { return l.id === key; });

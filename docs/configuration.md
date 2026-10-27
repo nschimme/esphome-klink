@@ -2,7 +2,8 @@
 
 ## Substitutions
 
-Set these in your own config.
+Set these in your own config. The `tuna_sun_gid`, `tuna_blue_gid` and `refugium_gid` entries apply to
+the optional full model packages; the default leader's GIDs are set in `common/leader-groups.yaml` (1, 2 and 26).
 
 | Substitution | Default | Meaning |
 |---|---|---|
@@ -11,6 +12,7 @@ Set these in your own config.
 | `tuna_sun_gid` | `"2"` | the K-Link group the Tuna Sun package controls |
 | `tuna_blue_gid` | `"1"` | the K-Link group the Tuna Blue package controls |
 | `refugium_gid` | `"26"` | the K-Link group the Refugium package controls |
+| `klink_version` | `"0.2.0"` | follower firmware version reported in the lamp reply |
 | `auto_writes` | `"false"` | `"true"`: claim the chain by itself at boot |
 | `role` | `"leader"` | `"leader"` drives the chain; `"follower"` follows it and answers the leader's scan for its lamps |
 | `beacon_interval` | `"1s"` | how often a leader announces itself with the K-Link presence beacon |
@@ -26,6 +28,7 @@ Set these in your own config.
 | `web` | `true` | serve the esphome-klink page and its JSON API at `/klink`; `false` leaves them out |
 | `role` | `leader` | `leader` announces, claims and drives the chain. `follower` listens to group writes and follows them; every `followers:` entry is a lamp unless it says `lamp: false`, and a follower only answers requests addressed to it. |
 | `lamp_reply_delay` | `5ms` | follower only, 0-30 ms: how long a follower waits before each lamp reply. Rejected on a leader. |
+| `time_id` | `local_time` | clock for programs created automatically for a GID with lamps but no YAML group |
 | `auto_writes` | `false` | claim the chain by itself at boot (leaders only) |
 | `writes_enabled` | `false` | start with sending on; the default is a dry run that only logs frames (leaders only) |
 | `beacon_interval` | `1s` | how often a leader sends the command-34 presence beacon while claiming or controlling |
@@ -50,10 +53,23 @@ writes still pause this leader. See [leader and follower](leader-follower.md) fo
 
 ## Lamp groups and templates
 
-`common/tuna-sun.yaml`, `common/tuna-blue.yaml` and `common/refugium.yaml` are the model
-packages: one group each, using the default group ids. They are thin wrappers around the reusable templates
-`common/group-tuna-sun.yaml`, `common/group-tuna-blue.yaml` and
-`common/group-refugium.yaml`, which you can include directly to add more groups.
+The default leader includes `common/leader-groups.yaml`: three slim model programs at the default GIDs,
+Tuna Blue (1), Tuna Sun (2) and Refugium (26). Each is a Home Assistant light with the built-in effects and a
+mode select. It has no per-point, channel or datetime entities; edit the schedule, Sky, acclimation and light
+behavior on the board's `/klink` page. A lamp in any other GID gets the same kind of program automatically
+(web-only), using the model of the first lamp and that model's stock schedule. Its edits are stored per GID.
+
+For the full Home Assistant point editor, include the reusable template for a group instead:
+
+- `common/group-tuna-sun.yaml`, `common/group-tuna-blue.yaml` or `common/group-refugium.yaml` add the
+  point text/number/datetime entities and the acclimation/effect controls to a YAML group;
+- `common/tuna-sun.yaml`, `common/tuna-blue.yaml` and `common/refugium.yaml` are one-line packages
+  around those templates, using the default GIDs.
+
+A YAML group always wins over the automatic program for its GID. If you want the full editor on GID 1, 2
+or 26, replace that entry in `common/leader-groups.yaml` rather than adding a second group with the same
+GID. [`examples/minimal-leader.yaml`](../examples/minimal-leader.yaml) is the default leader; delete its
+`groups:` line for a web-only leader with no Home Assistant group entities.
 
 ### Several groups on one board
 
