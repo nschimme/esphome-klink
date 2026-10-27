@@ -1,0 +1,22 @@
+# Optional: expose the board's on-board RGB LED (a single WS2812) as a light in Home Assistant. Include it
+# next to the other packages, for example:
+#   packages:
+#     board: !include boards/esp32-c6.yaml
+#     rgb: !include common/rgb-led.yaml
+#     ...
+# The LED pin comes from the board file (`rgb_pin`); override it if your board differs, or if the board has
+# no RGB LED, leave this package out.
+light:
+  - platform: esp32_rmt_led_strip
+    id: board_led  # referenced by examples/light-program.yaml's klink program
+    name: "${friendly_name} LED"
+    pin: GPIO${rgb_pin}
+    num_leds: 1
+    chipset: WS2812
+    rgb_order: GRB
+    restore_mode: ALWAYS_OFF
+    icon: mdi:led-on
+    entity_category: config
+    effects:
+      - pulse:
+      - random:

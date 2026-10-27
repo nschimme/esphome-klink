@@ -1,7 +1,7 @@
 #pragma once
 // Bus guard: stops this controller from transmitting while another controller is on the bus.
-// A second master corrupts frames and can make fixtures misbehave, and a controller such as Kessil's
-// WiFi dongle announces itself once per second, so another controller is easy to hear.
+// A second master corrupts frames and can make fixtures misbehave, and Kessil's own
+// controllers announce themselves once per second, so another controller is easy to hear.
 // No ESPHome dependencies (host tested); time is injected as milliseconds.
 #include <cstdint>
 #include <string>

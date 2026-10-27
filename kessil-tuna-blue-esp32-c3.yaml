@@ -1,5 +1,5 @@
 # Kessil Tuna Blue on an ESP32-C3 (untested). Flash this, or adopt it from the ESPHome dashboard.
-# See the README for wiring, safety notes and the other ways to use this file.
+# See docs/getting-started.md for wiring, safety notes and the other ways to use this file.
 substitutions:
   name: kessil-tuna-blue
   friendly_name: Kessil Tuna Blue
@@ -9,7 +9,7 @@ esphome:
   friendly_name: ${friendly_name}
   project:
     name: nschimme.esphome-klink
-    version: "0.1.0"
+    version: "0.2.0"
 
 dashboard_import:
   package_import_url: github://nschimme/esphome-klink/kessil-tuna-blue-esp32-c3.yaml@main
@@ -17,5 +17,6 @@ dashboard_import:
 
 packages:
   board: !include boards/esp32-c3.yaml
+  network: !include common/network-wifi.yaml
   base: !include common/base.yaml
   lamp: !include common/tuna-blue.yaml

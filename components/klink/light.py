@@ -11,6 +11,7 @@ from esphome.const import (
     CONF_DURATION,
     CONF_EFFECTS,
     CONF_NAME,
+    CONF_SPEED,
     CONF_COLD_WHITE_COLOR_TEMPERATURE,
     CONF_WARM_WHITE_COLOR_TEMPERATURE,
     CONF_DEFAULT_TRANSITION_LENGTH,
@@ -19,7 +20,7 @@ from esphome.const import (
     CONF_TIME_ID,
 )
 
-from . import CONF_GID, CONF_KLINK_ID, KLinkHub, klink_ns
+from . import CONF_GID, CONF_KLINK_ID, KLinkHub, ProgramHost, klink_ns
 
 DEPENDENCIES = ["klink"]
 
@@ -29,7 +30,9 @@ CONF_REFRESH_INTERVAL = "refresh_interval"
 CONF_INVERT_COLOR = "invert_color"
 CONF_MODEL = "model"
 
-KLinkGroup = klink_ns.class_("KLinkGroup", light.LightOutput, cg.Component)
+# ProgramHost is declared in __init__.py so the hub schema can define KLinkLightProgram without a
+# circular import; it stays importable from here for the platform modules.
+KLinkGroup = klink_ns.class_("KLinkGroup", ProgramHost, light.LightOutput, cg.Component)
 KLinkEffect = klink_ns.class_("KLinkEffect", LightEffect)
 FxKind = klink_ns.enum("FxKind", is_class=True)
 GroupModel = klink_ns.enum("GroupModel", is_class=True)
@@ -39,44 +42,41 @@ MODELS = {
     "generic": GroupModel.GENERIC,  # any other model: raw channels
 }
 
-CONF_PERIOD = "period"
-CONF_MIN_BRIGHTNESS = "min_brightness"
 
-# (YAML key, default name, kind, kind of timing it takes)
-#   "period": a repeating wave on the light's own brightness/color; "ramp": one ramp over a duration
+# (YAML key, default name, kind)
+# The built-in effects (speed fast/moderate/slow, a duration). Standard ESPHome effects
+# (pulse, flicker, ...) are listed in YAML as usual and are forwarded to the lamps by the group.
 EFFECTS = [
-    ("klink_pulse", "Pulse", FxKind.PULSE, "period"),
-    ("klink_color_sweep", "Color sweep", FxKind.COLOR_SWEEP, "period"),
-    ("klink_sunrise", "Sunrise", FxKind.SUNRISE, "ramp"),
-    ("klink_sunset", "Sunset", FxKind.SUNSET, "ramp"),
+    ("klink_storm", "Storm", FxKind.STORM),
+    ("klink_cloud", "Cloud", FxKind.CLOUD),
+    ("klink_aurora", "Aurora", FxKind.AURORA),
+    ("klink_rainbow", "Rainbow", FxKind.RAINBOW),  # drives UI3-UI5; UI3 is unused on a Tuna Sun
+    ("klink_moon_red", "Moon Red", FxKind.MOON_RED),  # drives UI3 (unused on a Tuna Sun)
+    ("klink_moon_blue", "Moon Blue", FxKind.MOON_BLUE),  # drives UI4 (red on a Tuna Sun)
 ]
+SPEEDS = {"fast": 0, "moderate": 1, "slow": 2}
 
 
-def _register_effect(key, default_name, kind, timing):
-    if timing == "period":
-        schema = {
-            cv.Optional(CONF_PERIOD, default="6s" if kind == FxKind.PULSE else "20s"): cv.positive_time_period_milliseconds,
-            cv.Optional(CONF_MIN_BRIGHTNESS, default="20%"): cv.percentage,
-            cv.Optional(CONF_DURATION, default="0s"): cv.positive_time_period_milliseconds,
-        }
-    else:
-        schema = {cv.Optional(CONF_DURATION, default="10min"): cv.positive_time_period_milliseconds}
+def _register_effect(key, default_name, kind):
+    schema = {
+        cv.Optional(CONF_SPEED, default="fast"): cv.one_of(*SPEEDS, lower=True),
+        # How long it runs, like the app's Time slider (0.5 to 5 minutes); 0s runs until stopped.
+        cv.Optional(CONF_DURATION, default="2min"): cv.positive_time_period_milliseconds,
+    }
 
     @register_effect(key, KLinkEffect, default_name, schema)
     async def effect_to_code(config, effect_id):
         var = cg.new_Pvariable(effect_id, config[CONF_NAME])
         cg.add(var.set_kind(kind))
         cg.add(var.set_duration(config[CONF_DURATION]))
-        if CONF_PERIOD in config:
-            cg.add(var.set_period(config[CONF_PERIOD]))
-            cg.add(var.set_min_brightness(config[CONF_MIN_BRIGHTNESS]))
+        cg.add(var.set_speed(SPEEDS[config[CONF_SPEED]]))
         return var
 
     return effect_to_code
 
 
-for _key, _name, _kind, _timing in EFFECTS:
-    _register_effect(_key, _name, _kind, _timing)
+for _key, _name, _kind in EFFECTS:
+    _register_effect(_key, _name, _kind)
 
 CONFIG_SCHEMA = (
     light.LIGHT_SCHEMA.extend(
@@ -86,10 +86,10 @@ CONFIG_SCHEMA = (
             cv.Required(CONF_GID): cv.int_range(1, 40),
             cv.Required(CONF_TIME_ID): cv.use_id(time.RealTimeClock),
             # Number of schedule points; each is a `text` entity (platform: klink) of this group.
-            cv.Optional(CONF_SLOTS, default=8): cv.int_range(1, 16),
+            cv.Optional(CONF_SLOTS, default=16): cv.int_range(1, 16),
             # Manual commands send brightness as UI1 and the color temperature as UI2 (0-255). The
-            # Kelvin range of UI2 is NOT established for any model: these two ends are placeholders to
-            # calibrate by eye. UI2 = 0 is the cold end unless invert_color is set (on a Tuna Sun UI2 = 0 is warm, so set it).
+            # Kelvin range of UI2 depends on the model (the Tuna Sun spans 6,000 K to 9,000 K, set in
+            # common/tuna-sun.yaml); these generic defaults are placeholders. UI2 = 0 is the cold end unless invert_color is set (on a Tuna Sun UI2 = 0 is warm, so set it).
             cv.Optional(CONF_COLD_WHITE_COLOR_TEMPERATURE, default="6500 K"): cv.color_temperature,
             cv.Optional(CONF_WARM_WHITE_COLOR_TEMPERATURE, default="2700 K"): cv.color_temperature,
             cv.Optional(CONF_INVERT_COLOR, default=False): cv.boolean,

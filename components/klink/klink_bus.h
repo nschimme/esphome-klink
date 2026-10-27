@@ -28,7 +28,7 @@ class Bus {
   typedef std::function<void(bool ok, const std::vector<uint8_t> &reply)> Callback;
 
   // Called for every valid frame that is not the reply to the request in flight: traffic from
-  // another controller (such as the WiFi dongle) or unsolicited fixture frames.
+  // another controller (such as one of Kessil's own controllers) or unsolicited fixture frames.
   typedef std::function<void(const std::vector<uint8_t> &frame)> FrameCallback;
 
   explicit Bus(Io &io) : io_(io) {}

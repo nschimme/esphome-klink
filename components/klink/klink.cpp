@@ -1,6 +1,8 @@
 #include "klink.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 
 #include "esphome/core/log.h"
@@ -61,7 +63,7 @@ void KLinkHub::setup() {
   // Always listen: frames from other controllers feed the bus guard, and the monitor logs them.
   this->bus_.set_frame_callback([this](const std::vector<uint8_t> &frame) {
     if (this->monitor_) {
-      ESP_LOGI(TAG, "bus: %s  [%s]", format_hex_pretty(frame.data(), frame.size()).c_str(),
+      ESP_LOGI(TAG, "bus @%u: %s  [%s]", static_cast<unsigned>(millis()), format_hex_pretty(frame.data(), frame.size()).c_str(),
                kk::describe_frame(frame).c_str());
     }
     this->observe_(frame);
@@ -69,17 +71,31 @@ void KLinkHub::setup() {
       // Another controller started talking while we were writing: stop at once and latch.
       this->writes_enabled_ = false;
       this->want_writes_ = false;
-      ESP_LOGE(TAG, "BUS CONFLICT: another controller was heard while writing (%s). Bus writes are OFF.",
+      ESP_LOGE(TAG, "BUS CONFLICT: another controller was heard while writing (%s). Send to lights is OFF.",
                kk::describe_frame(frame).c_str());
       this->writes_cb_.call(false);
     }
   });
+  this->location_pref_ = global_preferences->make_preference<float[2]>(fnv1_hash("klink_location"));
+  float last[2] = {NAN, NAN};
+  if (this->location_pref_.load(&last)) {
+    for (int i = 0; i < 2; i++)
+      if (!std::isnan(last[i]) && std::fabs(last[i]) <= (i == 0 ? 90.0f : 180.0f))
+        this->location_[i].restored = last[i];
+  }
   this->pref_ = global_preferences->make_preference<StoredInventory>(fnv1_hash("klink_inventory"));
   StoredInventory stored;
   if (this->pref_.load(&stored) && stored.length <= sizeof(stored.data)) {
     std::vector<uint8_t> blob(stored.data, stored.data + stored.length);
     if (!this->inventory_.deserialize(blob))
       ESP_LOGW(TAG, "Stored lamp inventory is invalid or from another version; starting empty");
+  }
+  this->names_pref_ = global_preferences->make_preference<StoredNames>(fnv1_hash("klink_names"));
+  StoredNames stored_names;
+  if (this->names_pref_.load(&stored_names) && stored_names.length <= sizeof(stored_names.data)) {
+    std::vector<uint8_t> blob(stored_names.data, stored_names.data + stored_names.length);
+    if (!this->names_.deserialize(blob))
+      ESP_LOGW(TAG, "Stored lamp names are invalid or from another version; starting empty");
   }
 }
 
@@ -99,12 +115,20 @@ void KLinkHub::loop() {
     std::string why;
     if (this->guard_.request_transmit(millis(), why)) {
       this->writes_enabled_ = true;
-      ESP_LOGW(TAG, "Bus writes ENABLED: the bus is quiet, frames are now transmitted");
+      ESP_LOGW(TAG, "Send to lights ENABLED: the bus is quiet, frames are now transmitted");
       this->writes_cb_.call(true);
     } else if (millis() - this->last_guard_log_ms_ > 10000) {
       this->last_guard_log_ms_ = millis();
-      ESP_LOGW(TAG, "Bus writes pending: %s", why.c_str());
+      ESP_LOGW(TAG, "Send to lights pending: %s", why.c_str());
     }
+  }
+  if (this->writes_enabled_)
+    this->scan_note_.clear();  // the refusal it describes no longer applies
+  // No stored lamps: scan once by itself as soon as the hub controls the bus, so a fresh device
+  // finds its lamps without any button press. A manual scan can always be run later.
+  if (this->writes_enabled_ && !this->scanning_ && this->inventory_.lamps().empty() && !this->auto_scanned_) {
+    this->auto_scanned_ = true;
+    this->start_scan();
   }
   if (this->commissioning_ && static_cast<int32_t>(millis() - this->commissioning_deadline_) >= 0) {
     ESP_LOGI(TAG, "Commissioning mode timed out");
@@ -128,7 +152,7 @@ void KLinkHub::dump_config() {
 bool KLinkHub::set_writes_enabled(bool enabled) {
   if (!enabled) {
     if (this->writes_enabled_)
-      ESP_LOGW(TAG, "Bus writes disabled: dry run, frames are only logged");
+      ESP_LOGW(TAG, "Send to lights disabled: dry run, frames are only logged");
     this->want_writes_ = false;
     this->writes_enabled_ = false;
     this->guard_.stop_transmit();
@@ -143,18 +167,25 @@ bool KLinkHub::set_writes_enabled(bool enabled) {
     return false;
   }
   this->writes_enabled_ = true;
-  ESP_LOGW(TAG, "Bus writes ENABLED: frames are now transmitted");
+  ESP_LOGW(TAG, "Send to lights ENABLED: frames are now transmitted");
   return true;
 }
 
 std::string KLinkHub::state_text() const {
+  std::string text;
   if (this->guard_.conflict_latched())
-    return "Conflict: another controller wrote while this one was controlling. Toggle Bus writes to retry";
-  if (this->writes_enabled_)
-    return "Controlling";
-  if (this->want_writes_)
-    return this->other_controller_recent() ? "Shadowing another controller" : "Waiting for a quiet bus";
-  return "Writes off (dry run)";
+    text = "Conflict: another controller wrote while this one was controlling. Press Retry to try again";
+  else if (this->scanning_)
+    text = "Scanning for lamps";
+  else if (this->writes_enabled_)
+    text = "Controlling";
+  else if (this->want_writes_)
+    text = this->other_controller_recent() ? "Shadowing another controller" : "Waiting for a quiet bus";
+  else
+    text = "Writes off (dry run)";
+  if (!this->scan_note_.empty())
+    text += " (" + this->scan_note_ + ")";
+  return text;
 }
 
 void KLinkHub::set_commissioning(bool enabled) {
@@ -262,11 +293,13 @@ void KLinkHub::write_group(uint8_t gid, const uint8_t channels[5]) {
 
 void KLinkHub::start_scan() {
   if (!this->writes_enabled_) {
+    this->scan_note_ = "Scan needs Send to lights on";
     ESP_LOGW(TAG, "Scan refused: the hub is not controlling the bus (%s)", this->state_text().c_str());
     return;
   }
   if (this->scanning_)
     return;
+  this->scan_note_.clear();
   ESP_LOGI(TAG, "Scanning for lamps (KIDs %u-%u)", DEFAULT_MIN_KID, DEFAULT_MAX_KID);
   this->scanning_ = true;
   this->scan_found_ = 0;
@@ -309,9 +342,119 @@ void KLinkHub::read_next_identity_() {
   });
 }
 
+// A lamp only answers the find command when a controller probe (34) came just before it: that is what the
+// original controller does, with a probe every second. Found on hardware: a bare find does nothing, a probe followed 300 ms
+// later by the find makes that one lamp flicker (a short dip). The group's own writes pause meanwhile so
+// its once-a-second refresh does not cover the flicker.
 void KLinkHub::identify(uint32_t kid) {
   ESP_LOGI(TAG, "Identify KID %u", kid);
-  this->bus_.enqueue(kk::find(kid), 0, 0, nullptr);
+  if (const kk::LampRecord *lamp = this->inventory_.find(kid))
+    this->hold_group(lamp->gid, 2000);
+  this->bus_.enqueue(kk::build(kk::CMD_CONTROLLER_PROBE, {}), 0, 0, nullptr);
+  this->set_timeout(kid, 300, [this, kid]() { this->bus_.enqueue(kk::find(kid), 0, 0, nullptr); });
+}
+
+void KLinkHub::hold_group(uint8_t gid, uint32_t ms) {
+  const uint32_t until = millis() + ms;
+  for (auto &hold : this->holds_)
+    if (hold.gid == gid) {
+      hold.until_ms = until;
+      return;
+    }
+  this->holds_.push_back({gid, until});
+}
+
+void KLinkHub::set_ha_coordinate(int index, float value) {
+  if (std::isnan(value))
+    return;
+  if (this->location_[index].ha == value)
+    return;
+  this->location_[index].ha = value;
+  this->save_location_();
+  this->location_cb_.call();
+}
+
+// Both Home Assistant coordinates, kept so a reboot can use them before Home Assistant has reported.
+void KLinkHub::save_location_() {
+  if (std::isnan(this->location_[0].ha) || std::isnan(this->location_[1].ha))
+    return;
+  float last[2] = {static_cast<float>(this->location_[0].ha), static_cast<float>(this->location_[1].ha)};
+  this->location_pref_.save(&last);
+}
+
+void KLinkHub::set_weather_condition(const std::string &condition) {
+  const bool was_thunder = this->have_condition_ && kessil::klink::weather_is_thunder(this->weather_condition_);
+  const bool first = !this->have_condition_;
+  this->weather_condition_ = condition;
+  this->have_condition_ = true;
+  ESP_LOGD(TAG, "Weather: %s", condition.c_str());
+  // A thunderstorm that begins starts the Storm effect, at most once every half hour. Never at boot: the
+  // first value only tells us what the weather already is.
+  if (!first && this->storms_from_weather_ && !was_thunder && kessil::klink::weather_is_thunder(condition) &&
+      (!this->storm_started_once_ || millis() - this->last_storm_ms_ > 30u * 60u * 1000u)) {
+    for (ProgramHost *program : this->programs_) {
+      if (program->mode() != kk::Mode::PROGRAM)
+        continue;
+      bool has_storm = false;
+      for (const auto &name : program->effect_names())
+        if (name == "Storm")
+          has_storm = true;
+      if (has_storm && program->effect_label().empty()) {
+        ESP_LOGI(TAG, "Thunderstorm reported: starting Storm on %s", program->name().c_str());
+        program->start_effect("Storm");
+        this->storm_started_once_ = true;
+        this->last_storm_ms_ = millis();
+      }
+    }
+  }
+}
+
+void KLinkHub::set_entered_coordinate(int index, float value) {
+  this->location_[index].entered = value;
+  this->location_cb_.call();
+}
+
+static bool coordinate_value(const KLinkHub::Coordinate &c, double &out) {
+  if (!std::isnan(c.entered))
+    out = c.entered;
+  else if (!std::isnan(c.ha))
+    out = c.ha;
+  else if (!std::isnan(c.restored))
+    out = c.restored;
+  else if (!std::isnan(c.yaml))
+    out = c.yaml;
+  else if (!std::isnan(c.zone))
+    out = c.zone;
+  else
+    return false;
+  return true;
+}
+
+bool KLinkHub::location(double &latitude, double &longitude) const {
+  return coordinate_value(this->location_[0], latitude) && coordinate_value(this->location_[1], longitude);
+}
+
+const char *KLinkHub::location_source() const {
+  double lat, lon;
+  if (!this->location(lat, lon))
+    return "";
+  if (!std::isnan(this->location_[0].entered) || !std::isnan(this->location_[1].entered))
+    return "entered here";
+  if (!std::isnan(this->location_[0].ha) && !std::isnan(this->location_[1].ha))
+    return "Home Assistant";
+  if (!std::isnan(this->location_[0].restored) && !std::isnan(this->location_[1].restored))
+    return "last known";
+  if (std::isnan(this->location_[0].yaml) || std::isnan(this->location_[1].yaml))
+    return "time zone (approximate)";
+  return "YAML";
+}
+
+bool KLinkHub::group_held(uint8_t gid) {
+  const uint32_t now = millis();
+  for (const auto &hold : this->holds_)
+    if (hold.gid == gid && static_cast<int32_t>(hold.until_ms - now) > 0)
+      return true;
+  return false;
 }
 
 void KLinkHub::identify_next() {
@@ -322,6 +465,17 @@ void KLinkHub::identify_next() {
   }
   this->identify_pos_ %= lamps.size();
   this->identify(lamps[this->identify_pos_++].kid);
+}
+
+void KLinkHub::retry() {
+  // Never turns sending on by itself: only a conflict or a pending request is retried.
+  if (!this->guard_.conflict_latched() && !this->want_writes_ && !this->writes_enabled_)
+    return;
+  // Exactly what turning Send to lights off and on again did before: drop write control and ask
+  // for it again through the same path. request_transmit() lifts the conflict latch once the bus
+  // has been quiet long enough; until then the request stays pending in loop().
+  this->set_writes_enabled(false);
+  this->set_writes_enabled(true);
 }
 
 bool KLinkHub::stage_assignment(uint32_t kid, uint8_t gid) {
@@ -361,6 +515,36 @@ void KLinkHub::confirm_assignment() {
   });
 }
 
+bool KLinkHub::check_assign(uint32_t kid, uint8_t gid, std::string &error) const {
+  error.clear();
+  if (!this->writes_enabled_) {
+    error = "Send to lights is off";
+    return false;
+  }
+  kk::AssignmentError why = this->inventory_.check_assignment_error(kid, gid);
+  if (why != kk::AssignmentError::NONE) {
+    error = kk::assignment_error_text(why);
+    return false;
+  }
+  return true;
+}
+
+bool KLinkHub::assign(uint32_t kid, uint8_t gid, std::string &error) {
+  error.clear();
+  if (!this->writes_enabled_) {
+    error = "Send to lights is off";
+    return false;
+  }
+  this->set_commissioning(true);
+  if (!this->stage_assignment(kid, gid)) {
+    kk::AssignmentError why = this->inventory_.check_assignment_error(kid, gid);
+    error = why == kk::AssignmentError::NONE ? "Assignment refused" : kk::assignment_error_text(why);
+    return false;
+  }
+  this->confirm_assignment();
+  return true;
+}
+
 // Shadow mode: when another controller writes a group we also schedule, compare its value with ours.
 void KLinkHub::observe_(const std::vector<uint8_t> &frame) {
   if (frame.size() != 14 || frame[4] != kk::CMD_SET_GROUP_CHANNELS)
@@ -396,11 +580,124 @@ void KLinkHub::save_inventory_() {
   this->pref_.save(&stored);
 }
 
+void KLinkHub::save_names_() {
+  std::vector<uint8_t> blob = this->names_.serialize();
+  StoredNames stored;
+  std::memset(&stored, 0, sizeof(stored));
+  if (blob.size() > sizeof(stored.data))
+    return;
+  stored.length = static_cast<uint16_t>(blob.size());
+  std::memcpy(stored.data, blob.data(), blob.size());
+  this->names_pref_.save(&stored);
+}
+
+bool KLinkHub::check_name(uint32_t kid, const std::string &name, std::string &error) const {
+  error.clear();
+  kk::NameTable probe = this->names_;
+  if (probe.set(kid, name))
+    return true;
+  if (name.size() > kk::NAME_MAX_LEN)
+    error = "name is too long (24 bytes max)";
+  else if (!this->names_.contains(kid) && this->names_.size() >= kk::MAX_NAMES)
+    error = "no room for another name";
+  else
+    error = "name is not valid UTF-8";
+  return false;
+}
+
+bool KLinkHub::set_name(uint32_t kid, const std::string &name, std::string &error) {
+  error.clear();
+  if (this->names_.set(kid, name)) {
+    this->save_names_();
+    return true;
+  }
+  if (name.size() > kk::NAME_MAX_LEN)
+    error = "name is too long (24 bytes max)";
+  else if (!this->names_.contains(kid) && this->names_.size() >= kk::MAX_NAMES)
+    error = "no room for another name";
+  else
+    error = "name is not valid UTF-8";
+  return false;
+}
+
+// Every lamp of the group flickers together, as for a single lamp.
+bool KLinkHub::identify_gid(uint8_t gid) {
+  bool any = false;
+  for (const auto &lamp : this->inventory_.lamps()) {
+    if (lamp.gid == gid) {
+      this->identify(lamp.kid);
+      any = true;
+    }
+  }
+  return any;
+}
+
 // ---- Group ----------------------------------------------------------------------------------
 
 void KLinkGroup::setup() {
   this->hub_->register_group(this);
+  this->hub_->register_program(this);
+  this->setup_program_();
+  this->setup_source_();
+  // Every start fades the lamps in from dark (power loss, restart or update alike).
+  this->soft_start_pending_ = true;
+  // Effect speed and duration: runtime settings.
+  this->effect_speed_pref_ =
+      global_preferences->make_preference<uint8_t>(fnv1_hash("klink_fxspeed_" + std::to_string(this->gid_)));
+  uint8_t speed = 0;
+  if (this->effect_speed_pref_.load(&speed) && speed <= 2)
+    this->effect_speed_ = speed;
+  this->effect_duration_pref_ =
+      global_preferences->make_preference<uint32_t>(fnv1_hash("klink_fxdur_" + std::to_string(this->gid_)));
+  uint32_t duration = 120000;
+  if (this->effect_duration_pref_.load(&duration) &&
+      (duration == 0 || (duration >= 30000 && duration <= 300000)))
+    this->effect_duration_ms_ = duration;
+  this->out_pref_ = global_preferences->make_preference<OutputSettings>(fnv1_hash("klink_out_" + std::to_string(this->gid_)));
+  OutputSettings stored;
+  if (this->out_pref_.load(&stored) && stored.curve <= 1 &&
+      stored.fade_ds <= 100 && stored.soft_start <= 120)
+    this->out_settings_ = stored;
+  this->apply_output_settings_();
   this->set_interval("schedule", 1000, [this]() { this->update(); });
+}
+
+void KLinkGroup::apply_output_settings_() {
+  kk::OutputConfig config;
+  config.fade_style = kk::FADE_EASED;  // one soft start and end; 0 seconds is instant
+  config.fade_ms = static_cast<uint32_t>(this->out_settings_.fade_ds) * 100u;
+  this->stage_.configure(config);
+}
+
+void KLinkGroup::set_output_settings(const OutputSettings &settings) {
+  OutputSettings next = settings;
+  if (next.curve > 1)
+    next.curve = 1;
+  if (next.fade_ds > 100)
+    next.fade_ds = 100;
+  if (next.soft_start > 120)
+    next.soft_start = 120;
+  this->out_settings_ = next;
+  this->out_pref_.save(&this->out_settings_);
+  this->apply_output_settings_();
+  this->shown_.have = false;  // the light's brightness maps differently now: show it again
+  this->apply_transition_();
+  this->out_cb_.call();
+}
+
+// The transition time is also the light's default transition length, so a command from Home
+// Assistant or an automation that gives none fades the same way as the group's own changes.
+void KLinkGroup::apply_transition_() {
+  if (this->state_ != nullptr)
+    this->state_->set_default_transition_length(static_cast<uint32_t>(this->out_settings_.fade_ds) * 100u);
+}
+
+// The light's brightness after the chosen curve: a straight line, or CIE 1931. The light's own gamma
+// is bypassed, so Home Assistant's % matches the program's INT / 255.
+float KLinkGroup::light_brightness_(light::LightState *state) const {
+  const light::LightColorValues &v = state->current_values;
+  const float raw = v.get_state() * v.get_brightness();
+  return static_cast<BrightnessCurve>(this->out_settings_.curve) == BrightnessCurve::CIE ? kk::perceptual_to_linear(raw) : raw;
 }
 
 void KLinkGroup::dump_config() {
@@ -408,26 +705,34 @@ void KLinkGroup::dump_config() {
   ESP_LOGCONFIG(TAG, "K-Link group:");
   ESP_LOGCONFIG(TAG, "  GID: %u", this->gid_);
   ESP_LOGCONFIG(TAG, "  Slots: %u", static_cast<unsigned>(this->slots_.size()));
+  ESP_LOGCONFIG(TAG, "  Mode: %s", kk::mode_name(this->mode_.mode));
   ESP_LOGCONFIG(TAG, "  Manual color (UI2): %u", this->manual_color_);
 }
 
 light::LightTraits KLinkGroup::get_traits() {
   light::LightTraits traits;
   if (this->has_color_temperature()) {
-    traits.set_supported_color_modes({light::ColorMode::COLOR_TEMPERATURE});
+    // The Tuna Sun: exact color temperature, or any color snapped to what the lamp can make.
+    traits.set_supported_color_modes({light::ColorMode::COLOR_TEMPERATURE, light::ColorMode::RGB});
     traits.set_min_mireds(this->cold_mireds_);
     traits.set_max_mireds(this->warm_mireds_);
+  } else if (this->color_spec_() != nullptr) {
+    traits.set_supported_color_modes({light::ColorMode::RGB});  // the Tuna Blue: snapped to the nearest color
   } else {
     traits.set_supported_color_modes({light::ColorMode::BRIGHTNESS});
   }
   return traits;
 }
 
-void KLinkGroup::send_(const uint8_t channels[5]) {
-  this->hub_->write_group(this->gid_, channels);
-  std::memcpy(this->last_sent_, channels, 5);
-  this->last_sent_ms_ = millis();
-  this->have_sent_ = true;
+const kk::ColorSpec *KLinkGroup::color_spec_() const {
+  switch (this->model_) {
+    case GroupModel::TUNA_SUN:
+      return &COLOR_SUN;
+    case GroupModel::TUNA_BLUE:
+      return &COLOR_BLUE;
+    default:
+      return nullptr;
+  }
 }
 
 void KLinkGroup::set_extra(uint8_t channel, uint8_t value) {
@@ -442,26 +747,27 @@ void KLinkGroup::set_extra(uint8_t channel, uint8_t value) {
   }
   if (this->state_ == nullptr || this->state_->get_current_effect_index() != 0)
     return;  // no light state yet, or an effect owns the output
+  this->on_user_command_();
   uint8_t level, color;
   this->manual_levels(this->state_, level, color);
   uint8_t channels[5] = {level, color, this->extras_[0], this->extras_[1], this->extras_[2]};
-  this->manual_ = true;
+  this->direct_next_ = true;
   this->send_(channels);
+  this->publish_to_light_(channels);  // the color the light reports follows the numbers
 }
 
 void KLinkGroup::manual_levels(light::LightState *state, uint8_t &level, uint8_t &color) {
-  if (!this->has_color_temperature()) {
+  if (!this->has_color_temperature() || state->remote_values.get_color_mode() == light::ColorMode::RGB) {
     // Brightness only: UI1 follows the light and UI2 is whatever its number entity (or manual_color) says.
-    float brightness;
-    state->current_values_as_brightness(&brightness);
-    level = static_cast<uint8_t>(std::lround(brightness * 255.0f));
+    level = static_cast<uint8_t>(std::lround(this->light_brightness_(state) * 255.0f));
     color = this->manual_color_;
     return;
   }
-  // Brightness is UI1. The light reports color temperature already normalised between the
+  // Brightness is UI1. The light reports color temperature already normalized between the
   // advertised ends (0 = cold, 1 = warm); that maps linearly onto UI2.
   float t, brightness;
   state->current_values_as_ct(&t, &brightness);
+  brightness = this->light_brightness_(state);
   level = static_cast<uint8_t>(std::lround(brightness * 255.0f));
   t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
   if (this->invert_color_)
@@ -469,7 +775,367 @@ void KLinkGroup::manual_levels(light::LightState *state, uint8_t &level, uint8_t
   color = static_cast<uint8_t>(std::lround(t * 255.0f));
 }
 
+// ---- Effects on the group (ProgramHost) ------------------------------------------------------
+
+std::vector<std::string> KLinkGroup::effect_names() const {
+  std::vector<std::string> names;
+  if (this->state_ == nullptr)
+    return names;
+  for (auto *effect : this->state_->get_effects()) {
+    if (effect == nullptr)
+      continue;
+    std::string name = effect->get_name().str();
+    if (name == "None")
+      continue;
+    names.push_back(name);
+  }
+  return names;
+}
+
+bool KLinkGroup::start_effect(const std::string &name) {
+  if (this->state_ == nullptr)
+    return false;
+  bool known = false;
+  for (const auto &candidate : this->effect_names())
+    if (candidate == name)
+      known = true;
+  if (!known)
+    return false;
+  auto call = this->state_->make_call();
+  call.set_effect(name);
+  call.set_save(false);
+  call.perform();
+  return true;
+}
+
+void KLinkGroup::stop_effect() {
+  if (this->state_ == nullptr || !this->effect_active())
+    return;
+  auto call = this->state_->make_call();
+  call.set_effect(static_cast<uint32_t>(0));
+  call.set_save(false);
+  call.perform();
+}
+
+int32_t KLinkGroup::effect_remaining_seconds() const {
+  if (!this->effect_active())
+    return 0;
+  if (this->effect_end_ms_ == 0)
+    return -1;  // until stopped
+  uint32_t now = millis();
+  if (static_cast<int32_t>(now - this->effect_end_ms_) >= 0)
+    return 0;
+  // Round up: the status shows how long is left, not how much has elapsed.
+  return static_cast<int32_t>((this->effect_end_ms_ - now + 999) / 1000);
+}
+
+std::string KLinkGroup::effect_label() const {
+  return this->effect_active() ? this->effect_name() : std::string();
+}
+
+void KLinkGroup::set_effect_options(uint8_t speed, uint32_t duration_ms) {
+  if (speed > 2)
+    speed = 2;
+  // 0 means "until stopped"; otherwise the app's range is 0.5 to 5 minutes in half-minute steps.
+  if (duration_ms != 0) {
+    if (duration_ms < 30000)
+      duration_ms = 30000;
+    else if (duration_ms > 300000)
+      duration_ms = 300000;
+  }
+  this->effect_speed_ = speed;
+  this->effect_duration_ms_ = duration_ms;
+  this->effect_speed_pref_.save(&this->effect_speed_);
+  this->effect_duration_pref_.save(&this->effect_duration_ms_);
+}
+
+void KLinkGroup::effect_ended_() {
+  // Remember what the light showed before the effect, so the light call that ends the effect (it
+  // repeats those values) is not mistaken for a user command.
+  this->ended_shown_ = this->shown_;
+  this->effect_ended_pending_ = true;
+  this->klink_effect_running_ = false;
+  this->effect_end_ms_ = 0;
+  // The next tick sends whatever the mode asks for again, and shows it on the light.
+  this->have_sent_ = false;
+  this->shown_.have = false;
+  // Manual has no tick of its own once the mode is left alone here: put the held level back at once.
+  if (this->mode_.mode == kk::Mode::MANUAL && this->state_ != nullptr) {
+    uint8_t level, color;
+    this->manual_levels(this->state_, level, color);
+    uint8_t channels[5] = {level, color, this->extras_[0], this->extras_[1], this->extras_[2]};
+    this->send_(channels);
+  }
+}
+
+void KLinkGroup::write_bus_(const uint8_t channels[5]) {
+  if (this->hub_->group_held(this->gid_))
+    return;  // a lamp of this group is flashing to identify itself
+  this->hub_->write_group(this->gid_, channels);
+}
+
+// Frames of effects go straight to the bus; the stage follows them so a later fade starts where the lamp is.
+// Everything else goes through the stage, which with the default options writes the target unchanged.
+void KLinkGroup::output_(const uint8_t channels[5]) {
+  float target[5];
+  for (int c = 0; c < 5; c++)
+    target[c] = static_cast<float>(channels[c]);
+  // What fades: the schedule, Off, resuming after a preview or an effect, and the first frame of an effect
+  // (Storm excepted: its flashes stay hard). Direct values (commands, previews, edits, Home Assistant
+  // transitions) and forwarded standard effects are already shaped and show at once.
+  const bool direct = this->direct_next_ || this->fwd_effect_active_ ||
+                      (this->klink_effect_running_ && !this->effect_smooth_);
+  if (direct) {
+    this->stage_.reset(target);
+    this->stage_busy_ = false;
+    this->write_bus_(channels);
+  } else {
+    // A slow ramp moves a few units between ticks; anything bigger is a jump and may fade.
+    bool jump = !this->stage_have_target_ || this->effect_fresh_;
+    this->effect_fresh_ = false;
+    for (int c = 0; c < 5 && !jump; c++)
+      jump = std::fabs(target[c] - this->stage_target_[c]) > 6.0f;
+    if (this->soft_start_pending_) {
+      this->soft_start_pending_ = false;
+      if (this->out_settings_.soft_start > 0) {  // first light after a start: up from dark
+        static const float dark[5] = {0, 0, 0, 0, 0};
+        this->stage_.reset(dark);
+        this->stage_.fade_to(target, static_cast<uint32_t>(this->out_settings_.soft_start) * 1000u);
+      } else {
+        this->stage_.set_target(target, jump);
+      }
+    } else {
+      this->stage_.set_target(target, jump);
+    }
+    const uint32_t now = millis();
+    uint8_t out[5];
+    this->stage_busy_ = this->stage_.step(this->stage_busy_ ? now - this->stage_ms_ : 0, out);
+    this->stage_ms_ = now;
+    this->stage_due_ms_ = now + kk::FADE_TICK_MS;
+    this->write_bus_(out);
+  }
+  std::memcpy(this->stage_target_, target, sizeof(target));
+  this->stage_have_target_ = true;
+  // Only what the schedule or Off mode sends is mirrored onto the light entity: a held manual value
+  // is already what the light says, and previews and effects are transient.
+  if (this->mode_.mode == kk::Mode::PROGRAM || this->mode_.mode == kk::Mode::OFF)
+    this->publish_to_light_(channels);
+}
+
+// While a fade is running the stage writes 25 frames a second.
+void KLinkGroup::tick_stage_() {
+  if (!this->stage_busy_)
+    return;
+  const uint32_t now = millis();
+  if (static_cast<int32_t>(now - this->stage_due_ms_) < 0)
+    return;
+  uint8_t out[5];
+  this->stage_busy_ = this->stage_.step(now - this->stage_ms_, out);
+  this->stage_ms_ = now;
+  // A fixed 40 ms cadence (the loop wakes every 16 ms); after a long stall start a fresh one.
+  this->stage_due_ms_ += kk::FADE_TICK_MS;
+  if (static_cast<int32_t>(now - this->stage_due_ms_) > 0)
+    this->stage_due_ms_ = now + kk::FADE_TICK_MS;
+  this->write_bus_(out);
+}
+
+// Normalize an RGB color to its direction: the largest component becomes 1 (white for black).
+static void rgb_direction(const uint8_t rgb[3], float out[3]) {
+  uint8_t peak = std::max(rgb[0], std::max(rgb[1], rgb[2]));
+  for (int c = 0; c < 3; c++)
+    out[c] = peak == 0 ? 1.0f : rgb[c] / static_cast<float>(peak);
+}
+
+void KLinkGroup::show_on_light_(bool on, float brightness, light::ColorMode mode, float mireds, const float rgb[3]) {
+  if (this->state_ == nullptr)
+    return;
+  LightShown now;
+  now.have = true;
+  now.on = on;
+  now.mode = mode;
+  now.brightness = brightness;
+  now.mireds = mireds;
+  for (int c = 0; c < 3; c++)
+    now.rgb[c] = rgb != nullptr ? rgb[c] : 0.0f;
+  const LightShown &was = this->shown_;
+  if (was.have && was.on == on && (!on || (std::fabs(was.brightness - brightness) < 0.002f && was.mode == mode &&
+                                          (mode != light::ColorMode::COLOR_TEMPERATURE ||
+                                           std::fabs(was.mireds - mireds) < 0.2f) &&
+                                          (mode != light::ColorMode::RGB ||
+                                           (std::fabs(was.rgb[0] - now.rgb[0]) < 0.005f &&
+                                            std::fabs(was.rgb[1] - now.rgb[1]) < 0.005f &&
+                                            std::fabs(was.rgb[2] - now.rgb[2]) < 0.005f)))))
+    return;
+  this->shown_ = now;
+  auto call = this->state_->make_call();
+  call.set_state(on);
+  if (on) {
+    call.set_brightness(brightness);
+    if (mode == light::ColorMode::COLOR_TEMPERATURE)
+      call.set_color_temperature(mireds);
+    else if (mode == light::ColorMode::RGB)
+      call.set_rgb(rgb[0], rgb[1], rgb[2]);
+  }
+  call.set_transition_length(0);
+  call.set_save(false);
+  call.perform();  // write_state() runs from the light's loop and recognizes this as our own value
+}
+
+void KLinkGroup::publish_to_light_(const uint8_t channels[5]) {
+  if (this->state_ == nullptr || this->effect_active())
+    return;
+  const bool on = channels[0] > 0;
+  // The inverse of light_brightness_(): what the light must read for the lamp to be at this level.
+  const float linear = channels[0] / 255.0f;
+  const float brightness =
+      static_cast<BrightnessCurve>(this->out_settings_.curve) == BrightnessCurve::CIE ? kk::linear_to_perceptual(linear) : linear;
+  const kk::ColorSpec *spec = this->color_spec_();
+  // The Tuna Blue is always shown as a color; the Tuna Sun in whichever mode the light is in.
+  const bool rgb_display = spec != nullptr && (!this->has_color_temperature() ||
+                                                this->state_->remote_values.get_color_mode() == light::ColorMode::RGB);
+  if (rgb_display) {
+    uint8_t overlays[3] = {0, 0, 0};
+    for (uint8_t i = 0; i < spec->n_overlays && i < 3; i++)
+      overlays[i] = channels[spec->overlay_channel[i]];
+    uint8_t rgb[3];
+    kk::swatch_i(*spec, channels[1], overlays, rgb);
+    float direction[3];
+    rgb_direction(rgb, direction);
+    this->show_on_light_(on, brightness, light::ColorMode::RGB, 0.0f, direction);
+  } else if (this->has_color_temperature()) {
+    // The inverse of manual_levels(): UI2 = 0 is the warm end when invert_color_ is set.
+    float t = channels[1] / 255.0f;
+    if (this->invert_color_)
+      t = 1.0f - t;
+    this->show_on_light_(on, brightness, light::ColorMode::COLOR_TEMPERATURE,
+                         this->cold_mireds_ + t * (this->warm_mireds_ - this->cold_mireds_), nullptr);
+  } else {
+    this->show_on_light_(on, brightness, light::ColorMode::BRIGHTNESS, 0.0f, nullptr);
+  }
+}
+
+// True when the light's values are the ones show_on_light_() just set, within rounding.
+bool KLinkGroup::shown_matches_(const LightShown &shown, const light::LightColorValues &values) const {
+  if (!shown.have || values.is_on() != shown.on)
+    return false;
+  if (!shown.on)
+    return true;
+  if (std::fabs(values.get_brightness() - shown.brightness) > 0.01f)
+    return false;
+  if (shown.mode == light::ColorMode::COLOR_TEMPERATURE)
+    return values.get_color_mode() == light::ColorMode::COLOR_TEMPERATURE &&
+           std::fabs(values.get_color_temperature() - shown.mireds) <= 1.0f;
+  if (shown.mode == light::ColorMode::RGB) {
+    if (values.get_color_mode() != light::ColorMode::RGB)
+      return false;
+    float peak = std::max(values.get_red(), std::max(values.get_green(), values.get_blue()));
+    if (peak <= 0.0f)
+      return false;
+    return std::fabs(values.get_red() / peak - shown.rgb[0]) <= 0.02f &&
+           std::fabs(values.get_green() / peak - shown.rgb[1]) <= 0.02f &&
+           std::fabs(values.get_blue() / peak - shown.rgb[2]) <= 0.02f;
+  }
+  return true;
+}
+
+// A standard ESPHome effect ends without telling us: notice it here, before the schedule's next tick
+// shows its own value on the light. Program and Off then resume; the call that stops the effect
+// repeats its last values and is not a user command; in Manual the effect's last values stay.
+void KLinkGroup::loop() {
+  this->tick_stage_();
+  if (!this->fwd_effect_active_ || this->state_ == nullptr || this->state_->get_current_effect_index() != 0)
+    return;
+  this->fwd_effect_active_ = false;
+  this->ended_shown_ = this->fwd_shown_;
+  this->effect_ended_pending_ = true;
+  this->have_sent_ = false;
+  this->shown_.have = false;
+}
+
+void KLinkGroup::send_throttled_(const uint8_t channels[5]) {
+  std::memcpy(this->pending_, channels, sizeof(this->pending_));
+  const uint32_t now = millis();
+  const uint32_t since = now - this->last_throttled_ms_;
+  if (since >= kk::EFFECT_FRAME_MS) {
+    this->last_throttled_ms_ = now;
+    this->direct_next_ = true;  // a command or a transition's frame: shown at once, never faded again
+    this->send_(this->pending_);
+    return;
+  }
+  // Too soon after the last frame: the latest value goes out when the interval is over.
+  this->set_timeout("klink_trail", kk::EFFECT_FRAME_MS - since, [this]() {
+    this->last_throttled_ms_ = millis();
+    this->direct_next_ = true;
+    this->send_(this->pending_);
+  });
+}
+
+// The five channels the light's current values ask for. In RGB mode the color is snapped to the
+// nearest one the lamp can make (and, when `remember` is set, kept for the number entities).
+void KLinkGroup::channels_from_light_(light::LightState *state, uint8_t channels[5], bool remember) {
+  const light::LightColorValues &v = state->current_values;
+  const kk::ColorSpec *spec = this->color_spec_();
+  uint8_t extras[3] = {this->extras_[0], this->extras_[1], this->extras_[2]};
+  uint8_t level, color;
+  if (spec != nullptr && v.get_color_mode() == light::ColorMode::RGB) {
+    float peak = std::max(v.get_red(), std::max(v.get_green(), v.get_blue()));
+    uint8_t target[3] = {255, 255, 255};
+    if (peak > 0.0f) {
+      target[0] = static_cast<uint8_t>(std::lround(v.get_red() / peak * 255.0f));
+      target[1] = static_cast<uint8_t>(std::lround(v.get_green() / peak * 255.0f));
+      target[2] = static_cast<uint8_t>(std::lround(v.get_blue() / peak * 255.0f));
+    }
+    kk::SnapResult snapped = kk::nearest_i(*spec, target);
+    color = snapped.clr;
+    for (uint8_t i = 0; i < spec->n_overlays && i < 3; i++) {
+      const uint8_t channel = spec->overlay_channel[i];
+      if (channel >= 2 && channel <= 4)
+        extras[channel - 2] = snapped.overlays[i];
+    }
+    level = static_cast<uint8_t>(std::lround(this->light_brightness_(state) * 255.0f));
+    if (remember) {
+      this->manual_color_ = color;
+      for (int i = 0; i < 3; i++)
+        this->extras_[i] = extras[i];
+    }
+  } else {
+    this->manual_levels(state, level, color);
+  }
+  channels[0] = level;
+  channels[1] = color;
+  channels[2] = extras[0];
+  channels[3] = extras[1];
+  channels[4] = extras[2];
+}
+
+void KLinkGroup::forward_values_(light::LightState *state) {
+  this->fwd_effect_active_ = true;
+  // Remember the effect's last TARGET values (remote_values: the call that ends an effect repeats
+  // those), so that call can be told from a user command. The frames themselves follow the
+  // interpolated current values.
+  const light::LightColorValues &v = state->remote_values;
+  LightShown now;
+  now.have = true;
+  now.on = v.is_on();
+  now.mode = v.get_color_mode();
+  now.brightness = v.get_brightness();
+  now.mireds = v.get_color_temperature();
+  float peak = std::max(v.get_red(), std::max(v.get_green(), v.get_blue()));
+  for (int c = 0; c < 3; c++) {
+    const float comp = c == 0 ? v.get_red() : (c == 1 ? v.get_green() : v.get_blue());
+    now.rgb[c] = peak > 0.0f ? comp / peak : 1.0f;
+  }
+  this->fwd_shown_ = now;
+  uint8_t channels[5];
+  this->channels_from_light_(state, channels, false);  // from current_values
+  this->send_throttled_(channels);
+}
+
 void KLinkGroup::write_state(light::LightState *state) {
+  if (this->state_ == nullptr) {
+    this->state_ = state;
+    this->apply_transition_();
+  }
   this->state_ = state;
   // The first call is the state restored at boot, not a user command: never let it override the
   // schedule or push a level to the lamps.
@@ -479,101 +1145,55 @@ void KLinkGroup::write_state(light::LightState *state) {
   }
   // While an effect runs it owns the output: the light's own brightness/color writes (which fire as
   // the effect starts) would show up as a one-frame flash between two effect frames.
-  if (state->get_current_effect_index() != 0)
+  if (state->get_current_effect_index() != 0) {
+    if (!this->klink_effect_running_)
+      this->forward_values_(state);  // a standard ESPHome effect: its values go to the lamps
     return;
+  }
+  const light::LightColorValues &values = state->remote_values;
+  // The light call that ends an effect repeats the values the light already had. Treat that as our
+  // own write; a real user command in the same call (turn-off, new brightness) differs and falls
+  // through to take manual control below.
+  if (this->effect_ended_pending_) {
+    this->effect_ended_pending_ = false;
+    if (this->mode_.mode != kk::Mode::MANUAL && this->shown_matches_(this->ended_shown_, values))
+      return;
+  }
+  // The value this group itself put on the light (the schedule, or a snapped color) is not a user
+  // command, in every mode.
+  if (this->shown_matches_(this->shown_, values))
+    return;
+  this->on_user_command_();
+  // The light now shows the user's value, so the schedule's next value must be shown again even if it
+  // equals the one shown before.
+  this->shown_.have = false;
+  const kk::ColorSpec *spec = this->color_spec_();
+  const bool rgb_command = spec != nullptr && values.is_on() && values.get_color_mode() == light::ColorMode::RGB;
+  if (rgb_command) {
+    // Any color is accepted; the lamp gets the closest one it can make (CLR plus the overlay channels).
+    float peak = std::max(values.get_red(), std::max(values.get_green(), values.get_blue()));
+    uint8_t target[3] = {255, 255, 255};
+    if (peak > 0.0f) {
+      target[0] = static_cast<uint8_t>(std::lround(values.get_red() / peak * 255.0f));
+      target[1] = static_cast<uint8_t>(std::lround(values.get_green() / peak * 255.0f));
+      target[2] = static_cast<uint8_t>(std::lround(values.get_blue() / peak * 255.0f));
+    }
+    kk::SnapResult snapped = kk::nearest_i(*spec, target);
+    this->manual_color_ = snapped.clr;
+    for (uint8_t i = 0; i < spec->n_overlays && i < 3; i++) {
+      const uint8_t channel = spec->overlay_channel[i];  // 0-based UI index, 2..4
+      if (channel >= 2 && channel <= 4)
+        this->extras_[channel - 2] = snapped.overlays[i];
+    }
+  }
   uint8_t level, color;
   this->manual_levels(state, level, color);
   uint8_t channels[5] = {level, color, this->extras_[0], this->extras_[1], this->extras_[2]};
-  this->manual_ = true;  // a user command overrides the schedule until resume
-  this->send_(channels);
-}
-
-void KLinkGroup::set_slot(size_t index, const kk::SchedulePoint &point) {
-  if (index >= this->slots_.size()) {
-    ESP_LOGE(TAG, "GID %u has no slot %u", this->gid_, static_cast<unsigned>(index + 1));
-    return;
+  this->send_throttled_(channels);
+  if (rgb_command) {
+    this->publish_to_light_(channels);  // show the color the lamp will really make
+    this->extras_cb_.call();            // and let the number entities follow
   }
-  this->slots_[index] = point;
-  this->editor_cb_.call();
-}
-
-void KLinkGroup::register_slot_text(size_t index, KLinkSlotText *text) {
-  if (this->slot_texts_.size() <= index)
-    this->slot_texts_.resize(index + 1, nullptr);
-  this->slot_texts_[index] = text;
-}
-
-void KLinkGroup::select_point(size_t index) {
-  if (index >= this->slots_.size())
-    return;
-  this->selected_ = index;
-  this->editor_cb_.call();
-}
-
-void KLinkGroup::point_changed_() {
-  if (this->selected_ < this->slot_texts_.size() && this->slot_texts_[this->selected_] != nullptr)
-    this->slot_texts_[this->selected_]->store(this->slots_[this->selected_]);
-  this->editor_cb_.call();
-}
-
-void KLinkGroup::edit_point_time(uint8_t hour, uint8_t minute) {
-  if (this->slots_.empty() || hour > 23 || minute > 59)
-    return;
-  kk::SchedulePoint &p = this->slots_[this->selected_];
-  p.minute = static_cast<uint16_t>(hour * 60 + minute);
-  p.enabled = true;
-  this->point_changed_();
-}
-
-void KLinkGroup::edit_point_channel(uint8_t index, uint8_t value) {
-  if (this->slots_.empty() || index >= kk::NUM_CHANNELS)
-    return;
-  kk::SchedulePoint &p = this->slots_[this->selected_];
-  p.channels[index] = kk::clamp_channel(index, value);
-  p.enabled = true;
-  this->point_changed_();
-}
-
-void KLinkGroup::edit_point_enabled(bool enabled) {
-  if (this->slots_.empty())
-    return;
-  this->slots_[this->selected_].enabled = enabled;
-  this->point_changed_();
-}
-
-void KLinkGroup::set_schedule_enabled(bool enabled) {
-  this->schedule_enabled_ = enabled;
-  if (enabled)
-    this->resume_schedule();
-}
-
-void KLinkGroup::resume_schedule() {
-  this->manual_ = false;
-  this->have_sent_ = false;  // send the scheduled value on the next tick
-}
-
-bool KLinkGroup::compute_now(uint8_t out[5]) {
-  if (this->time_ == nullptr)
-    return false;
-  ESPTime now = this->time_->now();
-  if (!now.is_valid())
-    return false;
-  return kk::schedule_compute(this->slots_, now.hour * 3600u + now.minute * 60u + now.second, out);
-}
-
-void KLinkGroup::update() {
-  if (!this->schedule_enabled_ || this->paused_ || this->manual_ || this->time_ == nullptr)
-    return;
-  ESPTime now = this->time_->now();
-  if (!now.is_valid())
-    return;  // no clock yet: hold whatever the lamps are doing
-  uint8_t channels[5];
-  uint32_t second_of_day = now.hour * 3600u + now.minute * 60u + now.second;
-  if (!kk::schedule_compute(this->slots_, second_of_day, channels))
-    return;  // nothing enabled
-  bool changed = !this->have_sent_ || std::memcmp(channels, this->last_sent_, 5) != 0;
-  if (changed || millis() - this->last_sent_ms_ >= this->refresh_ms_)
-    this->send_(channels);
 }
 
 // ---- Slot text ------------------------------------------------------------------------------
@@ -631,6 +1251,130 @@ void KLinkSlotText::apply_(const std::string &value, bool save) {
 
 // ---- Point editor entities ------------------------------------------------------------------
 
+void KLinkModeSelect::setup() {
+  this->group_->add_on_mode_callback([this]() {
+    if (this->group_->mode() == kk::Mode::PREVIEW)
+      return;  // keep showing the last user-selectable mode
+    this->publish_state(static_cast<size_t>(this->group_->mode()));
+  });
+  // A preview right at boot has no user-selectable mode to show yet.
+  if (this->group_->mode() != kk::Mode::PREVIEW)
+    this->publish_state(static_cast<size_t>(this->group_->mode()));
+}
+
+void KLinkModeSelect::dump_config() { LOG_SELECT("", "K-Link mode", this); }
+
+void KLinkEffectSpeedSelect::setup() {
+  this->publish_state(static_cast<size_t>(this->group_->effect_speed()));
+}
+
+void KLinkEffectSpeedSelect::dump_config() { LOG_SELECT("", "K-Link effect speed", this); }
+
+void KLinkEffectDurationNumber::setup() {
+  this->publish_state(static_cast<float>(this->group_->effect_duration_ms()) / 60000.0f);
+}
+
+void KLinkEffectDurationNumber::control(float value) {
+  if (value < 0.0f)
+    value = 0.0f;
+  if (value > 5.0f)
+    value = 5.0f;
+  // Half-minute steps up to 5 minutes; 0 = until stopped.
+  uint32_t halves = static_cast<uint32_t>(std::lround(value * 2.0f));
+  this->publish_state(static_cast<float>(halves) / 2.0f);
+  this->group_->set_effect_options(this->group_->effect_speed(), halves * 30000u);
+}
+
+void KLinkEffectDurationNumber::dump_config() { LOG_NUMBER("", "K-Link effect duration", this); }
+
+// ---- Acclimation and soft start entities ------------------------------------------------------
+
+void KLinkTankNumber::setup() {
+  switch (this->kind_) {
+    case TankNumberKind::ACC_START:
+    case TankNumberKind::ACC_DAYS:
+      this->group_->add_on_acclimation_callback([this]() { this->refresh_(); });
+      break;
+    case TankNumberKind::SOFT_START:
+      this->group_->add_on_output_settings_callback([this]() { this->refresh_(); });
+      break;
+  }
+  this->refresh_();
+}
+
+void KLinkTankNumber::refresh_() {
+  switch (this->kind_) {
+    case TankNumberKind::ACC_START:
+      this->publish_state(this->group_->acclimation().start_pct);
+      break;
+    case TankNumberKind::ACC_DAYS:
+      this->publish_state(this->group_->acclimation().days);
+      break;
+    case TankNumberKind::SOFT_START:
+      this->publish_state(this->group_->output_settings().soft_start);
+      break;
+  }
+}
+
+void KLinkTankNumber::control(float value) {
+  const uint8_t v = static_cast<uint8_t>(value < 0 ? 0 : (value > 255 ? 255 : std::lround(value)));
+  if (this->kind_ == TankNumberKind::SOFT_START) {
+    OutputSettings settings = this->group_->output_settings();
+    settings.soft_start = v;
+    this->group_->set_output_settings(settings);
+    return;
+  }
+  kk::AcclimationPlan plan = this->group_->acclimation();
+  if (this->kind_ == TankNumberKind::ACC_START)
+    plan.start_pct = v;
+  else
+    plan.days = v;
+  this->group_->set_acclimation(plan);
+}
+
+void KLinkTankNumber::dump_config() { LOG_NUMBER("", "K-Link tank number", this); }
+
+void KLinkSourceSelect::setup() {
+  this->publish_state(static_cast<size_t>(this->group_->source()));
+  this->group_->add_on_source_callback([this]() { this->publish_state(static_cast<size_t>(this->group_->source())); });
+}
+
+void KLinkSourceSelect::dump_config() { LOG_SELECT("", "K-Link program source", this); }
+
+void KLinkCurveSelect::setup() {
+  this->publish_state(this->group_->output_settings().curve);
+  this->group_->add_on_output_settings_callback(
+      [this]() { this->publish_state(this->group_->output_settings().curve); });
+}
+
+void KLinkCurveSelect::control(size_t index) {
+  OutputSettings settings = this->group_->output_settings();
+  settings.curve = static_cast<uint8_t>(index > 1 ? 1 : index);
+  this->group_->set_output_settings(settings);
+}
+
+void KLinkCurveSelect::dump_config() { LOG_SELECT("", "K-Link brightness curve", this); }
+
+void KLinkFadeTimeNumber::setup() {
+  this->publish_state(static_cast<float>(this->group_->output_settings().fade_ds) / 10.0f);
+  this->group_->add_on_output_settings_callback(
+      [this]() { this->publish_state(static_cast<float>(this->group_->output_settings().fade_ds) / 10.0f); });
+}
+
+void KLinkFadeTimeNumber::control(float value) {
+  if (value < 0.0f)
+    value = 0.0f;
+  if (value > 10.0f)
+    value = 10.0f;
+  // Tenths of a second, matching OutputSettings::fade_ds.
+  uint16_t tenths = static_cast<uint16_t>(std::lround(value * 10.0f));
+  OutputSettings settings = this->group_->output_settings();
+  settings.fade_ds = tenths;
+  this->group_->set_output_settings(settings);
+}
+
+void KLinkFadeTimeNumber::dump_config() { LOG_NUMBER("", "K-Link fade time", this); }
+
 void KLinkPointSelect::setup() {
   this->group_->add_on_editor_callback([this]() { this->publish_state(this->group_->selected_point()); });
   this->publish_state(this->group_->selected_point());
@@ -674,12 +1418,6 @@ void KLinkSwitch::setup() {
     return;
   }
   switch (this->kind_) {
-    case SwitchKind::SCHEDULE:
-      state = restored.value_or(true);
-      break;
-    case SwitchKind::PAUSE:
-      state = restored.value_or(false);
-      break;
     case SwitchKind::WRITES:
       state = restored.value_or(this->hub_->writes_enabled());
       this->hub_->add_on_writes_callback([this](bool on) { this->publish_state(on); });
@@ -693,6 +1431,15 @@ void KLinkSwitch::setup() {
       this->group_->add_on_editor_callback(
           [this]() { this->publish_state(this->group_->point(this->group_->selected_point()).enabled); });
       this->publish_state(this->group_->point(this->group_->selected_point()).enabled);
+      return;
+    case SwitchKind::FOLLOW_WEATHER:
+    case SwitchKind::STORMS_FROM_WEATHER:
+      state = restored.value_or(false);
+      break;
+    case SwitchKind::ACCLIMATION:
+      // A view of the program's own (saved) acclimation plan: nothing to restore or apply.
+      this->group_->add_on_acclimation_callback([this]() { this->publish_state(this->group_->acclimation().on); });
+      this->publish_state(this->group_->acclimation().on);
       return;
   }
   this->apply_(state);
@@ -709,12 +1456,6 @@ void KLinkSwitch::write_state(bool state) {
 
 void KLinkSwitch::apply_(bool state) {
   switch (this->kind_) {
-    case SwitchKind::SCHEDULE:
-      this->group_->set_schedule_enabled(state);
-      break;
-    case SwitchKind::PAUSE:
-      this->group_->set_paused(state);
-      break;
     case SwitchKind::WRITES:
       this->hub_->set_writes_enabled(state);
       break;
@@ -724,10 +1465,63 @@ void KLinkSwitch::apply_(bool state) {
     case SwitchKind::POINT_ENABLED:
       this->group_->edit_point_enabled(state);
       break;
+    case SwitchKind::ACCLIMATION: {
+      kk::AcclimationPlan plan = this->group_->acclimation();
+      plan.on = state;
+      this->group_->set_acclimation(plan);
+      break;
+    }
+    case SwitchKind::FOLLOW_WEATHER:
+      this->hub_->set_follow_weather(state);
+      break;
+    case SwitchKind::STORMS_FROM_WEATHER:
+      this->hub_->set_storms_from_weather(state);
+      break;
   }
 }
 
 // ---- Channel numbers ------------------------------------------------------------------------
+
+void KLinkCloudDimmingNumber::setup() {
+  this->pref_ = this->make_entity_preference<float>();
+  float value = 50.0f;
+  if (!this->pref_.load(&value) || std::isnan(value))
+    value = 50.0f;
+  this->hub_->set_max_cloud_dimming(value);
+  this->publish_state(this->hub_->max_cloud_dimming());
+}
+
+void KLinkCloudDimmingNumber::control(float value) {
+  this->hub_->set_max_cloud_dimming(value);
+  const float stored = this->hub_->max_cloud_dimming();
+  this->pref_.save(&stored);
+  this->publish_state(stored);
+}
+
+void KLinkCloudDimmingNumber::dump_config() { LOG_NUMBER("", "K-Link max cloud dimming", this); }
+
+void KLinkLocationNumber::setup() {
+  this->pref_ = this->make_entity_preference<float>();
+  float value = NAN;
+  if (this->pref_.load(&value) && !std::isnan(value))
+    this->hub_->set_entered_coordinate(this->index_, value);
+  else
+    value = NAN;
+  this->publish_state(value);
+}
+
+void KLinkLocationNumber::control(float value) {
+  const float limit = this->index_ == 0 ? 90.0f : 180.0f;
+  if (value < -limit)
+    value = -limit;
+  if (value > limit)
+    value = limit;
+  this->pref_.save(&value);
+  this->hub_->set_entered_coordinate(this->index_, value);
+  this->publish_state(value);
+}
+
+void KLinkLocationNumber::dump_config() { LOG_NUMBER("", "K-Link location", this); }
 
 void KLinkChannelNumber::refresh_() {
   const kk::SchedulePoint &p = this->group_->point(this->group_->selected_point());
@@ -749,6 +1543,14 @@ void KLinkChannelNumber::setup() {
   uint8_t pct = static_cast<uint8_t>(value < 0 ? 0 : (value > max ? max : value));
   this->group_->set_extra_silent(this->channel_, pct);
   this->publish_state(pct);
+  // A color snapped from Home Assistant changes these numbers too.
+  this->group_->add_on_extras_callback([this]() {
+    float value = this->group_->extra(this->channel_);
+    if (this->state != value) {
+      this->publish_state(value);
+      this->pref_.save(&value);
+    }
+  });
 }
 
 void KLinkChannelNumber::control(float value) {
@@ -771,74 +1573,62 @@ void KLinkChannelNumber::dump_config() {
 
 // ---- Effects -----------------------------------------------------------------------------------
 
-// The effects write the group about ten times a second.
-static const uint32_t EFFECT_TICK_MS = 100;
-
 void KLinkEffect::start() {
   light::LightEffect::start();
   this->start_ms_ = millis();
-  this->last_tick_ms_ = this->start_ms_ - EFFECT_TICK_MS;  // first tick right away
+  this->last_tick_ms_ = this->start_ms_ - kk::EFFECT_FRAME_MS;  // first frame right away
+  light::LightState *state = this->get_light_state();
+  KLinkGroup *group = state != nullptr ? static_cast<KLinkGroup *>(state->get_output()) : nullptr;
+  // The effects take the group's runtime Speed and Time settings; the
+  // YAML `speed`/`duration` values only apply while the entities have not been used.
+  if (group != nullptr) {
+    this->variant_ = group->effect_speed();
+    this->duration_ms_ = group->effect_duration_ms();
+  }
+  this->engine_.start(static_cast<kk::EffectKind>(this->kind_), this->variant_);
+  if (group != nullptr)
+    group->note_effect_started(this->duration_ms_, this->kind_ != FxKind::STORM);
 }
 
-void KLinkEffect::finish_(bool turn_off) {
+void KLinkEffect::stop() {
+  light::LightEffect::stop();
+  light::LightState *state = this->get_light_state();
+  if (state == nullptr)
+    return;
+  KLinkGroup *group = static_cast<KLinkGroup *>(state->get_output());
+  if (group != nullptr)
+    group->effect_ended_();
+}
+
+void KLinkEffect::finish_() {
+  // Every effect ends by clearing itself, whatever its kind: the group then resumes its mode
+  // (Program shows the schedule again, Off stays off, Manual returns to the held level). No effect
+  // turns the light off, not even Sunset.
   auto call = this->get_light_state()->make_call();
-  if (turn_off)
-    call.set_state(false);
-  else
-    call.set_effect(static_cast<uint32_t>(0));
+  call.set_effect(static_cast<uint32_t>(0));
+  call.set_save(false);
   call.perform();
 }
 
 void KLinkEffect::apply() {
-  uint32_t now = millis();
-  if (now - this->last_tick_ms_ < EFFECT_TICK_MS)
+  const uint32_t now = millis();
+  if (now - this->last_tick_ms_ < kk::EFFECT_FRAME_MS)
     return;
-  this->last_tick_ms_ = now;
-  uint32_t elapsed = now - this->start_ms_;
-  bool timed = this->duration_ms_ != 0;
-  if (timed && elapsed >= this->duration_ms_) {
-    this->finish_(this->kind_ == FxKind::SUNSET);
+  // Frames are due every 40 ms on a fixed cadence. The loop wakes every 16 ms, so counting from "now" would drift
+  // to about 20 a second; after a long stall start a fresh cadence instead of catching up.
+  this->last_tick_ms_ += kk::EFFECT_FRAME_MS;
+  if (now - this->last_tick_ms_ >= kk::EFFECT_FRAME_MS)
+    this->last_tick_ms_ = now;
+  const uint32_t elapsed = now - this->start_ms_;
+  if (this->duration_ms_ != 0 && elapsed >= this->duration_ms_) {
+    this->finish_();
     return;
   }
-  // The light output is a K-Link group: effects are only registered for klink lights.
+  // The light output is a K-Link group: these effects are only registered for klink lights. The
+  // engine drives all five channels itself.
   KLinkGroup *group = static_cast<KLinkGroup *>(this->get_light_state()->get_output());
-  uint8_t level, color;
-  group->manual_levels(this->get_light_state(), level, color);
   uint8_t out[5] = {0, 0, 0, 0, 0};
-
-  {
-    uint32_t period = this->period_ms_ == 0 ? 1 : this->period_ms_;
-    // triangle 0..1..0 over one period
-    float phase = static_cast<float>(elapsed % period) / static_cast<float>(period);
-    float tri = phase < 0.5f ? phase * 2.0f : 2.0f - phase * 2.0f;
-    switch (this->kind_) {
-      case FxKind::PULSE: {
-        float f = this->min_fraction_ + (1.0f - this->min_fraction_) * tri;
-        out[0] = static_cast<uint8_t>(std::lround(level * f));
-        out[1] = color;
-        break;
-      }
-      case FxKind::COLOR_SWEEP:
-        out[0] = level;
-        out[1] = static_cast<uint8_t>(std::lround(tri * 255.0f));
-        break;
-      case FxKind::SUNRISE:
-      case FxKind::SUNSET: {
-        float done = timed ? static_cast<float>(elapsed) / static_cast<float>(this->duration_ms_) : 1.0f;
-        float f = this->kind_ == FxKind::SUNRISE ? done : 1.0f - done;
-        out[0] = static_cast<uint8_t>(std::lround(level * f));
-        out[1] = color;
-        break;
-      }
-      default:
-        break;
-    }
-  }
-  {
-    out[2] = group->extra(3);
-    out[3] = group->extra(4);
-    out[4] = group->extra(5);
-  }
+  this->engine_.step(elapsed, out);
   group->send_effect_frame(out);
 }
 
@@ -852,6 +1642,19 @@ void KLinkStateSensor::update() {
 
 void KLinkStateSensor::dump_config() { LOG_TEXT_SENSOR("", "K-Link state", this); }
 
+// ---- Group status text sensor ---------------------------------------------------------------
+
+void KLinkGroupStatus::update() {
+  std::string text = this->group_->status_text();
+  if (!this->have_last_ || this->last_ != text) {
+    this->last_ = text;
+    this->have_last_ = true;
+    this->publish_state(text);
+  }
+}
+
+void KLinkGroupStatus::dump_config() { LOG_TEXT_SENSOR("", "K-Link group status", this); }
+
 // ---- Button ---------------------------------------------------------------------------------
 
 void KLinkButton::dump_config() { LOG_BUTTON("", "K-Link button", this); }
@@ -864,8 +1667,8 @@ void KLinkButton::press_action() {
     case ButtonKind::IDENTIFY_NEXT:
       this->hub_->identify_next();
       break;
-    case ButtonKind::RESUME_SCHEDULE:
-      this->group_->resume_schedule();
+    case ButtonKind::RETRY:
+      this->hub_->retry();
       break;
   }
 }

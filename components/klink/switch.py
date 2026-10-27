@@ -4,7 +4,7 @@ from esphome.components import switch
 from esphome.const import CONF_TYPE
 
 from . import CONF_KLINK_ID, KLinkHub, klink_ns
-from .light import KLinkGroup
+from .light import ProgramHost
 
 DEPENDENCIES = ["klink"]
 
@@ -13,13 +13,14 @@ CONF_GROUP = "group"
 KLinkSwitch = klink_ns.class_("KLinkSwitch", switch.Switch, cg.Component)
 SwitchKind = klink_ns.enum("SwitchKind", is_class=True)
 KINDS = {
-    "schedule": SwitchKind.SCHEDULE,
-    "pause": SwitchKind.PAUSE,
     "writes": SwitchKind.WRITES,
     "commissioning": SwitchKind.COMMISSIONING,
     "point_enabled": SwitchKind.POINT_ENABLED,  # the point editor's on/off for the selected point
+    "acclimation": SwitchKind.ACCLIMATION,  # the program's acclimation ramp, on or off
+    "follow_weather": SwitchKind.FOLLOW_WEATHER,  # clouds dim the sun program
+    "storms_from_weather": SwitchKind.STORMS_FROM_WEATHER,  # a thunderstorm starts the Storm effect
 }
-GROUP_KINDS = ("schedule", "pause", "point_enabled")
+GROUP_KINDS = ("point_enabled", "acclimation")
 
 
 def _check(config):
@@ -37,7 +38,7 @@ CONFIG_SCHEMA = cv.All(
         {
             cv.GenerateID(CONF_KLINK_ID): cv.use_id(KLinkHub),
             cv.Required(CONF_TYPE): cv.one_of(*KINDS, lower=True),
-            cv.Optional(CONF_GROUP): cv.use_id(KLinkGroup),
+            cv.Optional(CONF_GROUP): cv.use_id(ProgramHost),
         }
     )
     .extend(cv.COMPONENT_SCHEMA),

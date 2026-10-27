@@ -5,6 +5,9 @@ substitutions:
   dm_pin: "18"
   dp_pin: "19"
 
+  # On-board RGB LED of the ESP32-C3-DevKitM-1; only used with common/rgb-led.yaml.
+  rgb_pin: "8"
+
 esp32:
   board: esp32-c3-devkitm-1
   framework:

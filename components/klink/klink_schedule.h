@@ -14,7 +14,7 @@ namespace klink {
 
 static const size_t NUM_CHANNELS = 5;
 static const uint32_t SECONDS_PER_DAY = 86400;
-// UI1-UI2 are full-range bytes; UI3-UI5 stop at 100 (same limits as tools/kessil_control_light.py).
+// UI1-UI2 are full-range bytes; UI3-UI5 stop at 100.
 static const uint8_t CHANNEL_MAX[NUM_CHANNELS] = {255, 255, 100, 100, 100};
 
 struct SchedulePoint {
@@ -29,11 +29,18 @@ inline uint8_t clamp_channel(size_t index, int value) {
   return static_cast<uint8_t>(value > CHANNEL_MAX[index] ? CHANNEL_MAX[index] : value);
 }
 
-// Compute the channels for `second_of_day` (0-86399). Returns false when no point is enabled.
-// One enabled point holds its value all day. Otherwise the value moves linearly from the latest
-// point at or before now to the next one, wrapping across midnight.
-inline bool schedule_compute(const std::vector<SchedulePoint> &points, uint32_t second_of_day,
-                             uint8_t out[NUM_CHANNELS]) {
+// The two points a time of day lies between, and how far along the way it is. False when no point
+// is enabled. One enabled point holds its value all day (span 0). Otherwise the value moves linearly
+// from the latest point at or before now to the next one, wrapping across midnight.
+struct ScheduleSegment {
+  SchedulePoint from;
+  SchedulePoint to;
+  uint32_t span;     // seconds between the two points
+  uint32_t elapsed;  // seconds since `from`
+};
+
+inline bool schedule_locate(const std::vector<SchedulePoint> &points, uint32_t second_of_day,
+                            ScheduleSegment &seg) {
   std::vector<SchedulePoint> on;
   for (size_t i = 0; i < points.size(); i++)
     if (points[i].enabled && points[i].minute < 1440)
@@ -52,15 +59,26 @@ inline bool schedule_compute(const std::vector<SchedulePoint> &points, uint32_t 
 
   uint32_t t0 = static_cast<uint32_t>(on[prev].minute) * 60;
   uint32_t t1 = static_cast<uint32_t>(on[next].minute) * 60;
-  uint32_t span = (t1 + SECONDS_PER_DAY - t0) % SECONDS_PER_DAY;
-  uint32_t elapsed = (second_of_day + SECONDS_PER_DAY - t0) % SECONDS_PER_DAY;
+  seg.from = on[prev];
+  seg.to = on[next];
+  seg.span = (t1 + SECONDS_PER_DAY - t0) % SECONDS_PER_DAY;  // equal minutes or a single point: 0
+  seg.elapsed = (second_of_day + SECONDS_PER_DAY - t0) % SECONDS_PER_DAY;
+  return true;
+}
+
+// Compute the channels for `second_of_day` (0-86399). Returns false when no point is enabled.
+inline bool schedule_compute(const std::vector<SchedulePoint> &points, uint32_t second_of_day,
+                             uint8_t out[NUM_CHANNELS]) {
+  ScheduleSegment seg;
+  if (!schedule_locate(points, second_of_day, seg))
+    return false;
   for (size_t c = 0; c < NUM_CHANNELS; c++) {
-    int a = on[prev].channels[c], b = on[next].channels[c];
+    int a = seg.from.channels[c], b = seg.to.channels[c];
     int v = a;
-    if (span != 0) {  // equal minutes or a single point: no interpolation
+    if (seg.span != 0) {
       // Floor division (not rounding), so a ramp from 51 to 102 reads 93 where the exact value is 93.78.
-      int64_t delta = static_cast<int64_t>(b - a) * elapsed;
-      int64_t step = delta >= 0 ? delta / span : -((-delta + span - 1) / span);
+      int64_t delta = static_cast<int64_t>(b - a) * seg.elapsed;
+      int64_t step = delta >= 0 ? delta / seg.span : -((-delta + seg.span - 1) / seg.span);
       v = a + static_cast<int>(step);
     }
     out[c] = clamp_channel(c, v);

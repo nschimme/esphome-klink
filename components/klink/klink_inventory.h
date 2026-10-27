@@ -26,6 +26,35 @@ struct LampRecord {
 inline uint8_t default_gid(uint8_t type) { return type == 1 ? 1 : type == 2 ? 2 : type == 3 ? 26 : 0; }
 inline bool is_default_gid(uint8_t gid) { return gid == 1 || gid == 2 || gid == 26; }
 
+// Why an assignment is refused. NONE means the move is allowed.
+enum class AssignmentError : uint8_t {
+  NONE,
+  UNKNOWN_KID,
+  GID_OUT_OF_RANGE,
+  WRONG_DEFAULT_GROUP,
+  CUSTOM_GID_RANGE,
+  GROUP_TYPE_CONFLICT,
+};
+
+// Short user-facing text for an assignment refusal ("" for AssignmentError::NONE).
+inline const char *assignment_error_text(AssignmentError error) {
+  switch (error) {
+    case AssignmentError::NONE:
+      return "";
+    case AssignmentError::UNKNOWN_KID:
+      return "unknown KID: scan first";
+    case AssignmentError::GID_OUT_OF_RANGE:
+      return "GID must be 1-40";
+    case AssignmentError::WRONG_DEFAULT_GROUP:
+      return "that is the default group of a different lamp type";
+    case AssignmentError::CUSTOM_GID_RANGE:
+      return "custom groups use GIDs 3-25";
+    case AssignmentError::GROUP_TYPE_CONFLICT:
+      return "group already holds a different lamp type";
+  }
+  return "";
+}
+
 class Inventory {
  public:
   const std::vector<LampRecord> &lamps() const { return lamps_; }
@@ -62,21 +91,26 @@ class Inventory {
     return false;
   }
 
-  // Why `kid` must not be moved to `gid`, or an empty string when the move is allowed.
-  std::string check_assignment(uint32_t kid, uint8_t gid) const {
+  // Why `kid` must not be moved to `gid`, as a code the caller can turn into its own text.
+  AssignmentError check_assignment_error(uint32_t kid, uint8_t gid) const {
     const LampRecord *lamp = find(kid);
     if (lamp == nullptr)
-      return "unknown KID: scan first";
+      return AssignmentError::UNKNOWN_KID;
     if (gid < MIN_GID || gid > MAX_GID)
-      return "GID must be 1-40";
+      return AssignmentError::GID_OUT_OF_RANGE;
     if (is_default_gid(gid) && gid != default_gid(lamp->type))
-      return "that is the default group of a different lamp type";
+      return AssignmentError::WRONG_DEFAULT_GROUP;
     if (!is_default_gid(gid) && (gid < CUSTOM_GID_MIN || gid > CUSTOM_GID_MAX))
-      return "custom groups use GIDs 3-25";
+      return AssignmentError::CUSTOM_GID_RANGE;
     for (size_t i = 0; i < lamps_.size(); i++)
       if (lamps_[i].gid == gid && lamps_[i].kid != kid && lamps_[i].type != lamp->type)
-        return "group already holds a different lamp type";
-    return "";
+        return AssignmentError::GROUP_TYPE_CONFLICT;
+    return AssignmentError::NONE;
+  }
+
+  // Why `kid` must not be moved to `gid`, or an empty string when the move is allowed.
+  std::string check_assignment(uint32_t kid, uint8_t gid) const {
+    return assignment_error_text(this->check_assignment_error(kid, gid));
   }
 
   // Blob: version, count, count x (kid BE32, gid, type), CRC-16/CCITT-FALSE over the preceding bytes.
