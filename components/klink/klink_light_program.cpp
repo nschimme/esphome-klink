@@ -31,8 +31,10 @@ KLinkLightProgram::KLinkLightProgram() { all_programs().push_back(this); }
 
 void KLinkLightProgram::setup() {
   // Register with the hub first so the web API can already see the program.
-  if (this->hub_ != nullptr)
+  if (this->hub_ != nullptr) {
     this->hub_->register_program(this);
+    this->hub_->note_clock(this->time_);
+  }
   this->setup_program_();
   this->setup_source_();
 

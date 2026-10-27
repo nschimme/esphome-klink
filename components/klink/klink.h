@@ -39,6 +39,7 @@
 #include "klink_program.h"
 #include "klink_program_base.h"
 #include "klink_schedule.h"
+#include "klink_model_defaults.h"
 #include "klink_lamp_responder.h"
 
 namespace esphome {
@@ -46,6 +47,7 @@ namespace klink {
 
 class KLinkHub;
 class KLinkGroup;
+class KLinkAutoGroup;
 class KLinkLightFollower;
 class KLinkSlotText;
 
@@ -178,6 +180,10 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
     location_[0].zone = latitude;
     location_[1].zone = longitude;
   }
+  // The clock for programs created at runtime (a scanned group with no YAML program). A configured
+  // group also records its clock here, so an existing leader needs no new option.
+  void set_time(time::RealTimeClock *time);
+  void note_clock(time::RealTimeClock *time);
   void set_ha_coordinate(int index, float value);
   void set_entered_coordinate(int index, float value);
   bool location(double &latitude, double &longitude) const override;
@@ -274,6 +280,7 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
 
   void direct_setup_();
   void direct_drive_(bool on);
+  void ensure_auto_groups_();
   void observe_(const std::vector<uint8_t> &frame);
   void note_group_frame_(uint8_t gid, const uint8_t channels[5]);
   void handle_lamp_request_(const std::vector<uint8_t> &frame, uint32_t now);
@@ -298,6 +305,9 @@ class KLinkHub : public Component, public uart::UARTDevice, public LocationProvi
   ESPPreferenceObject group_names_pref_;
   std::vector<KLinkGroup *> groups_;
   std::vector<ProgramHost *> programs_;
+  std::vector<KLinkAutoGroup *> auto_groups_;
+  time::RealTimeClock *time_{nullptr};
+  uint32_t last_auto_groups_ms_{0};
   Coordinate location_[2];  // latitude, longitude
   CallbackManager<void()> location_cb_;
   ESPPreferenceObject location_pref_;
@@ -393,6 +403,17 @@ struct LightShown {
   float rgb[3]{0.0f, 0.0f, 0.0f};  // the color direction, largest component 1
 };
 
+// The stored points of a group: version, count, then per slot minute (BE16), five channels and the
+// enabled flag. Fixed size, so it can live in one preference slot. A group with slot text entities
+// lets those persist the points; one without them (a slim YAML group or an automatic program) uses
+// this blob, so the web editor works without the per-point Home Assistant entities.
+struct StoredSlots {
+  uint8_t version;
+  uint8_t lamp_type;  // 1 Tuna Blue/AP9X, 2 Tuna Sun, 3 Refugium
+  uint8_t count;
+  uint8_t data[16 * 8];
+};
+
 class KLinkGroup : public ProgramBase, public light::LightOutput, public Component {
  public:
   // Groups register when they are constructed: a saved effect is restored while the light sets up, before this
@@ -403,6 +424,10 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   const char *kind() const override { return "bus"; }
   void set_model(GroupModel model) { model_ = model; }
   GroupModel model() const { return model_; }
+  // The K-Link lamp type: 1 Tuna Blue/AP9X, 2 Tuna Sun, 3 Refugium.
+  uint8_t lamp_type() const {
+    return model_ == GroupModel::TUNA_BLUE ? 1 : (model_ == GroupModel::TUNA_SUN ? 2 : 3);
+  }
   // Only the Tuna Sun's UI2 is a color temperature; elsewhere the light is brightness-only and UI2
   // is a plain value set from a number entity.
   bool has_color_temperature() const { return model_ == GroupModel::TUNA_SUN; }
@@ -436,6 +461,13 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   void dump_config() override;
   light::LightTraits get_traits() override;
   void write_state(light::LightState *state) override;
+  // Points: text entities carry the YAML values and persist their own edits. Without them (a slim
+  // YAML group or an automatic program) the stock schedule is loaded and edits go to one blob.
+  bool default_point(size_t index, kessil::klink::SchedulePoint &out) const override;
+  void set_slot(size_t index, const kessil::klink::SchedulePoint &point) override;
+  bool set_slot_from_values(size_t index, uint16_t minute, const uint8_t channels[kessil::klink::NUM_CHANNELS],
+                            bool enabled) override;
+  bool copy_program_from(const ProgramHost &other) override;
 
   // Web API: the light's name, or "Group <gid>" before the light has reported one.
   std::string name() const override {
@@ -573,8 +605,21 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   void tick_stage_();
   void apply_output_settings_();
   void apply_transition_();
+  void load_slots_();
+  void save_slots_();
+  void save_slots_soon_();
+  bool slot_has_text_(size_t index) const {
+    return index < this->slot_texts_.size() && this->slot_texts_[index] != nullptr;
+  }
+  bool all_slots_have_text_() const {
+    for (size_t i = 0; i < this->slots_.size(); i++)
+      if (!this->slot_has_text_(i))
+        return false;
+    return true;
+  }
   OutputSettings out_settings_;
   ESPPreferenceObject out_pref_;
+  ESPPreferenceObject slots_pref_;
   CallbackManager<void()> out_cb_;
   kessil::klink::OutputStage stage_;
   float stage_target_[5]{0, 0, 0, 0, 0};
@@ -596,6 +641,19 @@ class KLinkGroup : public ProgramBase, public light::LightOutput, public Compone
   LightShown fwd_shown_;              // the last values forwarded, to tell the ending call from a user command
   uint8_t pending_[5]{0, 0, 0, 0, 0};
   uint32_t last_throttled_ms_{0};
+};
+
+// A program created at runtime for a group that has lamps but no `light: platform: klink` entry.
+// It uses the model of the first lamp in the group and the model's stock schedule, so a leader can
+// drive any of the three lamp classes without YAML groups. Edits are stored per GID, so moving a
+// lamp back to an earlier group finds the program it left.
+class KLinkAutoGroup : public KLinkGroup {
+ public:
+  void setup_auto(KLinkHub *hub, uint8_t gid, GroupModel model, time::RealTimeClock *clock);
+  // The lamps in this GID now have another model (for example after the group was emptied and a
+  // lamp of another type was moved in): start from that model's stock schedule.
+  void retarget(GroupModel model);
+  std::string name() const override;
 };
 
 // A 0-100% control for UI3, UI4 or UI5 of one group.

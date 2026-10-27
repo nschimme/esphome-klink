@@ -56,6 +56,30 @@ int main() {
     run(io, bus, 5);
     check("only one echo is swallowed", heard == 1);
   }
+  {  // group writes coalesce per GID, so a fade cannot grow the queue without bound
+    FakeIo io; Bus bus(io);
+    uint8_t first[5] = {1, 2, 3, 4, 5};
+    uint8_t second[5] = {11, 12, 13, 14, 15};
+    uint8_t other[5] = {21, 22, 23, 24, 25};
+    bus.enqueue_group(group_channels(3, first), 3);
+    bus.enqueue_group(group_channels(3, second), 3);
+    bus.enqueue_group(group_channels(4, other), 4);
+    run(io, bus, 100);
+    check("coalesced queue sends one frame per GID", io.sent.size() == 2);
+    bool found3 = false, found4 = false;
+    for (const auto &f : io.sent) {
+      if (f.size() != 14)
+        continue;
+      if (f[10] == 3) {
+        found3 = std::equal(second, second + 5, f.begin() + 5);
+        check("gid 3 carries the newest write", found3);
+      } else if (f[10] == 4) {
+        found4 = std::equal(other, other + 5, f.begin() + 5);
+        check("gid 4 write is kept", found4);
+      }
+    }
+    check("both GIDs were sent", found3 && found4);
+  }
   {  // fire and forget
     FakeIo io; Bus bus(io); int calls = 0; bool ok = false;
     bus.enqueue(unmute(1), 0, 0, [&](bool o, const Bytes &r) { calls++; ok = o && r.empty(); });

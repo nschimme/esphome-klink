@@ -180,4 +180,4 @@ numbers while it runs does not restart the days.
 ## Transitions and startup
 
 The **transition time** makes changes ease in and out; **soft start** fades the lamps in from dark each time the
-controller starts. Both are described with the other [Home Assistant entities](home-assistant.md#light-behavior).
+controller starts. Both are described with the other [Home Assistant entities](home-assistant.md#light-behavior-full-group-template).

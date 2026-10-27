@@ -101,6 +101,9 @@ jobs:
       - name: Page assembler tests
         run: python3 tests/test_web_build.py
 
+      - name: Stock schedule drift tests
+        run: python3 tests/test_stock_defaults.py
+
       - name: Mock dispatcher tests
         run: python3 tests/test_mock_dispatch.py
 
@@ -127,6 +130,11 @@ jobs:
         # Single source of truth for the config list; the compile job reuses it via *configs
         # and excludes the boards it does not build.
         config: &configs
+          - kessil-leader-esp32-c3.yaml
+          - kessil-leader-esp32-c6.yaml
+          - kessil-leader-esp32-s2.yaml
+          - kessil-leader-esp32-s3.yaml
+          # Deprecated compatibility shims for existing dashboard imports; remove next release.
           - kessil-tuna-sun-esp32-c3.yaml
           - kessil-tuna-sun-esp32-c6.yaml
           - kessil-tuna-sun-esp32-s2.yaml
@@ -145,6 +153,7 @@ jobs:
           - examples/follower.yaml
           - examples/lamp-mode.yaml
           - examples/leader-lamp.yaml
+          - examples/minimal-leader.yaml
           - examples/diy-planted-strip.yaml
           - examples/diy-refugium-strip.yaml
           - examples/refugium-leader.yaml
@@ -181,7 +190,7 @@ jobs:
           test -f "$config"
           esphome config "$config"
 
-  # Full firmware build for one board per chip family plus the two-group example.
+  # Full firmware build for every leader board plus the examples that compile.
   compile:
     name: Compile ${{ matrix.config }}
     runs-on: ubuntu-latest
@@ -192,14 +201,20 @@ jobs:
       matrix:
         config: *configs
         exclude:
+          - config: examples/three-groups.yaml
+          # The deprecated shims are the old model configs; validating them is enough.
           - config: kessil-tuna-sun-esp32-c3.yaml
+          - config: kessil-tuna-sun-esp32-c6.yaml
           - config: kessil-tuna-sun-esp32-s2.yaml
+          - config: kessil-tuna-sun-esp32-s3.yaml
+          - config: kessil-tuna-blue-esp32-c3.yaml
           - config: kessil-tuna-blue-esp32-c6.yaml
+          - config: kessil-tuna-blue-esp32-s2.yaml
           - config: kessil-tuna-blue-esp32-s3.yaml
           - config: kessil-refugium-esp32-c3.yaml
+          - config: kessil-refugium-esp32-c6.yaml
           - config: kessil-refugium-esp32-s2.yaml
           - config: kessil-refugium-esp32-s3.yaml
-          - config: examples/three-groups.yaml
     steps:
       - uses: actions/checkout@v4
 

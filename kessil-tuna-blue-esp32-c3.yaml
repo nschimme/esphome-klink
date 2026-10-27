@@ -1,3 +1,5 @@
+# DEPRECATED compatibility shim, kept so existing dashboard imports keep working.
+# New installs: use kessil-leader-<board>.yaml, which includes all three lamp models.
 # Kessil Tuna Blue on an ESP32-C3 (untested). Flash this, or adopt it from the ESPHome dashboard.
 # See docs/getting-started.md for wiring, safety notes and the other ways to use this file.
 substitutions:

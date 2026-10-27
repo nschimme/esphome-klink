@@ -1,0 +1,79 @@
+# The three default model programs. A leader supports any mix of Tuna Blue/AP9X, Tuna Sun and
+# Refugium lamps out of the box: each default group has a Home Assistant light (effects and manual
+# override) and a mode select, but no per-point/channel/datetime entities. Schedules, Sky and
+# acclimation are edited on the board's /klink page. A lamp in any other GID gets the same kind of
+# program automatically, web-only.
+#
+# For the full Home Assistant point editor, include a common/group-*.yaml template for a group
+# instead (or replace one of these); a YAML group always wins over the automatic program for its GID.
+light:
+  - platform: klink
+    output_id: tuna_blue
+    klink_id: kl
+    name: "Tuna Blue"
+    gid: 1
+    time_id: local_time
+    model: tuna_blue
+    slots: 16
+    web_server: { sorting_group_id: controls }
+    effects:
+      - klink_storm:
+      - klink_cloud:
+      - klink_aurora:
+      - klink_rainbow:
+      - klink_moon_red:
+      - klink_moon_blue:
+      - pulse:
+          name: "Pulse"
+          transition_length: 2s
+          update_interval: 2s
+      - flicker:
+  - platform: klink
+    output_id: tuna_sun
+    klink_id: kl
+    name: "Tuna Sun"
+    gid: 2
+    time_id: local_time
+    model: tuna_sun
+    slots: 16
+    web_server: { sorting_group_id: controls }
+    cold_white_color_temperature: 9000 K
+    warm_white_color_temperature: 6000 K
+    invert_color: true
+    effects:
+      - klink_storm:
+      - klink_cloud:
+      - klink_aurora:
+      - pulse:
+          name: "Pulse"
+          transition_length: 2s
+          update_interval: 2s
+      - flicker:
+  - platform: klink
+    output_id: refugium
+    klink_id: kl
+    name: "Refugium"
+    gid: 26
+    time_id: local_time
+    model: refugium
+    slots: 16
+    web_server: { sorting_group_id: controls }
+    effects:
+      - klink_storm:
+      - klink_cloud:
+      - klink_aurora:
+      - pulse:
+          name: "Pulse"
+          transition_length: 2s
+          update_interval: 2s
+      - flicker:
+
+select:
+  - { platform: klink, group: tuna_blue, type: mode, name: "Tuna Blue mode", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: tuna_sun, type: mode, name: "Tuna Sun mode", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: refugium, type: mode, name: "Refugium mode", web_server: { sorting_group_id: controls } }
+
+text_sensor:
+  - { platform: klink, group: tuna_blue, type: status, name: "Tuna Blue status", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: tuna_sun, type: status, name: "Tuna Sun status", web_server: { sorting_group_id: controls } }
+  - { platform: klink, group: refugium, type: status, name: "Refugium status", web_server: { sorting_group_id: controls } }

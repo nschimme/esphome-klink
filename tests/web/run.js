@@ -359,7 +359,7 @@ async function scenarioOrphans() {
   var card = orphans[0];
   check(name + ': names the group', cardText(card).indexOf('Group 11') >= 0, cardText(card));
   check(name + ': lamp count', cardText(card).indexOf('2 lamps here are not driven by this controller') >= 0, cardText(card));
-  check(name + ': documentation hint', cardText(card).indexOf('Add a group for this GID') >= 0, cardText(card));
+  check(name + ': documentation hint', cardText(card).indexOf('A program is created automatically') >= 0, cardText(card));
   check(name + ': program tab calls out the missing program',
     cardText(page.doc.getElementById('prog-orphans')).indexOf('Group 11') >= 0,
     cardText(page.doc.getElementById('prog-orphans')));
@@ -379,6 +379,12 @@ async function scenarioOrphans() {
   await stub.settle();
   eq(name + ': manage opens Settings', page.doc.body.getAttribute('data-tab'), 'settings');
   check(name + ': manage points at the lamp list', page.doc.getElementById('lamps-card')._scrolled === true);
+  var orphanHint = page.doc.getElementById('settings-orphans');
+  check(name + ': Settings names the group without a program', !!orphanHint && orphanHint.hidden === false,
+    orphanHint && orphanHint.hidden);
+  check(name + ': Settings explains how to add the program',
+    cardText(orphanHint).indexOf('program is created automatically') >= 0, cardText(orphanHint));
+  check(name + ': Settings hint names Group 11', cardText(orphanHint).indexOf('Group 11') >= 0, cardText(orphanHint));
 }
 
 async function scenarioPicker() {
@@ -507,6 +513,43 @@ async function scenarioManyLamps() {
   eq(name + ': identical poll creates nothing', page.doc.created, 0);
   check(name + ': identical poll keeps rows', page.lampsEl().querySelectorAll('[data-kid]')[0] === firstRow);
   check(name + ': creation counter works', before > 0);
+}
+
+async function scenarioMoveBackToDefaultGroup() {
+  var name = 'move back to default group';
+  var sun = makeGroup(2, 'Tuna Sun', 'tuna_sun');
+  var lamp = { kid: 18000001, type: 1, gid: 3, name: 'Follower' };
+  var server = stub.makeServer({ group: sun, groups: [sun], lamps: [lamp] });
+  var page = await newPage(server);
+  var sel = page.doc.getElementById('lamp-group-18000001');
+  check(name + ': group select exists', !!sel);
+  var targets = sel ? sel.children.map(function (o) { return o.value; }) : [];
+  check(name + ': default GID 1 is offered', targets.indexOf('1') >= 0, targets.join(','));
+  check(name + ': another type default is not offered', targets.indexOf('26') < 0, targets.join(','));
+  if (sel) {
+    sel.value = '1';
+    sel.dispatch('change', {});
+    var row = page.lampsEl().querySelector('[data-kid="18000001"]');
+    var move = null;
+    row.querySelectorAll('button').forEach(function (b) { if (b.textContent.trim() === 'Move') move = b; });
+    check(name + ': move button exists', !!move);
+    page.click(move);
+    await stub.settle();
+    var reqs = server.requests.filter(function (r) { return r.path === '/klink/assign'; });
+    eq(name + ': move sends the default GID', reqs.length ? reqs[0].params : null,
+      { kid: '18000001', gid: '1' });
+    eq(name + ': the lamp moved back', lamp.gid, 1);
+  }
+
+  var refugiumLamp = { kid: 18000002, type: 3, gid: 3, name: '' };
+  var refugiumServer = stub.makeServer({ group: sun, groups: [sun], lamps: [refugiumLamp] });
+  var refugiumPage = await newPage(refugiumServer);
+  var refugiumSel = refugiumPage.doc.getElementById('lamp-group-18000002');
+  var refugiumTargets = refugiumSel ? refugiumSel.children.map(function (o) { return o.value; }) : [];
+  check(name + ': Refugium default GID 26 is offered', refugiumTargets.indexOf('26') >= 0,
+    refugiumTargets.join(','));
+  check(name + ': Tuna default GID 1 is not offered to a Refugium',
+    refugiumTargets.indexOf('1') < 0, refugiumTargets.join(','));
 }
 
 async function scenarioTracks() {
@@ -1924,6 +1967,7 @@ async function main() {
   await scenarioOrphans();
   await scenarioPicker();
   await scenarioManyLamps();
+  await scenarioMoveBackToDefaultGroup();
   await scenarioTracks();
   await scenarioWheelDrag();
   await scenarioWheelHexAndKeys();

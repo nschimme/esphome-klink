@@ -5,8 +5,8 @@
 # leader finds it, lists it, assigns it a GID from the web page, and identifies it by dipping the
 # light. Everything sent is a reply to a request addressed to this board; the follower never sends a
 # beacon, a group write or any other request, so the leader's conflict logic is unaffected.
-# The `08` reply reports this config's `esphome: project: version` (0.0.0 when unset) as a 10-byte
-# frame, not a Kessil firmware version.
+# The `08` reply reports this config's `esphome: project: version` (0.0.0 when unset, 0.2.0 from
+# common/follower-base.yaml) as a 10-byte frame, not a Kessil firmware version.
 #
 # The lamp is unmuted at boot, so the leader's first scan finds it. Its native light follows its
 # current GID, which the leader can change with an assignment. Nothing here has been run on

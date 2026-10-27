@@ -1,0 +1,19 @@
+# The default leader: three model lights (Tuna Blue, Tuna Sun, Refugium) and a mode select each,
+# without the per-point/channel/datetime Home Assistant entities. Schedules, Sky and acclimation
+# are edited on /klink. A lamp in any other GID gets the same kind of program automatically,
+# web-only. Add a group-*.yaml template for a GID only when you want the full Home Assistant point
+# editor for that group.
+substitutions:
+  name: klink-leader
+  friendly_name: K-Link Leader
+  timezone: Etc/UTC
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+packages:
+  board: !include ../boards/esp32-c6.yaml
+  network: !include ../common/network-wifi.yaml
+  base: !include ../common/base.yaml
+  groups: !include ../common/leader-groups.yaml

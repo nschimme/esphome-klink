@@ -6,9 +6,18 @@
 # Substitutions you can override (defaults below):
 #   timezone     only needed when you add a read-only K-Link group light (it wants a clock)
 #   klink_ref    the git branch, tag or commit of this repository to take the component from
+#   klink_version  the project version this follower reports as its firmware
 substitutions:
   timezone: Etc/UTC
   klink_ref: main
+  klink_version: "0.2.0"
+
+# The `08` reply a follower's lamps send reports this project version, so the leader's lamp list
+# shows the firmware the follower was built from instead of 0.0.0.
+esphome:
+  project:
+    name: nschimme.esphome-klink
+    version: ${klink_version}
 
 external_components:
   - source:
@@ -39,6 +48,7 @@ klink:
   id: kl
   uart_id: klink_uart
   timezone: ${timezone}
+  time_id: local_time
   role: follower
   direct_drive:
     positive_pin: ${dp_pin}

@@ -8,6 +8,8 @@
 
 #include "esphome/core/log.h"
 
+#include "klink_version.h"
+
 #ifdef USE_ESP32
 #include <driver/gpio.h>
 #include <esp_rom_gpio.h>
@@ -52,25 +54,12 @@ static const uint32_t LAMP_REPLY_TIMEOUT_ID = 0x80000000u;
 
 // The project version from the config's `esphome: project: version` (ESPHOME_PROJECT_VERSION).
 // The `08` reply carries major, minor and patch; a non-numeric suffix is ignored and a config
-// without a version reports 0.0.0.
+// without a version reports 0.0.0. A leading "v" (as in ESPHome's own example) is accepted.
 static void parse_project_version(uint8_t &major, uint8_t &minor, uint8_t &patch) {
-  major = 0;
-  minor = 0;
-  patch = 0;
 #ifdef ESPHOME_PROJECT_VERSION
-  const char *s = ESPHOME_PROJECT_VERSION;
-  uint8_t *fields[3] = {&major, &minor, &patch};
-  for (int i = 0; i < 3 && *s != '\0'; i++) {
-    int value = 0;
-    while (*s >= '0' && *s <= '9') {
-      value = value * 10 + (*s - '0');
-      s++;
-    }
-    *fields[i] = static_cast<uint8_t>(std::min(value, 255));
-    if (*s != '.')
-      return;
-    s++;
-  }
+  kk::parse_version_string(ESPHOME_PROJECT_VERSION, major, minor, patch);
+#else
+  kk::parse_version_string(nullptr, major, minor, patch);
 #endif
 }
 
@@ -236,9 +225,86 @@ void KLinkHub::setup_lamps_() {
   }
 }
 
+void KLinkHub::set_time(time::RealTimeClock *time) {
+  this->time_ = time;
+  for (auto *group : this->auto_groups_)
+    group->set_time(time);
+}
+
+void KLinkHub::note_clock(time::RealTimeClock *time) {
+  if (this->time_ == nullptr && time != nullptr) {
+    this->time_ = time;
+    for (auto *group : this->auto_groups_)
+      group->set_time(time);
+  }
+}
+
+void KLinkHub::ensure_auto_groups_() {
+  // One program per GID. The first lamp (or a plain follower that is not a lamp) supplies the model;
+  // a YAML group for that GID always wins.
+  for (uint8_t gid = 1; gid <= kk::MAX_GID; gid++) {
+    GroupModel model = GroupModel::TUNA_SUN;
+    bool have_model = false;
+    for (const auto &lamp : this->inventory_.lamps()) {
+      if (lamp.gid != gid || lamp.type < 1 || lamp.type > 3)
+        continue;
+      model = lamp.type == 1 ? GroupModel::TUNA_BLUE : (lamp.type == 2 ? GroupModel::TUNA_SUN : GroupModel::REFUGIUM);
+      have_model = true;
+      break;
+    }
+    if (!have_model) {
+      for (auto *follower : this->followers_) {
+        if (follower == nullptr || follower->gid() != gid)
+          continue;
+        const std::string &name = follower->model_name();
+        model = name == "tuna_blue" ? GroupModel::TUNA_BLUE
+                : name == "tuna_sun" ? GroupModel::TUNA_SUN
+                                     : GroupModel::REFUGIUM;
+        have_model = true;
+        break;
+      }
+    }
+    if (!have_model)
+      continue;
+
+    bool have_yaml_group = false;
+    KLinkAutoGroup *auto_group = nullptr;
+    for (auto *program : this->programs_) {
+      if (program->gid() != gid)
+        continue;
+      if (std::find(this->auto_groups_.begin(), this->auto_groups_.end(), program) == this->auto_groups_.end()) {
+        have_yaml_group = true;
+        break;
+      }
+      auto_group = static_cast<KLinkAutoGroup *>(program);
+    }
+    if (have_yaml_group)
+      continue;
+    if (auto_group != nullptr) {
+      if (auto_group->model() != model)
+        auto_group->retarget(model);
+      continue;
+    }
+
+    auto *group = new KLinkAutoGroup();
+    group->setup_auto(this, gid, model, this->time_);
+    this->auto_groups_.push_back(group);
+    ESP_LOGI(TAG, "GID %u has no configured program: using the stock %s program", gid,
+             group->model_name().c_str());
+  }
+}
+
 void KLinkHub::loop() {
   this->bus_.loop();
   const uint32_t now = millis();
+  for (auto *group : this->auto_groups_)
+    group->loop();
+  // A group that gets lamps by a scan or an assignment has no YAML program: give it the model's
+  // stock program. Once made it stays, so moving a lamp out and back finds the same edits.
+  if (!this->is_follower() && now - this->last_auto_groups_ms_ >= 1000) {
+    this->last_auto_groups_ms_ = now;
+    this->ensure_auto_groups_();
+  }
   kk::ChainGuard::Update update = this->guard_.update(now);
   if (update.send_beacon)
     this->bus_.enqueue(kk::controller_probe(), 0, 0, nullptr);
@@ -470,7 +536,7 @@ void KLinkHub::write_group(uint8_t gid, const uint8_t channels[5]) {
   if (!this->guard_.controlling())
     return;
   this->note_group_frame_(gid, channels);
-  this->bus_.enqueue(kk::group_channels(gid, channels), 0, 0, nullptr);
+  this->bus_.enqueue_group(kk::group_channels(gid, channels), gid);
 }
 
 void KLinkHub::start_scan() {
@@ -1123,12 +1189,21 @@ KLinkGroup::KLinkGroup() { all_groups().push_back(this); }
 void KLinkGroup::setup() {
   this->hub_->register_group(this);
   this->hub_->register_program(this);
+  this->hub_->note_clock(this->time_);
   this->hub_->add_on_group_frame_callback([this](uint8_t gid, const uint8_t *channels) {
     if (gid == this->gid_)
       this->on_bus_frame_(channels);
   });
   this->setup_program_();
   this->setup_source_();
+  // A slim group has no point text entities: start from the model's stock schedule and keep edits
+  // in one blob. A full group's text entities overwrite these values when they set up.
+  const kk::SchedulePoint *defaults = kk::stock_defaults(this->lamp_type());
+  for (size_t i = 0; i < this->slots_.size() && i < kk::STOCK_POINTS; i++)
+    this->slots_[i] = defaults[i];
+  this->slots_pref_ = global_preferences->make_preference<StoredSlots>(
+      fnv1_hash("klink_slots_" + std::to_string(this->gid_)));
+  this->load_slots_();
   // Every start fades the lamps in from dark (power loss, restart or update alike).
   this->soft_start_pending_ = true;
   // Effect speed and duration: runtime settings.
@@ -1150,6 +1225,112 @@ void KLinkGroup::setup() {
     this->out_settings_ = stored;
   this->apply_output_settings_();
   this->set_interval("schedule", 1000, [this]() { this->update(); });
+}
+
+void KLinkAutoGroup::setup_auto(KLinkHub *hub, uint8_t gid, GroupModel model, time::RealTimeClock *clock) {
+  this->hub_ = hub;
+  this->gid_ = gid;
+  this->model_ = model;
+  this->time_ = clock;
+  this->set_num_slots(kk::STOCK_POINTS);
+  this->setup();
+}
+
+void KLinkAutoGroup::retarget(GroupModel model) {
+  this->model_ = model;
+  const kk::SchedulePoint *defaults = kk::stock_defaults(this->lamp_type());
+  for (size_t i = 0; i < this->slots_.size() && i < kk::STOCK_POINTS; i++)
+    this->slots_[i] = defaults[i];
+  this->save_slots_soon_();
+  this->have_sent_ = false;
+  this->generated_ok_ = false;
+  this->soft_start_pending_ = true;
+  this->stage_have_target_ = false;
+  this->stage_busy_ = false;
+  this->selected_ = 0;
+  this->set_mode(kk::Mode::PROGRAM);
+}
+
+std::string KLinkAutoGroup::name() const {
+  std::string model = this->model_name() == "tuna_blue"   ? "Tuna Blue"
+                      : this->model_name() == "tuna_sun" ? "Tuna Sun"
+                                                         : "Refugium";
+  return model + " · Group " + std::to_string(this->gid_);
+}
+
+bool KLinkGroup::default_point(size_t index, kk::SchedulePoint &out) const {
+  if (ProgramBase::default_point(index, out))
+    return true;
+  return kk::stock_default_point(this->lamp_type(), index, out);
+}
+
+void KLinkGroup::set_slot(size_t index, const kk::SchedulePoint &point) {
+  ProgramBase::set_slot(index, point);
+  if (!this->slot_has_text_(index))
+    this->save_slots_soon_();
+}
+
+bool KLinkGroup::set_slot_from_values(size_t index, uint16_t minute, const uint8_t channels[kk::NUM_CHANNELS],
+                                      bool enabled) {
+  if (!ProgramBase::set_slot_from_values(index, minute, channels, enabled))
+    return false;
+  if (!this->slot_has_text_(index))
+    this->save_slots_soon_();
+  return true;
+}
+
+bool KLinkGroup::copy_program_from(const ProgramHost &other) {
+  if (!ProgramBase::copy_program_from(other))
+    return false;
+  // Text entities persist their own points. Save the blob for any point that has no text entity.
+  if (!this->all_slots_have_text_())
+    this->save_slots_soon_();
+  return true;
+}
+
+void KLinkGroup::load_slots_() {
+  StoredSlots blob;
+  if (!this->slots_pref_.load(&blob) || blob.version != 2 || blob.lamp_type != this->lamp_type() ||
+      blob.count != this->slots_.size())
+    return;
+  std::vector<kk::SchedulePoint> loaded;
+  loaded.reserve(blob.count);
+  for (size_t i = 0; i < blob.count; i++) {
+    const uint8_t *p = &blob.data[i * 8];
+    kk::SchedulePoint point;
+    point.minute = static_cast<uint16_t>((static_cast<uint16_t>(p[0]) << 8) | p[1]);
+    for (size_t c = 0; c < kk::NUM_CHANNELS; c++)
+      point.channels[c] = p[2 + c];
+    point.enabled = p[7] != 0;
+    if (point.minute > 1439)
+      return;
+    for (size_t c = 0; c < kk::NUM_CHANNELS; c++)
+      if (point.channels[c] > this->channel_max()[c])
+        return;
+    loaded.push_back(point);
+  }
+  this->slots_ = loaded;
+}
+
+void KLinkGroup::save_slots_() {
+  StoredSlots blob{};
+  blob.version = 2;
+  blob.lamp_type = this->lamp_type();
+  blob.count = static_cast<uint8_t>(this->slots_.size());
+  for (size_t i = 0; i < this->slots_.size(); i++) {
+    uint8_t *p = &blob.data[i * 8];
+    p[0] = static_cast<uint8_t>(this->slots_[i].minute >> 8);
+    p[1] = static_cast<uint8_t>(this->slots_[i].minute);
+    for (size_t c = 0; c < kk::NUM_CHANNELS; c++)
+      p[2 + c] = this->slots_[i].channels[c];
+    p[7] = this->slots_[i].enabled ? 1 : 0;
+  }
+  this->slots_pref_.save(&blob);
+}
+
+void KLinkGroup::save_slots_soon_() {
+  // A slider drag sends many edits; write flash once they stop.
+  this->set_timeout("klink_slots", 2000, [this]() { this->save_slots_(); });
 }
 
 void KLinkGroup::apply_output_settings_() {
